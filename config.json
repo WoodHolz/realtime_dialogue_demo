@@ -1,0 +1,45 @@
+{
+  "followup": {
+    "active": "kimi",
+    "kimi": {
+      "enabled": true,
+      "description": "Moonshot Kimi (OpenAI-compatible). Set KIMI_API_* in .env (see .env.example).",
+      "api_base": "",
+      "model": "",
+      "api_key": ""
+    },
+    "eas": {
+      "enabled": true,
+      "description": "Aliyun PAI-EAS OpenAI endpoint. Set EAS_API_* in .env; extra_body may stay here or use EAS_EXTRA_BODY JSON in .env.",
+      "api_base": "",
+      "api_key": "",
+      "model": "",
+      "output_format": "plain",
+      "extra_body": {
+        "chat_template_kwargs": {
+          "enable_thinking": false
+        }
+      }
+    }
+  },
+  "doubao": {
+    "description": "Doubao Realtime Voice API. Prefer DOUBAO_* / ASR_* in .env (see .env.example).",
+    "app_id": "",
+    "access_key": "",
+    "asr_app_id": "",
+    "asr_access_key": ""
+  },
+  "vad": {
+    "description": "Duplug VAD: use DUPLUG_VAD_ENABLED and DUPLUG_VAD_URL in .env (see .env.example).",
+    "duplug_enabled": false,
+    "duplug_url": ""
+  },
+  "debug": {
+    "t2s_audio_dump_enabled": false,
+    "t2s_audio_dir": "/home/WoodHolz/Project/realtime_voice_interviewer_demo",
+    "t2s_asr_keepalive_idle_sec": 0.9,
+    "t2s_asr_keepalive_tick_sec": 0.35,
+    "t2s_pre_roll_ms": 1200,
+    "t2s_speak_grace_ms": 900
+  }
+}

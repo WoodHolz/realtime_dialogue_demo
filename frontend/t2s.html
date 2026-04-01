@@ -1,0 +1,221 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>AI Interviewer - Text to Speech</title>
+  <style>
+    body { font-family: system-ui, sans-serif; max-width: 720px; margin: 1rem auto; padding: 0 1rem; }
+    h1 { font-size: 1.25rem; }
+    .status { color: #666; margin: 0.5rem 0; }
+    .transcript { white-space: pre-wrap; min-height: 120px; padding: 0.5rem; border: 1px solid #ccc; border-radius: 6px; margin: 0.5rem 0; background: #fafafa; }
+    .controls { margin: 1rem 0; }
+    button { padding: 0.5rem 1rem; margin-right: 0.5rem; cursor: pointer; }
+    button:disabled { opacity: 0.6; cursor: not-allowed; }
+    .error { color: #c00; }
+  </style>
+</head>
+<body>
+  <h1>芝麻背调访谈（T2S 纯文本 → 语音）</h1>
+  <div class="status" id="status">点击 Start 建立会话，然后输入文本让面试官说出来。</div>
+  <div class="status">
+    <span>Stage:</span> <span id="stageLabel">introduction</span>
+  </div>
+
+  <div class="controls">
+    <button id="btnStart">Start Session</button>
+    <button id="btnStop" disabled>Stop</button>
+  </div>
+
+  <div>
+    <strong>Candidate / 证明人文本输入</strong>
+    <textarea id="userText" rows="4" style="width:100%; box-sizing:border-box;" placeholder="把候选人或证明人的回答粘贴到这里，然后点击 Send Text。"></textarea>
+    <div style="margin-top:8px;">
+      <button id="btnSendText" disabled>Send Text</button>
+    </div>
+  </div>
+
+  <div style="margin-top:12px;">
+    <strong>AI 面试官回复（文本 + 语音）</strong>
+    <div class="transcript" id="transcript"></div>
+  </div>
+
+  <div id="log" class="transcript" style="max-height: 120px; overflow-y: auto;"></div>
+
+  <script>
+    (function () {
+      const statusEl = document.getElementById('status');
+      const stageLabel = document.getElementById('stageLabel');
+      const transcriptEl = document.getElementById('transcript');
+      const logEl = document.getElementById('log');
+      const btnStart = document.getElementById('btnStart');
+      const btnStop = document.getElementById('btnStop');
+      const btnSendText = document.getElementById('btnSendText');
+      const userTextEl = document.getElementById('userText');
+
+      let ws = null;
+      let ttsContext = null;
+      let ttsQueue = [];
+      let ttsPlaying = false;
+      const TTS_SAMPLE_RATE = 24000;
+
+      function log(msg, isError) {
+        const p = document.createElement('div');
+        p.className = isError ? 'error' : '';
+        p.textContent = new Date().toISOString().slice(11, 19) + ' ' + msg;
+        logEl.appendChild(p);
+        logEl.scrollTop = logEl.scrollHeight;
+      }
+
+      function setStatus(t) { statusEl.textContent = t; }
+
+      function playTTSChunk(pcmS16) {
+        if (!pcmS16 || pcmS16.length === 0) return;
+        if (!ttsContext) ttsContext = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: TTS_SAMPLE_RATE });
+        const len = pcmS16.length / 2;
+        const buf = ttsContext.createBuffer(1, len, TTS_SAMPLE_RATE);
+        const ch = buf.getChannelData(0);
+        const view = new DataView(pcmS16.buffer, pcmS16.byteOffset, pcmS16.byteLength);
+        for (let i = 0; i < len; i++) ch[i] = view.getInt16(i * 2, true) / 32768;
+        const src = ttsContext.createBufferSource();
+        src.buffer = buf;
+        src.connect(ttsContext.destination);
+        src.start();
+      }
+
+      function flushTTSQueue() {
+        ttsQueue = [];
+        ttsPlaying = false;
+      }
+
+      function playNextInQueue() {
+        if (ttsQueue.length === 0) { ttsPlaying = false; return; }
+        const chunk = ttsQueue.shift();
+        if (chunk.length === 0) { playNextInQueue(); return; }
+        ttsPlaying = true;
+        playTTSChunk(chunk);
+        const duration = (chunk.length / 2) / TTS_SAMPLE_RATE * 1000;
+        setTimeout(playNextInQueue, Math.max(20, duration - 5));
+      }
+
+      function enqueueTTS(pcmS16) {
+        ttsQueue.push(pcmS16);
+        if (!ttsPlaying) playNextInQueue();
+      }
+
+      function ensureAiLine() {
+        const br = document.createElement('br');
+        transcriptEl.appendChild(br);
+        const prefix = document.createElement('span');
+        prefix.textContent = 'AI: ';
+        transcriptEl.appendChild(prefix);
+        const textNode = document.createTextNode('');
+        transcriptEl.appendChild(textNode);
+        transcriptEl.appendChild(document.createElement('br'));
+        return textNode;
+      }
+
+      function connect() {
+        const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+        const host = location.host;
+        const url = protocol + '//' + host + '/ws';
+        setStatus('Connecting...');
+        ws = new WebSocket(url);
+        ws.binaryType = 'arraybuffer';
+
+        ws.onopen = function () {
+          const cfg = {
+            mode: 't2s',
+            stage: 'introduction',
+          };
+          ws.send(JSON.stringify(cfg));
+          setStatus('Waiting for session...');
+        };
+
+        ws.onmessage = function (ev) {
+          if (typeof ev.data === 'string') {
+            try {
+              const msg = JSON.parse(ev.data);
+              if (msg.type === 'ready') {
+                setStatus('Ready. 输入文本后点击 Send Text。');
+                log('Session ' + msg.session_id);
+                btnSendText.disabled = false;
+              } else if (msg.type === 'chat') {
+                const node = ensureAiLine();
+                node.textContent += (msg.content || '');
+                transcriptEl.scrollTop = transcriptEl.scrollHeight;
+              } else if (msg.type === 'chat_end') {
+                // ignore
+              } else if (msg.type === 'error') {
+                log(msg.message, true);
+                setStatus('Error: ' + msg.message);
+              } else if (msg.type === 'auto_501_decision') {
+                const phase = msg.phase || '-';
+                const pending = (typeof msg.pending_len === 'number'
+                  ? msg.pending_len
+                  : (typeof msg.pending_len_before === 'number' ? msg.pending_len_before : '-'));
+                log('Auto-501 decision [' + phase + '] pending=' + pending);
+              } else if (msg.type === 'chat_text_query_sent') {
+                const trigger = msg.trigger || '-';
+                const reason = msg.reason || '-';
+                log('ChatTextQuery (501) sent [reason=' + reason + ', trigger=' + trigger + ']');
+              }
+            } catch (e) {
+              log('Parse error: ' + e.message, true);
+            }
+          } else {
+            const buf = new Uint8Array(ev.data);
+            enqueueTTS(buf);
+          }
+        };
+
+        ws.onclose = function () {
+          setStatus('Disconnected');
+          log('WebSocket closed');
+          btnSendText.disabled = true;
+        };
+        ws.onerror = function () {
+          setStatus('WebSocket error');
+          log('WebSocket error', true);
+        };
+      }
+
+      btnStart.onclick = function () {
+        transcriptEl.innerHTML = '';
+        logEl.innerHTML = '';
+        flushTTSQueue();
+        connect();
+        btnStart.disabled = true;
+        btnStop.disabled = false;
+      };
+
+      btnStop.onclick = function () {
+        if (ws) { ws.close(); ws = null; }
+        flushTTSQueue();
+        btnStart.disabled = false;
+        btnStop.disabled = true;
+        btnSendText.disabled = true;
+        setStatus('Stopped');
+      };
+
+      btnSendText.onclick = function () {
+        const text = (userTextEl.value || '').trim();
+        if (!text) {
+          log('Empty text, ignore.', true);
+          return;
+        }
+        if (ws && ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({
+            type: 'chat_text_query',
+            content: text,
+          }));
+          log('ChatTextQuery (501) sent (manual text)');
+        } else {
+          log('Not connected yet (start first).', true);
+        }
+      };
+    })();
+  </script>
+</body>
+</html>
+

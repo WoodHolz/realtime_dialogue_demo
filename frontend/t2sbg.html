@@ -1,0 +1,997 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>芝麻背调访谈 — T2S 纯文本输入</title>
+  <style>
+    body { font-family: system-ui, sans-serif; max-width: 720px; margin: 1rem auto; padding: 0 1rem; }
+    h1 { font-size: 1.25rem; }
+    .status { color: #666; margin: 0.5rem 0; }
+    .transcript { white-space: pre-wrap; min-height: 120px; padding: 0.5rem; border: 1px solid #ccc; border-radius: 6px; margin: 0.5rem 0; background: #fafafa; }
+    .controls { margin: 1rem 0; }
+    button { padding: 0.5rem 1rem; margin-right: 0.5rem; cursor: pointer; }
+    button:disabled { opacity: 0.6; cursor: not-allowed; }
+    .error { color: #c00; }
+    .section { margin-top: 1rem; padding-top: 1rem; border-top: 1px solid #eee; }
+  </style>
+</head>
+<body>
+  <h1>芝麻背调证明人访谈（T2S 纯文本 → 语音）</h1>
+  <p style="color:#666; font-size:0.9rem;">
+    支持直接以文本形式发起对话，或使用麦克风说话（豆包 ASR 识别后发送给语音对话模型）。
+    服务端使用 <code>input_mod: "text"</code>，自动保证流式链路完整性。
+  </p>
+  <div class="status" id="status">点击 Start 建立会话，然后输入文本或语音。</div>
+  <div class="status">
+    <span>Mode:</span> <span id="modeLabel">t2s</span>
+    <span style="margin-left:12px;">Stage:</span> <span id="stageLabel">introduction</span>
+  </div>
+
+  <div class="controls">
+    <button id="btnStart">Start Session</button>
+    <button id="btnStop" disabled>Stop</button>
+  </div>
+
+  <div class="section">
+    <strong>方式一：纯文本输入</strong>
+    <p style="font-size:12px; color:#666;">直接输入证明人/候选人的回答，点击发送。</p>
+    <textarea id="userText" rows="4" style="width:100%; box-sizing:border-box;" placeholder="例如：我是张三的前同事，我们共事两年多..."></textarea>
+    <div style="margin-top:8px;">
+      <button id="btnSendText" disabled>Send Text</button>
+    </div>
+  </div>
+
+  <div class="section">
+    <strong>方式二：语音输入（豆包 ASR 流式识别）</strong>
+        <p style="font-size:12px; color:#666;">麦克风流式输入 → 豆包 ASR 流式输出（实时显示识别结果）→ 说完后自动发送。</p>
+    <div style="margin-top:8px;">
+      <button id="btnVoiceStart" disabled>开始录音</button>
+      <button id="btnVoiceStop" disabled>结束并发送</button>
+      <span id="voiceStatus" style="font-size:12px; color:#666;"></span>
+    </div>
+  </div>
+
+  <div class="section">
+    <strong>ASR 实时识别（语音输入时）</strong>
+    <div id="asrPreview" class="transcript" style="min-height:48px; font-size:0.9rem; color:#666;"></div>
+  </div>
+
+  <div class="section">
+    <strong>VAD 最新状态</strong>
+    <div id="vadState" class="transcript" style="min-height:48px; font-size:0.9rem; color:#333; font-family: monospace;">
+      provider=- state=-
+    </div>
+  </div>
+
+  <div class="section">
+    <strong>录音调试预览（合并后）</strong>
+    <p style="font-size:12px; color:#666;">将本次会话里所有触发片段合并为两段音频（给 VAD / 给 ASR）用于排查。</p>
+    <div style="margin-top:8px;">
+      <div style="margin-bottom:10px;">
+        <div style="font-size:12px; color:#666; margin-bottom:4px;">给 VAD 的录音（merged）</div>
+        <audio id="vadAudioPreview" controls style="width:100%;"></audio>
+        <div id="vadAudioMeta" style="font-size:12px; color:#666; margin-top:4px;">片段数: 0, 时长: 0.00s</div>
+      </div>
+      <div>
+        <div style="font-size:12px; color:#666; margin-bottom:4px;">给 ASR 的录音（merged）</div>
+        <audio id="asrAudioPreview" controls style="width:100%;"></audio>
+        <div id="asrAudioMeta" style="font-size:12px; color:#666; margin-top:4px;">片段数: 0, 时长: 0.00s</div>
+      </div>
+      <div style="margin-top:10px;">
+        <div style="font-size:12px; color:#666; margin-bottom:4px;">完整麦克风录音通道（trigger-start 到 turn-end，merged）</div>
+        <audio id="fullAudioPreview" controls style="width:100%;"></audio>
+        <div id="fullAudioMeta" style="font-size:12px; color:#666; margin-top:4px;">片段数: 0, 时长: 0.00s</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="section">
+    <strong>AI 面试官回复（文本 + 语音）</strong>
+    <div class="transcript" id="transcript"></div>
+  </div>
+
+  <div class="section">
+    <strong>501 响应延迟</strong>
+    <p style="font-size:12px; color:#666;">从发送 501 到首个回复到达、首帧语音播报的耗时。</p>
+    <div id="latencyDisplay" class="status" style="font-family: monospace; font-size: 0.9rem;">
+      501→首字: - ms &nbsp; 501→首帧语音: - ms
+    </div>
+    <p style="font-size:12px; color:#666; margin-top:6px;">
+      模拟首帧延迟: <input type="number" id="simulatedTTSDelay" value="0" min="0" step="100" style="width:70px;" /> ms
+      （设为 1500 可模拟 501→首帧语音 ≈ 1.5s）
+    </p>
+  </div>
+
+  <div class="section">
+    <strong>后端日志（调试）</strong>
+    <p style="font-size:12px; color:#666;">由服务端通过 WebSocket 推送的关键事件（如 ASR 错误码），不落盘。</p>
+    <div id="serverLog" class="transcript" style="max-height: 160px; overflow-y: auto; font-family: monospace; font-size: 0.8rem; background: #f6f8fa;"></div>
+  </div>
+
+  <div id="log" class="transcript" style="max-height: 120px; overflow-y: auto;"></div>
+
+  <script>
+    (function () {
+      const statusEl = document.getElementById('status');
+      const modeLabel = document.getElementById('modeLabel');
+      const stageLabel = document.getElementById('stageLabel');
+      const transcriptEl = document.getElementById('transcript');
+      const logEl = document.getElementById('log');
+      const btnStart = document.getElementById('btnStart');
+      const btnStop = document.getElementById('btnStop');
+      const btnSendText = document.getElementById('btnSendText');
+      const userTextEl = document.getElementById('userText');
+      const btnVoiceStart = document.getElementById('btnVoiceStart');
+      const btnVoiceStop = document.getElementById('btnVoiceStop');
+      const voiceStatusEl = document.getElementById('voiceStatus');
+      const asrPreviewEl = document.getElementById('asrPreview');
+      const vadStateEl = document.getElementById('vadState');
+      const latencyDisplayEl = document.getElementById('latencyDisplay');
+      const vadAudioPreviewEl = document.getElementById('vadAudioPreview');
+      const asrAudioPreviewEl = document.getElementById('asrAudioPreview');
+      const fullAudioPreviewEl = document.getElementById('fullAudioPreview');
+      const vadAudioMetaEl = document.getElementById('vadAudioMeta');
+      const asrAudioMetaEl = document.getElementById('asrAudioMeta');
+      const fullAudioMetaEl = document.getElementById('fullAudioMeta');
+      const serverLogEl = document.getElementById('serverLog');
+
+      let ws = null;
+      let ttsContext = null;
+      let ttsQueue = [];
+      let ttsPlaying = false;
+      let ttsPlaybackSeq = 0;
+      let activeTtsSource = null;
+      let activeTtsGain = null;
+      let ttsSuppressedByBargeIn = false;
+      const TTS_SAMPLE_RATE = 24000;
+      const AUTO_CONTINUOUS_VOICE = true;
+      const BARGE_IN_FADE_OUT_MS = 80;
+
+      let mediaStream = null;
+      let audioContext = null;
+      let processorNode = null;
+      let voiceCapturing = false;
+      const TARGET_SAMPLE_RATE = 16000;
+      // Debug recording cache:
+      // - VAD/ASR previews come from backend merged buffers.
+      // - Full mic channel remains frontend-local recording.
+      let currentFullChunks = [];
+      let fullSegments = [];
+      let vadPreviewUrl = null;
+      let asrPreviewUrl = null;
+      let fullPreviewUrl = null;
+
+      // 501 响应延迟计时
+      let t501 = 0;
+      let latencyChatMs = null;
+      let latencyTTSMs = null;
+      let latencyChatMeasured = false;
+      let latencyTTSMeasured = false;
+      /** 追问 API 已发 followup_request_start，尚未收到 generated/skipped/error */
+      let followupPending = false;
+
+      function updateLatencyDisplay() {
+        const c = latencyChatMs != null ? latencyChatMs + ' ms' : '-';
+        const t = latencyTTSMs != null ? latencyTTSMs + ' ms' : '-';
+        latencyDisplayEl.innerHTML = '501→首字: ' + c + ' &nbsp; 501→首帧语音: ' + t;
+      }
+
+      function concatUint8Arrays(arrays) {
+        let total = 0;
+        for (let i = 0; i < arrays.length; i++) total += arrays[i].length;
+        const merged = new Uint8Array(total);
+        let offset = 0;
+        for (let j = 0; j < arrays.length; j++) {
+          merged.set(arrays[j], offset);
+          offset += arrays[j].length;
+        }
+        return merged;
+      }
+
+      function buildWavBlobFromPcmS16(pcmS16U8, sampleRate) {
+        const dataBytes = pcmS16U8.length;
+        const wav = new ArrayBuffer(44 + dataBytes);
+        const view = new DataView(wav);
+        function writeStr(off, str) {
+          for (let i = 0; i < str.length; i++) view.setUint8(off + i, str.charCodeAt(i));
+        }
+        writeStr(0, 'RIFF');
+        view.setUint32(4, 36 + dataBytes, true);
+        writeStr(8, 'WAVE');
+        writeStr(12, 'fmt ');
+        view.setUint32(16, 16, true); // PCM chunk size
+        view.setUint16(20, 1, true); // audio format PCM
+        view.setUint16(22, 1, true); // mono
+        view.setUint32(24, sampleRate, true);
+        view.setUint32(28, sampleRate * 2, true); // byte rate
+        view.setUint16(32, 2, true); // block align
+        view.setUint16(34, 16, true); // bits per sample
+        writeStr(36, 'data');
+        view.setUint32(40, dataBytes, true);
+        new Uint8Array(wav, 44).set(pcmS16U8);
+        return new Blob([wav], { type: 'audio/wav' });
+      }
+
+      function flattenSegments(segments) {
+        const arrays = [];
+        for (let i = 0; i < segments.length; i++) {
+          const seg = segments[i];
+          for (let j = 0; j < seg.length; j++) arrays.push(seg[j]);
+        }
+        return arrays;
+      }
+
+      function getDurationSecFromBytes(byteLen) {
+        return (byteLen / 2) / TARGET_SAMPLE_RATE;
+      }
+
+      function updateFullDebugAudioPreview() {
+        const fullFlat = flattenSegments(fullSegments);
+        const fullMerged = concatUint8Arrays(fullFlat);
+        if (fullPreviewUrl) URL.revokeObjectURL(fullPreviewUrl);
+        fullPreviewUrl = null;
+
+        if (fullMerged.length > 0) {
+          const fullBlob = buildWavBlobFromPcmS16(fullMerged, TARGET_SAMPLE_RATE);
+          fullPreviewUrl = URL.createObjectURL(fullBlob);
+          fullAudioPreviewEl.src = fullPreviewUrl;
+        } else {
+          fullAudioPreviewEl.removeAttribute('src');
+          fullAudioPreviewEl.load();
+        }
+        fullAudioMetaEl.textContent = '片段数: ' + fullSegments.length + ', 时长: ' + getDurationSecFromBytes(fullMerged.length).toFixed(2) + 's';
+      }
+
+      function startTurnRecordingCache() {
+        currentFullChunks = [];
+      }
+
+      function appendRecordingChunk(chunkU8) {
+        // Independent full mic channel: keep full stream from trigger-start to turn-end.
+        currentFullChunks.push(chunkU8.slice());
+      }
+
+      function finalizeTurnRecordingCache() {
+        if (currentFullChunks.length > 0) fullSegments.push(currentFullChunks);
+        currentFullChunks = [];
+        updateFullDebugAudioPreview();
+      }
+
+      function resetRecordingDebugCache() {
+        currentFullChunks = [];
+        fullSegments = [];
+        if (vadPreviewUrl) {
+          URL.revokeObjectURL(vadPreviewUrl);
+          vadPreviewUrl = null;
+        }
+        if (asrPreviewUrl) {
+          URL.revokeObjectURL(asrPreviewUrl);
+          asrPreviewUrl = null;
+        }
+        if (fullPreviewUrl) {
+          URL.revokeObjectURL(fullPreviewUrl);
+          fullPreviewUrl = null;
+        }
+        vadAudioPreviewEl.removeAttribute('src');
+        vadAudioPreviewEl.load();
+        asrAudioPreviewEl.removeAttribute('src');
+        asrAudioPreviewEl.load();
+        fullAudioPreviewEl.removeAttribute('src');
+        fullAudioPreviewEl.load();
+        vadAudioMetaEl.textContent = '片段数: 0, 时长: 0.00s';
+        asrAudioMetaEl.textContent = '片段数: 0, 时长: 0.00s';
+        fullAudioMetaEl.textContent = '片段数: 0, 时长: 0.00s';
+      }
+
+      function log(msg, isError) {
+        const p = document.createElement('div');
+        p.className = isError ? 'error' : '';
+        p.textContent = new Date().toISOString().slice(11, 19) + ' ' + msg;
+        logEl.appendChild(p);
+        logEl.scrollTop = logEl.scrollHeight;
+      }
+
+      function serverLogAppend(level, message, extra) {
+        const p = document.createElement('div');
+        const lv = (level || 'info').toLowerCase();
+        if (lv === 'warning' || lv === 'warn') p.style.color = '#a60';
+        if (lv === 'error') p.style.color = '#c00';
+        var line = new Date().toISOString().slice(11, 19) + ' [' + lv + '] ' + (message || '');
+        if (extra && typeof extra === 'object') {
+          var keys = Object.keys(extra);
+          if (keys.length) line += ' ' + JSON.stringify(extra);
+        }
+        p.textContent = line;
+        serverLogEl.appendChild(p);
+        serverLogEl.scrollTop = serverLogEl.scrollHeight;
+      }
+
+      /** Pull structured fields (except type/level/message) for server_log lines */
+      function serverLogExtras(msg) {
+        var o = {};
+        for (var k in msg) {
+          if (!Object.prototype.hasOwnProperty.call(msg, k)) continue;
+          if (k === 'type' || k === 'level' || k === 'message') continue;
+          o[k] = msg[k];
+        }
+        return o;
+      }
+
+      function setStatus(t) { statusEl.textContent = t; }
+      function updateVadState(provider, state) {
+        vadStateEl.textContent = 'provider=' + (provider || '-') + ' state=' + (state || '-');
+      }
+
+      function playTTSChunk(pcmS16) {
+        if (!pcmS16 || pcmS16.length === 0) return;
+        if (!latencyTTSMeasured && t501) {
+          latencyTTSMs = Date.now() - t501;
+          latencyTTSMeasured = true;
+          updateLatencyDisplay();
+        }
+        if (!ttsContext) ttsContext = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: TTS_SAMPLE_RATE });
+        const len = pcmS16.length / 2;
+        const buf = ttsContext.createBuffer(1, len, TTS_SAMPLE_RATE);
+        const ch = buf.getChannelData(0);
+        const view = new DataView(pcmS16.buffer, pcmS16.byteOffset, pcmS16.byteLength);
+        for (let i = 0; i < len; i++) ch[i] = view.getInt16(i * 2, true) / 32768;
+        const src = ttsContext.createBufferSource();
+        src.buffer = buf;
+        const gainNode = ttsContext.createGain();
+        gainNode.gain.setValueAtTime(1, ttsContext.currentTime);
+        src.connect(gainNode);
+        gainNode.connect(ttsContext.destination);
+        activeTtsSource = src;
+        activeTtsGain = gainNode;
+        src.onended = function () {
+          if (activeTtsSource === src) {
+            activeTtsSource = null;
+            activeTtsGain = null;
+          }
+        };
+        src.start();
+      }
+
+      function flushTTSQueue() {
+        ttsPlaybackSeq++;
+        ttsQueue = [];
+        ttsPlaying = false;
+      }
+
+      function hardStopTTSPlayback() {
+        flushTTSQueue();
+        activeTtsGain = null;
+        if (activeTtsSource) {
+          try { activeTtsSource.stop(); } catch (e) {}
+          activeTtsSource = null;
+        }
+        if (ttsContext) {
+          try { ttsContext.close(); } catch (e) {}
+          ttsContext = null;
+        }
+      }
+
+      function fadeOutAndStopTTSPlayback(fadeMs) {
+        flushTTSQueue();
+        const src = activeTtsSource;
+        const gainNode = activeTtsGain;
+        const ctx = ttsContext;
+        if (!src || !gainNode || !ctx) {
+          hardStopTTSPlayback();
+          return;
+        }
+        try {
+          const now = ctx.currentTime;
+          const fadeSec = Math.max(0.02, (fadeMs || BARGE_IN_FADE_OUT_MS) / 1000);
+          const currentGain = gainNode.gain.value > 0 ? gainNode.gain.value : 1;
+          gainNode.gain.cancelScheduledValues(now);
+          gainNode.gain.setValueAtTime(currentGain, now);
+          gainNode.gain.linearRampToValueAtTime(0.0001, now + fadeSec);
+        } catch (e) {
+          // Fallback: if ramp fails, immediately hard stop.
+          hardStopTTSPlayback();
+          return;
+        }
+        setTimeout(function () {
+          if (activeTtsSource === src) {
+            hardStopTTSPlayback();
+          }
+        }, Math.max(20, (fadeMs || BARGE_IN_FADE_OUT_MS) + 20));
+      }
+
+      function playNextInQueue() {
+        const seq = ttsPlaybackSeq;
+        if (ttsQueue.length === 0) { ttsPlaying = false; return; }
+        const chunk = ttsQueue.shift();
+        if (chunk.length === 0) { playNextInQueue(); return; }
+        ttsPlaying = true;
+        var simEl = document.getElementById('simulatedTTSDelay');
+        var simulatedDelay = (simEl && parseInt(simEl.value, 10)) || 0;
+        var isFirstPlay = !latencyTTSMeasured && t501;
+        var waitMs = (isFirstPlay && simulatedDelay > 0) ? Math.max(0, t501 + simulatedDelay - Date.now()) : 0;
+        function doPlay() {
+          if (seq !== ttsPlaybackSeq) return;
+          playTTSChunk(chunk);
+          var duration = (chunk.length / 2) / TTS_SAMPLE_RATE * 1000;
+          setTimeout(function () {
+            if (seq !== ttsPlaybackSeq) return;
+            playNextInQueue();
+          }, Math.max(20, duration - 5));
+        }
+        if (waitMs > 0) {
+          setTimeout(function () {
+            if (seq !== ttsPlaybackSeq) return;
+            doPlay();
+          }, waitMs);
+        }
+        else doPlay();
+      }
+
+      function enqueueTTS(pcmS16) {
+        ttsQueue.push(pcmS16);
+        if (!ttsPlaying) playNextInQueue();
+      }
+
+      const aiNodesByReplyId = new Map();
+      let currentAiReplyId = null;
+      let currentAiTextNode = null;
+
+      // 与 /bg 的 voice.html 保持一致：芝麻背调 prompt
+      const DEFAULT_SYSTEM_ROLE = `【角色设定】
+你是"芝麻背调"的专业背景调查访谈员，负责进行员工背景调查的电话/视频访谈。你需要以专业、亲和、严谨的态度完成证明人访谈，获取真实、全面的候选人信息。
+
+【核心原则】
+1. 循序渐进：先核实基础信息，再深入工作表现，最后获取综合评价
+2. 交叉验证：通过不同维度的问题验证信息一致性
+3. 引导式+开放式结合：当证明人回答模糊时（如"不错"），需追问具体案例和表现
+4. 保密承诺：明确告知负面评价不会透露给候选人，消除顾虑
+5. 情景代入：利用候选人提供的职责信息，让证明人更有代入感
+
+【访谈六阶段流程】
+
+=== 阶段一：开场与身份确认 ===
+【目标】建立信任，确认身份，说明来意，征得同意
+
+【标准话术】
+"您好，请问是XX公司/XX先生/女士吗？我们是芝麻背调，专业做员工背景调查的第三方公司。候选人XX提供了您作为证明人，想跟您做信息核实/背景调查，可能会耽误您5-7分钟（核实履历与表现）或2-3分钟（仅核实履历），请问您目前时间方便吗？"
+
+【关键检查点】
+- 确认对方身份（公司/职位/与候选人关系）
+- 说明预计时长，尊重对方时间
+- 征得同意后再进入正题
+
+=== 阶段二：基础信息核实 ===
+【目标】核实候选人提供的基础履历信息，确保无虚假
+
+【必问问题清单】
+1. 入职与离职时间："关于他的入职、离职时间，您方便帮忙在人事系统查询一下吗？/您有一些印象吗？"
+2. 供职方式："他的供职方式属于全职正式员工吗？"
+3. 职位信息："他在公司担任什么职位呢？离职前担任什么职位？"
+4. 工作职责："主要负责哪些工作呢？"
+5. 工作地点："他的工作地址就是在…吧？"
+6. 汇报关系："他离职前最后一任直线上级是哪一位？担任什么职位？"
+7. 工作交接："他离职的时候工作交接应该都处理好了吧？/目前可能正在做工作交接是吗？"
+
+【验证技巧】
+- 先让证明人陈述，再与候选人提供的信息比对
+- 对时间、职位等关键信息要求精确
+
+=== 阶段三：离职原因与合规性排查 ===
+【目标】了解离职背景，排查法律风险和职业道德问题
+
+【必问问题清单】
+1. 离职原因："关于他的离职原因，人事系统是怎么记录的？/是怎么跟您沟通的？"
+   - 【追问】若属于协商离职或被动离职，需确认具体原因和是否给予赔偿
+2. 合规性排查："他工作期间应该不存在违规违纪、劳动争议或仲裁的情况吧？"
+3. 竞业协议："他的离职会涉及到竞业禁止协议的签订吗？"
+   - 【追问】若有，"此协议在他离职之后是否会生效？实施年限是多久？"
+4. 薪酬水平（可选）："他的薪酬水平方便跟您咨询吗？"
+
+【风险识别】
+- 记录离职原因的版本差异（HR记录 vs 上级口述）
+- 关注任何负面信号，但保持中立语气
+
+=== 阶段四：工作表现深度访谈（核心阶段）===
+【目标】多维度评估候选人工作能力、态度和潜力
+
+【访谈策略】
+采用"引导式+开放式"结合：
+- 当证明人回答"不错"等模糊评价时，必须追问：
+  * "方便了解一下具体是体现在哪些方面呢？"
+  * "您方便具体评价一下吗？"
+  * "您方便帮忙举一个比较典型的案例吗？"
+- 利用候选人提供的职责信息引导：
+  * "候选人也提到了工作重点之一是负责渠道拓展，应该对前瞻性思维要求比较高，您觉得他的前瞻性思维如何？"
+
+【七大评估维度】
+
+维度1：优点与亮点
+- "您觉得他在工作中主要有哪些优点？"
+- "在与他共事期间，哪些优点令您记忆深刻？"
+
+维度2：专业知识与技能
+- "您觉得他的专业知识和技能体现得如何？"
+- "这个岗位需要具备的专业知识及技能，他在哪方面表现较为突出？"
+- "是否属于工作经验比较丰富的员工，在公司属于中（高）层管理人员？"
+- "提供个人专业知识帮助团队员工解决问题的能力如何？"
+- "自主学习能力如何？对业务的理解情况如何？"
+
+维度3：压力管理
+- "请问他在工作中承担的压力会比较大吗？压力主要来自于哪些方面？"
+- "他的抗压能力怎么样？情绪自我控制能力如何？"
+- "应该还是能保持积极的态度来应对出现的问题和困难吧？"
+- "遇到无法处理的问题，是否会主动寻求上级领导的帮助支持？"
+- "会通过哪些方式来化解压力？"
+- 【管理岗追问】"下属/同事压力大时是否能够帮忙调解压力？"
+
+维度4：工作态度
+- "您觉得他在工作体现出来的工作态度如何？"
+- "应该是比较认真负责踏实敬业的员工吧？"
+- "分配的工作任务应该还是可以很好地完成吧？"
+- "能否保持职业的态度处理工作中遇到的问题？"
+- "是否愿意接受具有挑战性的工作？"
+
+维度5：人际关系
+- "您觉得他在工作中人际关系处理得怎么样？"
+- "与上级同事相处得怎么样？"（关注：融入团队、团队协作、跨部门沟通、高效准确沟通）
+- "在与公司外部的沟通、客户关系的维护表现怎样？"（商务沟通能力）
+
+维度6：领导与管理能力（针对管理岗）
+- "请问他在工作中会承担领导管理的职责吗？工作中会带领几名下属？"
+- "是否能根据员工能力和特点合理分配工作任务？"
+- "属于哪种领导风格的领导？"
+- "对下属的培养和指导体现得怎么样？"
+  * （关注：下属潜能与可塑性、分享经验、指导进步、职业规划、合理放权、激励培养）
+- "您觉得他作为领导在项目的推动能力、全局统筹能力体现得如何？"
+- "他作为领导在团队中的影响力怎么样？团队文化建设做得如何？"
+  * （关注：团队工作表现、绩效、凝聚力、文化建设、鼓舞士气、稳定性、协调分歧）
+- 【追问】"会通过哪些方式鼓舞员工的工作士气？会通过哪些方式调动大家的工作积极性？"
+
+维度7：前瞻性思维（针对中高层/战略岗）
+- "请问他的工作岗位会涉及到前瞻性思维的体现吗？"
+- 【追问】"从哪些案例中能够体现出较强的前瞻性思维能力？"
+- "他对市场和行业的分析和把控体现得怎么样？"
+  * （关注：市场/行业敏感度、洞察力、行业评估、预判能力、动态掌握）
+- "请问他对工作中风险的评估和预判能力如何？"
+- "是否能提前制定方案策略来应对、屏蔽可能存在的风险和问题？"
+- 【追问】"会通过哪些方式屏蔽工作中可能存在的风险或问题？"
+- "他工作中的计划性怎么样？是否能主动提出可行性方案？"
+- "是否会主动学习所在行业前沿知识？"
+- 【追问】"做过哪些创新项目或提出过哪些新颖的观点？"
+
+=== 阶段五：综合评价与闭环 ===
+【目标】获取量化评分、改进建议，验证证明人可靠性
+
+【必问问题清单】
+1. 量化评分："如果满分为10分的话，您会给候选人打几分？/根据他整体的岗位匹配度评分？"
+2. 再雇佣意愿："如果有再次共事机会，您是否愿意再次雇用他跟他一起共事呢？"
+3. 缺点与不足："如果请您帮他提出一些建议，您认为他在哪些方面还有提升和完善的空间？"
+   - 【负面评价追问话术】"其实问您这个问题并不是要说评价候选人不好的地方，而是想了解一下他在这方面具体有哪些不足，他入职后我们可以想办法帮他提升，您给出的建议用人方也能参考并更有针对性地培养候选人。关于这方面的信息我们也是绝对不会透露给XX（候选人）的，这个您可以放心。"
+4. 证明人信息核对："方便了解一下您怎么称呼/担任什么职位吗？"
+5. 交叉验证信息："他还给我们提供了一位同事XXX，您看是公司的……（职位）吗？同事的联系方式方便跟您核对吗？"
+
+=== 阶段六：结束语 ===
+【标准话术】
+"主要与您了解以上的内容，抱歉打扰您了，也非常感谢您的配合，祝您生活愉快，再见！"
+
+【特殊情况处理】
+
+情况1：证明人时间紧张
+- 快速模式：仅核实基础信息（阶段二）+ 评分（阶段五），控制在2-3分钟
+
+情况2：证明人回避负面评价
+- 使用保密承诺话术消除顾虑
+- 换角度提问："如果给候选人提一个改进建议？"
+- 询问"更适合什么类型的工作"而非"不适合什么"
+
+情况3：信息不一致
+- 不直接质疑，用求证语气："我们了解到的情况是XX，想跟您确认一下？"
+- 记录差异点，后续与其他证明人交叉验证
+
+情况4：证明人表示不了解候选人
+- 询问共事时长和接触频率
+- 若确实不了解，礼貌结束，标记需补充其他证明人
+
+【输出要求】
+1. 按阶段顺序推进，不可跳过基础信息核实直接进入表现评价
+2. 每个维度获取具体案例支撑，拒绝模糊评价
+3. 记录原话，标注证明人语气（肯定/犹豫/回避）
+4. 对矛盾信息标记待验证
+5. 访谈结束后生成结构化报告，包含：信息核实结果、各维度评价、风险提示、综合建议`;
+      const DEFAULT_SPEAKING_STYLE = `说话专业、亲和、严谨，适合电话/视频背景调查访谈。`;
+
+      function ensureAiLine(replyId) {
+        if (replyId && aiNodesByReplyId.has(replyId)) {
+          currentAiReplyId = replyId;
+          currentAiTextNode = aiNodesByReplyId.get(replyId);
+          return currentAiTextNode;
+        }
+        transcriptEl.appendChild(document.createElement('br'));
+        const prefix = document.createElement('span');
+        prefix.textContent = 'AI: ';
+        transcriptEl.appendChild(prefix);
+        const textNode = document.createTextNode('');
+        transcriptEl.appendChild(textNode);
+        transcriptEl.appendChild(document.createElement('br'));
+        currentAiReplyId = replyId || null;
+        currentAiTextNode = textNode;
+        if (replyId) aiNodesByReplyId.set(replyId, textNode);
+        return textNode;
+      }
+
+      function resetAiStreamingState() {
+        currentAiReplyId = null;
+        currentAiTextNode = null;
+        aiNodesByReplyId.clear();
+      }
+
+      function startAudioProcessor() {
+        if (!mediaStream) return;
+        const ctx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 48000 });
+        const src = ctx.createMediaStreamSource(mediaStream);
+        const rate = ctx.sampleRate;
+        let buffer = [];
+        const outSamples = 320;
+        const frameLen = Math.floor((rate / TARGET_SAMPLE_RATE) * outSamples);
+        const processor = ctx.createScriptProcessor(2048, 1, 1);
+        processor.onaudioprocess = function (e) {
+          const input = e.inputBuffer.getChannelData(0);
+          for (let i = 0; i < input.length; i++) buffer.push(input[i]);
+          while (buffer.length >= frameLen) {
+            const block = buffer.splice(0, frameLen);
+            const down = [];
+            const step = (frameLen - 1) / (outSamples - 1) || 0;
+            for (let i = 0; i < outSamples; i++) down.push(block[Math.min(Math.floor(i * step), frameLen - 1)] || 0);
+            const s16 = new ArrayBuffer(down.length * 2);
+            const v = new DataView(s16);
+            for (var k = 0; k < down.length; k++) {
+              const s = Math.max(-1, Math.min(1, down[k]));
+              v.setInt16(k * 2, s < 0 ? s * 0x8000 : s * 0x7FFF, true);
+            }
+            if (ws && ws.readyState === WebSocket.OPEN) {
+              const chunkU8 = new Uint8Array(s16);
+              appendRecordingChunk(chunkU8);
+              ws.send(s16);
+            }
+          }
+        };
+        src.connect(processor);
+        processor.connect(ctx.destination);
+        audioContext = ctx;
+        processorNode = processor;
+      }
+
+      function stopVoiceCapture() {
+        if (processorNode && audioContext) {
+          processorNode.disconnect();
+          audioContext.close();
+          processorNode = null;
+          audioContext = null;
+        }
+        finalizeTurnRecordingCache();
+        voiceCapturing = false;
+      }
+
+      function doVoiceComplete() {
+        stopVoiceCapture();
+        btnVoiceStart.disabled = false;
+        btnVoiceStop.disabled = true;
+        voiceStatusEl.textContent = '';
+        if (ws && ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({ type: 'voice_input_complete', source: 'manual' }));
+        }
+      }
+
+      function requestVoiceStart(source) {
+        if (!AUTO_CONTINUOUS_VOICE) return;
+        if (!mediaStream) return;
+        if (!ws || ws.readyState !== WebSocket.OPEN) return;
+        if (voiceCapturing) return;
+        ws.send(JSON.stringify({ type: 'voice_input_start' }));
+        btnVoiceStart.disabled = true;
+        btnVoiceStop.disabled = false;
+        voiceStatusEl.textContent = '正在连接流式 ASR...';
+        log('Auto voice start [source=' + source + ']');
+      }
+
+      function connect() {
+        const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+        const host = location.host;
+        const url = protocol + '//' + host + '/ws';
+        setStatus('Connecting...');
+        ws = new WebSocket(url);
+        ws.binaryType = 'arraybuffer';
+
+        ws.onopen = function () {
+          updateVadState('-', '-');
+          const cfg = {
+            mode: 't2s',
+            stage: 'introduction',
+            system_role: DEFAULT_SYSTEM_ROLE,
+            speaking_style: DEFAULT_SPEAKING_STYLE,
+          };
+          ws.send(JSON.stringify(cfg));
+          setStatus('Waiting for session...');
+        };
+
+        ws.onmessage = function (ev) {
+          if (typeof ev.data === 'string') {
+            try {
+              const msg = JSON.parse(ev.data);
+              if (msg.type === 'server_log') {
+                serverLogAppend(msg.level || 'info', (msg.message || '').trim(), serverLogExtras(msg));
+              } else if (msg.type === 'ready') {
+                setStatus('Ready. 输入文本或使用语音。');
+                log('Session ' + msg.session_id + ' mode=' + (msg.mode || 't2s'));
+                btnSendText.disabled = false;
+                btnVoiceStart.disabled = false;
+                t501 = 0;
+                updateLatencyDisplay();
+                requestVoiceStart('ready');
+              } else if (msg.type === 'start_session_config') {
+                log('StartSession: mode=' + msg.mode + ' input_mod=' + msg.input_mod);
+                if (msg.followup) {
+                  var fu = msg.followup;
+                  var pipe = msg.followup_pipeline_active ? 't2s追问链路=开' : 't2s追问链路=关';
+                  log(
+                    '追问服务: ' + pipe +
+                    ' | provider=' + (fu.provider || '-') +
+                    ' configured=' + !!fu.configured +
+                    ' | model=' + (fu.model || '-') +
+                    ' | base=' + (fu.api_base || '-') +
+                    ' | fmt=' + (fu.output_format || '-') +
+                    ' | extra_body=' + (fu.has_extra_body ? 'yes' : 'no')
+                  );
+                }
+              } else if (msg.type === 'chat') {
+                if (!latencyChatMeasured && t501) {
+                  latencyChatMs = Date.now() - t501;
+                  latencyChatMeasured = true;
+                  updateLatencyDisplay();
+                }
+                const node = ensureAiLine(msg.reply_id);
+                node.textContent += (msg.content || '');
+                transcriptEl.scrollTop = transcriptEl.scrollHeight;
+              } else if (msg.type === 'chat_end') {
+                currentAiReplyId = null;
+                currentAiTextNode = null;
+              } else if (msg.type === 'asr') {
+                asrPreviewEl.textContent = msg.text || '';
+                asrPreviewEl.style.opacity = msg.is_interim ? '0.7' : '1';
+              } else if (msg.type === 'voice_input_started') {
+                startTurnRecordingCache();
+                asrPreviewEl.textContent = '';
+                voiceStatusEl.textContent = '录音中... 说完后自动发送';
+                log('Voice streaming started');
+                voiceCapturing = true;
+                startAudioProcessor();
+              } else if (msg.type === 'voice_input_complete_suggested') {
+                // Server-side VAD (e.g. Duplug) decided to complete; stop sending mic audio ASAP.
+                stopVoiceCapture();
+                btnVoiceStart.disabled = false;
+                btnVoiceStop.disabled = true;
+                voiceStatusEl.textContent = '';
+                log('Server VAD completed voice input [source=' + (msg.source || '-') + ']');
+              } else if (msg.type === 'vad_status') {
+                const provider = msg.provider || 'vad';
+                const enabled = !!msg.enabled;
+                const mode = msg.mode || '-';
+                const serverUrl = msg.server_url || '-';
+                const err = msg.error ? (' error=' + msg.error) : '';
+                log('VAD status: provider=' + provider + ' enabled=' + enabled + ' mode=' + mode + ' server_url=' + serverUrl + err, !enabled);
+              } else if (msg.type === 'vad_state') {
+                const provider = msg.provider || 'vad';
+                const state = msg.state || '-';
+                updateVadState(provider, state);
+              } else if (msg.type === 'debug_audio_preview') {
+                const vadB64 = msg.vad_wav_base64 || '';
+                const asrB64 = msg.asr_wav_base64 || '';
+                if (vadB64) {
+                  vadAudioPreviewEl.src = 'data:audio/wav;base64,' + vadB64;
+                } else {
+                  vadAudioPreviewEl.removeAttribute('src');
+                  vadAudioPreviewEl.load();
+                }
+                if (asrB64) {
+                  asrAudioPreviewEl.src = 'data:audio/wav;base64,' + asrB64;
+                } else {
+                  asrAudioPreviewEl.removeAttribute('src');
+                  asrAudioPreviewEl.load();
+                }
+                vadAudioMetaEl.textContent = '片段数: ' + (msg.vad_segments || 0) + ', 时长: ' + ((msg.vad_duration_sec || 0).toFixed ? msg.vad_duration_sec.toFixed(2) : '0.00') + 's';
+                asrAudioMetaEl.textContent = '片段数: ' + (msg.asr_segments || 0) + ', 时长: ' + ((msg.asr_duration_sec || 0).toFixed ? msg.asr_duration_sec.toFixed(2) : '0.00') + 's';
+              } else if (msg.type === 'barge_in') {
+                ttsSuppressedByBargeIn = true;
+                fadeOutAndStopTTSPlayback(BARGE_IN_FADE_OUT_MS);
+                log('Barge-in: stop current TTS playback');
+              } else if (msg.type === 'tts_start') {
+                // New TTS turn starts: allow playback again after prior barge-in suppression.
+                ttsSuppressedByBargeIn = false;
+                // Keep mic upstream alive during AI playback so server-side Duplug can detect
+                // user speech ("nonidle") and trigger barge-in immediately.
+                if (AUTO_CONTINUOUS_VOICE) {
+                  setTimeout(function () { requestVoiceStart('tts_start_barge_listen'); }, 20);
+                }
+              } else if (msg.type === 'tts_end') {
+                if (AUTO_CONTINUOUS_VOICE) {
+                  setTimeout(function () { requestVoiceStart('tts_end'); }, 50);
+                }
+              } else if (msg.type === 'voice_turn_finished') {
+                // If ASR produced empty text, no TTS will be generated, so re-arm voice input here.
+                if (AUTO_CONTINUOUS_VOICE && !msg.asr_text_sent) {
+                  setTimeout(function () { requestVoiceStart('asr_empty'); }, 50);
+                }
+              } else if (msg.type === 'local_asr_text') {
+                asrPreviewEl.textContent = msg.text || '';
+                asrPreviewEl.style.opacity = '1';
+                log('ASR 最终: ' + (msg.text || ''));
+                var t = (msg.text || '').trim();
+                if (t) {
+                  transcriptEl.appendChild(document.createElement('br'));
+                  var userSpan = document.createElement('span');
+                  userSpan.textContent = '证明人: ' + t;
+                  userSpan.style.color = '#666';
+                  transcriptEl.appendChild(userSpan);
+                  transcriptEl.appendChild(document.createElement('br'));
+                  transcriptEl.scrollTop = transcriptEl.scrollHeight;
+                }
+              } else if (msg.type === 'followup_request_start') {
+                followupPending = true;
+                log('追问模型请求中… [stage=' + (msg.stage || '-') + ']  ASR预览: ' + (msg.source_asr_preview || ''));
+              } else if (msg.type === 'followup_deferred_applied') {
+                log('上轮迟到的追问已合并到本轮 501 末尾: ' + (msg.question || ''));
+              } else if (msg.type === 'followup_generated') {
+                followupPending = false;
+                if (msg.deferred_to_next_asr) {
+                  log('追问迟到（超时后返回），已记入下一轮 ASR 末尾: ' + (msg.question || ''));
+                } else if (msg.merged_into_501) {
+                  log('追问已合并进本轮 501 末尾: ' + (msg.question || ''));
+                } else {
+                  log('追问: ' + (msg.question || ''));
+                }
+              } else if (msg.type === 'followup_skipped') {
+                followupPending = false;
+                log('追问模型判定无需追问 [' + (msg.reason || '-') + ']' + (msg.deferred ? ' [deferred]' : ''));
+              } else if (msg.type === 'chat_text_query_sent') {
+                t501 = Date.now();
+                latencyChatMs = null;
+                latencyTTSMs = null;
+                latencyChatMeasured = false;
+                latencyTTSMeasured = false;
+                updateLatencyDisplay();
+                const reason = msg.reason || '-';
+                const trigger = msg.trigger || '-';
+                const merged = msg.merged_followup ? ' merged_followup=1' : '';
+                log('ChatTextQuery sent [reason=' + reason + ', trigger=' + trigger + ']' + merged);
+              } else if (msg.type === 'error') {
+                followupPending = false;
+                log(msg.message, true);
+                serverLogAppend('error', (msg.message || '').trim(), serverLogExtras(msg));
+                setStatus('Error: ' + msg.message);
+              }
+            } catch (e) {
+              log('Parse error: ' + e.message, true);
+            }
+          } else {
+            const buf = new Uint8Array(ev.data);
+            if (ttsSuppressedByBargeIn) {
+              // Drop late audio packets from the interrupted turn.
+              return;
+            }
+            enqueueTTS(buf);
+          }
+        };
+
+        ws.onclose = function () {
+          updateVadState('-', '-');
+          setStatus('Disconnected');
+          if (followupPending) {
+            log('WebSocket closed（追问模型尚未返回：若刚断开连接，log 里可能看不到「追问已合并进 501」）');
+            followupPending = false;
+          } else {
+            log('WebSocket closed');
+          }
+          btnSendText.disabled = true;
+          btnVoiceStart.disabled = true;
+          btnVoiceStop.disabled = true;
+        };
+        ws.onerror = function () {
+          setStatus('WebSocket error');
+          log('WebSocket error', true);
+        };
+      }
+
+      btnStart.onclick = function () {
+        transcriptEl.innerHTML = '';
+        logEl.innerHTML = '';
+        serverLogEl.innerHTML = '';
+        resetAiStreamingState();
+        flushTTSQueue();
+        resetRecordingDebugCache();
+        navigator.mediaDevices.getUserMedia({
+          audio: {
+            channelCount: 1,
+            echoCancellation: false,
+            noiseSuppression: true,
+            autoGainControl: true,
+          },
+        })
+          .then(function (stream) {
+            mediaStream = stream;
+            connect();
+            btnStart.disabled = true;
+            btnStop.disabled = false;
+          })
+          .catch(function (e) {
+            log('麦克风权限失败，将仅支持文本输入: ' + e.message, true);
+            mediaStream = null;
+            connect();
+            btnStart.disabled = true;
+            btnStop.disabled = false;
+          });
+      };
+
+      btnStop.onclick = function () {
+        if (mediaStream) {
+          mediaStream.getTracks().forEach(function (t) { t.stop(); });
+          mediaStream = null;
+        }
+        stopVoiceCapture();
+        if (ws) { ws.close(); ws = null; }
+        updateVadState('-', '-');
+        hardStopTTSPlayback();
+        btnStart.disabled = false;
+        btnStop.disabled = true;
+        btnSendText.disabled = true;
+        btnVoiceStart.disabled = true;
+        btnVoiceStop.disabled = true;
+        voiceStatusEl.textContent = '';
+        setStatus('Stopped');
+      };
+
+      btnSendText.onclick = function () {
+        const text = (userTextEl.value || '').trim();
+        if (!text) {
+          log('Empty text, ignore.', true);
+          return;
+        }
+        if (ws && ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({
+            type: 'chat_text_query',
+            content: text,
+          }));
+          transcriptEl.appendChild(document.createElement('br'));
+          const userSpan = document.createElement('span');
+          userSpan.textContent = '证明人: ' + text;
+          userSpan.style.color = '#666';
+          transcriptEl.appendChild(userSpan);
+          transcriptEl.appendChild(document.createElement('br'));
+          transcriptEl.scrollTop = transcriptEl.scrollHeight;
+          userTextEl.value = '';
+          log('Send text (501): ' + text.substring(0, 50) + (text.length > 50 ? '...' : ''));
+        } else {
+          log('Not connected yet (start first).', true);
+        }
+      };
+
+      btnVoiceStart.onclick = function () {
+        if (!mediaStream) {
+          log('No microphone. Use text input only.', true);
+          return;
+        }
+        if (!ws || ws.readyState !== WebSocket.OPEN) {
+          log('Not connected.', true);
+          return;
+        }
+        requestVoiceStart('manual');
+      };
+
+      btnVoiceStop.onclick = function () {
+        doVoiceComplete();
+        log('手动结束，等待 ASR 结果...');
+      };
+    })();
+  </script>
+</body>
+</html>
