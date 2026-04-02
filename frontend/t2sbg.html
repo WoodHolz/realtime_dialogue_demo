@@ -137,7 +137,7 @@
       const serverLogEl = document.getElementById('serverLog');
 
       let ws = null;
-      let ttsContext = null;
+      let sharedAudioContext = null;
       let ttsQueue = [];
       let ttsPlaying = false;
       let ttsPlaybackSeq = 0;
@@ -149,9 +149,10 @@
       const BARGE_IN_FADE_OUT_MS = 80;
 
       let mediaStream = null;
-      let audioContext = null;
+      let micSourceNode = null;
       let processorNode = null;
       let voiceCapturing = false;
+      const SHARED_AUDIO_SAMPLE_RATE = 48000;
       const TARGET_SAMPLE_RATE = 16000;
       // Debug recording cache:
       // - VAD/ASR previews come from backend merged buffers.
@@ -323,6 +324,41 @@
         vadStateEl.textContent = 'provider=' + (provider || '-') + ' state=' + (state || '-');
       }
 
+      function getSharedAudioContext() {
+        if (!sharedAudioContext) {
+          sharedAudioContext = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: SHARED_AUDIO_SAMPLE_RATE });
+        }
+        if (sharedAudioContext.state === 'suspended') {
+          sharedAudioContext.resume().catch(function () {});
+        }
+        return sharedAudioContext;
+      }
+
+      function resamplePcmS16ToFloat32(pcmS16, fromRate, toRate) {
+        const inLen = pcmS16.length / 2;
+        if (inLen <= 0) return new Float32Array(0);
+        const inView = new DataView(pcmS16.buffer, pcmS16.byteOffset, pcmS16.byteLength);
+        if (fromRate === toRate) {
+          const outSame = new Float32Array(inLen);
+          for (let i = 0; i < inLen; i++) outSame[i] = inView.getInt16(i * 2, true) / 32768;
+          return outSame;
+        }
+        const outLen = Math.max(1, Math.round(inLen * toRate / fromRate));
+        const out = new Float32Array(outLen);
+        const scale = fromRate / toRate;
+        for (let i = 0; i < outLen; i++) {
+          const pos = i * scale;
+          const idx = Math.floor(pos);
+          const frac = pos - idx;
+          const i0 = Math.min(idx, inLen - 1);
+          const i1 = Math.min(idx + 1, inLen - 1);
+          const s0 = inView.getInt16(i0 * 2, true) / 32768;
+          const s1 = inView.getInt16(i1 * 2, true) / 32768;
+          out[i] = s0 + (s1 - s0) * frac;
+        }
+        return out;
+      }
+
       function playTTSChunk(pcmS16) {
         if (!pcmS16 || pcmS16.length === 0) return;
         if (!latencyTTSMeasured && t501) {
@@ -330,18 +366,16 @@
           latencyTTSMeasured = true;
           updateLatencyDisplay();
         }
-        if (!ttsContext) ttsContext = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: TTS_SAMPLE_RATE });
-        const len = pcmS16.length / 2;
-        const buf = ttsContext.createBuffer(1, len, TTS_SAMPLE_RATE);
-        const ch = buf.getChannelData(0);
-        const view = new DataView(pcmS16.buffer, pcmS16.byteOffset, pcmS16.byteLength);
-        for (let i = 0; i < len; i++) ch[i] = view.getInt16(i * 2, true) / 32768;
-        const src = ttsContext.createBufferSource();
+        const ctx = getSharedAudioContext();
+        const pcmF32 = resamplePcmS16ToFloat32(pcmS16, TTS_SAMPLE_RATE, ctx.sampleRate);
+        const buf = ctx.createBuffer(1, pcmF32.length, ctx.sampleRate);
+        buf.copyToChannel(pcmF32, 0);
+        const src = ctx.createBufferSource();
         src.buffer = buf;
-        const gainNode = ttsContext.createGain();
-        gainNode.gain.setValueAtTime(1, ttsContext.currentTime);
+        const gainNode = ctx.createGain();
+        gainNode.gain.setValueAtTime(1, ctx.currentTime);
         src.connect(gainNode);
-        gainNode.connect(ttsContext.destination);
+        gainNode.connect(ctx.destination);
         activeTtsSource = src;
         activeTtsGain = gainNode;
         src.onended = function () {
@@ -366,9 +400,9 @@
           try { activeTtsSource.stop(); } catch (e) {}
           activeTtsSource = null;
         }
-        if (ttsContext) {
-          try { ttsContext.close(); } catch (e) {}
-          ttsContext = null;
+        if (sharedAudioContext && !voiceCapturing) {
+          try { sharedAudioContext.close(); } catch (e) {}
+          sharedAudioContext = null;
         }
       }
 
@@ -376,7 +410,7 @@
         flushTTSQueue();
         const src = activeTtsSource;
         const gainNode = activeTtsGain;
-        const ctx = ttsContext;
+        const ctx = sharedAudioContext;
         if (!src || !gainNode || !ctx) {
           hardStopTTSPlayback();
           return;
@@ -628,7 +662,7 @@
 
       function startAudioProcessor() {
         if (!mediaStream) return;
-        const ctx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 48000 });
+        const ctx = getSharedAudioContext();
         const src = ctx.createMediaStreamSource(mediaStream);
         const rate = ctx.sampleRate;
         let buffer = [];
@@ -658,16 +692,22 @@
         };
         src.connect(processor);
         processor.connect(ctx.destination);
-        audioContext = ctx;
+        micSourceNode = src;
         processorNode = processor;
       }
 
       function stopVoiceCapture() {
-        if (processorNode && audioContext) {
-          processorNode.disconnect();
-          audioContext.close();
+        if (processorNode) {
+          try { processorNode.disconnect(); } catch (e) {}
           processorNode = null;
-          audioContext = null;
+        }
+        if (micSourceNode) {
+          try { micSourceNode.disconnect(); } catch (e) {}
+          micSourceNode = null;
+        }
+        if (sharedAudioContext && !activeTtsSource) {
+          try { sharedAudioContext.close(); } catch (e) {}
+          sharedAudioContext = null;
         }
         finalizeTurnRecordingCache();
         voiceCapturing = false;
