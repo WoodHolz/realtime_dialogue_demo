@@ -137,7 +137,8 @@
       const serverLogEl = document.getElementById('serverLog');
 
       let ws = null;
-      let sharedAudioContext = null;
+      let micAudioContext = null;
+      let ttsAudioContext = null;
       let ttsQueue = [];
       let ttsPlaying = false;
       let ttsPlaybackSeq = 0;
@@ -155,8 +156,7 @@
       let micMuteGainNode = null;
       let processorNode = null;
       let voiceCapturing = false;
-      /** 与上行 VAD 一致；TTS 在 playTTSChunk 中从 24 kHz 重采样到此 rate */
-      const SHARED_AUDIO_SAMPLE_RATE = 16000;
+      const MIC_AUDIO_SAMPLE_RATE = 16000;
       const TARGET_SAMPLE_RATE = 16000;
       const MIC_SCRIPT_BUFFER_SIZE = 2048;
       // Debug recording cache:
@@ -329,14 +329,24 @@
         vadStateEl.textContent = 'provider=' + (provider || '-') + ' state=' + (state || '-');
       }
 
-      function getSharedAudioContext() {
-        if (!sharedAudioContext) {
-          sharedAudioContext = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: SHARED_AUDIO_SAMPLE_RATE });
+      function getMicAudioContext() {
+        if (!micAudioContext) {
+          micAudioContext = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: MIC_AUDIO_SAMPLE_RATE });
         }
-        if (sharedAudioContext.state === 'suspended') {
-          sharedAudioContext.resume().catch(function () {});
+        if (micAudioContext.state === 'suspended') {
+          micAudioContext.resume().catch(function () {});
         }
-        return sharedAudioContext;
+        return micAudioContext;
+      }
+
+      function getTtsAudioContext() {
+        if (!ttsAudioContext) {
+          ttsAudioContext = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: TTS_SAMPLE_RATE });
+        }
+        if (ttsAudioContext.state === 'suspended') {
+          ttsAudioContext.resume().catch(function () {});
+        }
+        return ttsAudioContext;
       }
 
       function openProcessedMic() {
@@ -351,28 +361,12 @@
         });
       }
 
-      function resamplePcmS16ToFloat32(pcmS16, fromRate, toRate) {
+      function pcmS16ToFloat32(pcmS16) {
         const inLen = pcmS16.length / 2;
         if (inLen <= 0) return new Float32Array(0);
         const inView = new DataView(pcmS16.buffer, pcmS16.byteOffset, pcmS16.byteLength);
-        if (fromRate === toRate) {
-          const outSame = new Float32Array(inLen);
-          for (let i = 0; i < inLen; i++) outSame[i] = inView.getInt16(i * 2, true) / 32768;
-          return outSame;
-        }
-        const outLen = Math.max(1, Math.round(inLen * toRate / fromRate));
-        const out = new Float32Array(outLen);
-        const scale = fromRate / toRate;
-        for (let i = 0; i < outLen; i++) {
-          const pos = i * scale;
-          const idx = Math.floor(pos);
-          const frac = pos - idx;
-          const i0 = Math.min(idx, inLen - 1);
-          const i1 = Math.min(idx + 1, inLen - 1);
-          const s0 = inView.getInt16(i0 * 2, true) / 32768;
-          const s1 = inView.getInt16(i1 * 2, true) / 32768;
-          out[i] = s0 + (s1 - s0) * frac;
-        }
+        const out = new Float32Array(inLen);
+        for (let i = 0; i < inLen; i++) out[i] = inView.getInt16(i * 2, true) / 32768;
         return out;
       }
 
@@ -383,9 +377,9 @@
           latencyTTSMeasured = true;
           updateLatencyDisplay();
         }
-        const ctx = getSharedAudioContext();
-        const pcmF32 = resamplePcmS16ToFloat32(pcmS16, TTS_SAMPLE_RATE, ctx.sampleRate);
-        const buf = ctx.createBuffer(1, pcmF32.length, ctx.sampleRate);
+        const ctx = getTtsAudioContext();
+        const pcmF32 = pcmS16ToFloat32(pcmS16);
+        const buf = ctx.createBuffer(1, pcmF32.length, TTS_SAMPLE_RATE);
         buf.copyToChannel(pcmF32, 0);
         const src = ctx.createBufferSource();
         src.buffer = buf;
@@ -417,9 +411,9 @@
           try { activeTtsSource.stop(); } catch (e) {}
           activeTtsSource = null;
         }
-        if (sharedAudioContext && !voiceCapturing) {
-          try { sharedAudioContext.close(); } catch (e) {}
-          sharedAudioContext = null;
+        if (ttsAudioContext) {
+          try { ttsAudioContext.close(); } catch (e) {}
+          ttsAudioContext = null;
         }
       }
 
@@ -427,7 +421,7 @@
         flushTTSQueue();
         const src = activeTtsSource;
         const gainNode = activeTtsGain;
-        const ctx = sharedAudioContext;
+        const ctx = ttsAudioContext;
         if (!src || !gainNode || !ctx) {
           hardStopTTSPlayback();
           return;
@@ -679,27 +673,33 @@
 
       function startAudioProcessor() {
         if (!mediaStream) return;
-        const ctx = getSharedAudioContext();
+        const ctx = getMicAudioContext();
         const src = ctx.createMediaStreamSource(mediaStream);
         const rate = ctx.sampleRate;
+        if (rate !== TARGET_SAMPLE_RATE) {
+          log('[mic] sampleRate=' + rate + ' -> will resample to ' + TARGET_SAMPLE_RATE + ' (linear interpolation)');
+        }
         let buffer = [];
         const outSamples = 320;
-        const frameLen = Math.floor((rate / TARGET_SAMPLE_RATE) * outSamples);
+        const ratio = rate / TARGET_SAMPLE_RATE;
+        const requiredIn = Math.ceil((outSamples - 1) * ratio) + 1;
         const processor = ctx.createScriptProcessor(MIC_SCRIPT_BUFFER_SIZE, 1, 1);
         processor.onaudioprocess = function (e) {
           const input = e.inputBuffer.getChannelData(0);
           for (let i = 0; i < input.length; i++) buffer.push(input[i]);
-          while (buffer.length >= frameLen) {
-            const block = buffer.splice(0, frameLen);
-            const down = [];
-            const step = (frameLen - 1) / (outSamples - 1) || 0;
-            for (let i = 0; i < outSamples; i++) down.push(block[Math.min(Math.floor(i * step), frameLen - 1)] || 0);
-            const s16 = new ArrayBuffer(down.length * 2);
+          while (buffer.length >= requiredIn) {
+            const s16 = new ArrayBuffer(outSamples * 2);
             const v = new DataView(s16);
-            for (var k = 0; k < down.length; k++) {
-              const s = Math.max(-1, Math.min(1, down[k]));
+            for (let k = 0; k < outSamples; k++) {
+              const pos = k * ratio;
+              const idx = Math.floor(pos);
+              const frac = pos - idx;
+              const s0 = buffer[idx] || 0;
+              const s1 = buffer[idx + 1] || s0;
+              const s = Math.max(-1, Math.min(1, s0 + (s1 - s0) * frac));
               v.setInt16(k * 2, s < 0 ? s * 0x8000 : s * 0x7FFF, true);
             }
+            buffer.splice(0, Math.floor(outSamples * ratio));
             if (ws && ws.readyState === WebSocket.OPEN) {
               const chunkU8 = new Uint8Array(s16);
               appendRecordingChunk(chunkU8);
@@ -730,9 +730,9 @@
           try { micSourceNode.disconnect(); } catch (e) {}
           micSourceNode = null;
         }
-        if (sharedAudioContext && !activeTtsSource) {
-          try { sharedAudioContext.close(); } catch (e) {}
-          sharedAudioContext = null;
+        if (micAudioContext) {
+          try { micAudioContext.close(); } catch (e) {}
+          micAudioContext = null;
         }
         finalizeTurnRecordingCache();
         voiceCapturing = false;
