@@ -150,10 +150,13 @@
 
       let mediaStream = null;
       let micSourceNode = null;
+      let micMuteGainNode = null;
       let processorNode = null;
       let voiceCapturing = false;
-      const SHARED_AUDIO_SAMPLE_RATE = 48000;
+      /** 与上行 VAD 一致；TTS 在 playTTSChunk 中从 24 kHz 重采样到此 rate */
+      const SHARED_AUDIO_SAMPLE_RATE = 16000;
       const TARGET_SAMPLE_RATE = 16000;
+      const MIC_SCRIPT_BUFFER_SIZE = 2048;
       // Debug recording cache:
       // - VAD/ASR previews come from backend merged buffers.
       // - Full mic channel remains frontend-local recording.
@@ -332,6 +335,18 @@
           sharedAudioContext.resume().catch(function () {});
         }
         return sharedAudioContext;
+      }
+
+      function openProcessedMic() {
+        return navigator.mediaDevices.getUserMedia({
+          audio: {
+            echoCancellation: true,
+            noiseSuppression: true,
+            autoGainControl: true,
+            channelCount: 1,
+          },
+          video: false,
+        });
       }
 
       function resamplePcmS16ToFloat32(pcmS16, fromRate, toRate) {
@@ -668,7 +683,7 @@
         let buffer = [];
         const outSamples = 320;
         const frameLen = Math.floor((rate / TARGET_SAMPLE_RATE) * outSamples);
-        const processor = ctx.createScriptProcessor(2048, 1, 1);
+        const processor = ctx.createScriptProcessor(MIC_SCRIPT_BUFFER_SIZE, 1, 1);
         processor.onaudioprocess = function (e) {
           const input = e.inputBuffer.getChannelData(0);
           for (let i = 0; i < input.length; i++) buffer.push(input[i]);
@@ -691,8 +706,12 @@
           }
         };
         src.connect(processor);
-        processor.connect(ctx.destination);
+        const mute = ctx.createGain();
+        mute.gain.value = 0;
+        processor.connect(mute);
+        mute.connect(ctx.destination);
         micSourceNode = src;
+        micMuteGainNode = mute;
         processorNode = processor;
       }
 
@@ -700,6 +719,10 @@
         if (processorNode) {
           try { processorNode.disconnect(); } catch (e) {}
           processorNode = null;
+        }
+        if (micMuteGainNode) {
+          try { micMuteGainNode.disconnect(); } catch (e) {}
+          micMuteGainNode = null;
         }
         if (micSourceNode) {
           try { micSourceNode.disconnect(); } catch (e) {}
@@ -949,16 +972,13 @@
         resetAiStreamingState();
         flushTTSQueue();
         resetRecordingDebugCache();
-        navigator.mediaDevices.getUserMedia({
-          audio: {
-            channelCount: 1,
-            echoCancellation: true,
-            noiseSuppression: true,
-            autoGainControl: true,
-          },
-        })
+        openProcessedMic()
           .then(function (stream) {
             mediaStream = stream;
+            try {
+              const track = stream.getAudioTracks()[0];
+              if (track) log('[mic] applied settings: ' + JSON.stringify(track.getSettings()));
+            } catch (err) { log('[mic] getSettings: ' + err.message, true); }
             connect();
             btnStart.disabled = true;
             btnStop.disabled = false;
