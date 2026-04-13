@@ -145,6 +145,8 @@
       let activeTtsGain = null;
       let ttsSuppressedByBargeIn = false;
       const TTS_SAMPLE_RATE = 24000;
+      /** TTS 输出音量系数 (0–1)，低于 1 即比原先更轻 */
+      const TTS_OUTPUT_GAIN = 0.42;
       const AUTO_CONTINUOUS_VOICE = true;
       const BARGE_IN_FADE_OUT_MS = 80;
 
@@ -388,7 +390,7 @@
         const src = ctx.createBufferSource();
         src.buffer = buf;
         const gainNode = ctx.createGain();
-        gainNode.gain.setValueAtTime(1, ctx.currentTime);
+        gainNode.gain.setValueAtTime(TTS_OUTPUT_GAIN, ctx.currentTime);
         src.connect(gainNode);
         gainNode.connect(ctx.destination);
         activeTtsSource = src;
