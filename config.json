@@ -35,11 +35,22 @@
     "duplug_url": ""
   },
   "debug": {
+    "_comment": "t2s debug and VAD endpointing tuning (all timings in ms/sec as noted).",
     "t2s_audio_dump_enabled": false,
     "t2s_audio_dir": "/home/WoodHolz/Project/realtime_voice_interviewer_demo",
     "t2s_asr_keepalive_idle_sec": 0.9,
     "t2s_asr_keepalive_tick_sec": 0.35,
+    "t2s_pre_roll_ms_comment": "Pre-roll audio kept before first nonidle to avoid clipping initial phonemes.",
     "t2s_pre_roll_ms": 1200,
-    "t2s_speak_grace_ms": 100
+    "t2s_speak_grace_ms_comment": "After VAD speak, wait this grace window before finalize; canceled if nonidle returns.",
+    "t2s_speak_grace_ms": 300,
+    "t2s_min_speech_ms_comment": "Minimum effective speech duration before allowing turn completion.",
+    "t2s_min_speech_ms": 320,
+    "t2s_intra_pause_ms_comment": "Intra-sentence pause tolerance; if recent nonidle is within this window, do not end turn.",
+    "t2s_intra_pause_ms": 640,
+    "t2s_speak_confirm_frames_comment": "Require consecutive VAD speak states before scheduling completion.",
+    "t2s_speak_confirm_frames": 2,
+    "t2s_min_turn_gap_ms_comment": "Minimum interval between two completed turns to prevent rapid re-trigger.",
+    "t2s_min_turn_gap_ms": 400
   }
 }
