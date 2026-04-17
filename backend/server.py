@@ -1063,7 +1063,10 @@ async def websocket_endpoint(websocket: WebSocket):
             now = time.monotonic()
             if t2s_speech_started_ts > 0 and (now - t2s_speech_started_ts) * 1000.0 < t2s_min_speech_ms:
                 return
-            if t2s_last_nonidle_ts > 0 and (now - t2s_last_nonidle_ts) * 1000.0 < t2s_intra_pause_ms:
+            # `speak_grace_ms` already waits for a quiet window after `speak`.
+            # Apply intra-pause as an additional guard *beyond* grace to avoid double-blocking.
+            effective_extra_pause_ms = max(0, t2s_intra_pause_ms - t2s_speak_grace_ms)
+            if t2s_last_nonidle_ts > 0 and (now - t2s_last_nonidle_ts) * 1000.0 < effective_extra_pause_ms:
                 return
             if t2s_last_complete_ts > 0 and (now - t2s_last_complete_ts) * 1000.0 < t2s_min_turn_gap_ms:
                 return
