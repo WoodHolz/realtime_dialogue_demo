@@ -1442,15 +1442,13 @@ async def websocket_endpoint(websocket: WebSocket):
                                 "resampler": "soxr" if soxr is not None else "linear_fallback",
                             }
                         )
-                        _t2s_log(
+                        push_server_log(
                             "info",
-                            "audio_config",
-                            {
-                                "input_sample_rate": sr,
-                                "target_sample_rate": VAD_ASR_TARGET_SAMPLE_RATE,
-                                "resample_enabled": bool(sr != VAD_ASR_TARGET_SAMPLE_RATE),
-                                "resampler": "soxr" if soxr is not None else "linear_fallback",
-                            },
+                            "audio_config applied",
+                            input_sample_rate=sr,
+                            target_sample_rate=VAD_ASR_TARGET_SAMPLE_RATE,
+                            resample_enabled=bool(sr != VAD_ASR_TARGET_SAMPLE_RATE),
+                            resampler="soxr" if soxr is not None else "linear_fallback",
                         )
                     elif obj.get("type") == "user_speech_end":
                         latency_logger.user_speech_end(obj.get("question_id", ""))
