@@ -249,17 +249,15 @@ def _load_t2s_pre_roll_and_speak_grace_ms() -> tuple[int, int]:
     return max(0, pre_roll), max(0, speak_grace)
 
 
-def _load_t2s_vad_hysteresis_config() -> tuple[int, int, int]:
+def _load_t2s_vad_hysteresis_config() -> tuple[int, int]:
     """
     t2s: VAD end-point debounce/hysteresis tuning.
 
     Values:
     - min_speech_ms: minimum effective speech duration before allowing completion
-    - intra_pause_ms: if recent nonidle is within this window, treat as intra-sentence pause
     - min_turn_gap_ms: minimum interval between two finalized turns
     """
     min_speech_ms = 320
-    intra_pause_ms = 640
     min_turn_gap_ms = 400
     try:
         root = Path(__file__).resolve().parent.parent
@@ -270,8 +268,6 @@ def _load_t2s_vad_hysteresis_config() -> tuple[int, int, int]:
             debug_cfg = data.get("debug", {}) or {}
             if "t2s_min_speech_ms" in debug_cfg:
                 min_speech_ms = int(debug_cfg["t2s_min_speech_ms"])
-            if "t2s_intra_pause_ms" in debug_cfg:
-                intra_pause_ms = int(debug_cfg["t2s_intra_pause_ms"])
             if "t2s_min_turn_gap_ms" in debug_cfg:
                 min_turn_gap_ms = int(debug_cfg["t2s_min_turn_gap_ms"])
     except Exception:
@@ -283,12 +279,6 @@ def _load_t2s_vad_hysteresis_config() -> tuple[int, int, int]:
             min_speech_ms = int(env_ms)
         except ValueError:
             pass
-    env_ip = os.environ.get("T2S_INTRA_PAUSE_MS")
-    if env_ip is not None and str(env_ip).strip():
-        try:
-            intra_pause_ms = int(env_ip)
-        except ValueError:
-            pass
     env_tg = os.environ.get("T2S_MIN_TURN_GAP_MS")
     if env_tg is not None and str(env_tg).strip():
         try:
@@ -297,7 +287,6 @@ def _load_t2s_vad_hysteresis_config() -> tuple[int, int, int]:
             pass
     return (
         max(0, min_speech_ms),
-        max(0, intra_pause_ms),
         max(0, min_turn_gap_ms),
     )
 
@@ -307,7 +296,7 @@ ASR_APP_ID, ASR_ACCESS_KEY = _load_asr_credentials(APP_ID, ACCESS_KEY)
 T2S_DEBUG_AUDIO_DUMP, T2S_DEBUG_AUDIO_DIR = _load_t2s_debug_audio_config()
 T2S_ASR_KEEPALIVE_IDLE_SEC, T2S_ASR_KEEPALIVE_TICK_SEC = _load_t2s_asr_keepalive_config()
 T2S_PRE_ROLL_MS, T2S_SPEAK_GRACE_MS = _load_t2s_pre_roll_and_speak_grace_ms()
-T2S_MIN_SPEECH_MS, T2S_INTRA_PAUSE_MS, T2S_MIN_TURN_GAP_MS = _load_t2s_vad_hysteresis_config()
+T2S_MIN_SPEECH_MS, T2S_MIN_TURN_GAP_MS = _load_t2s_vad_hysteresis_config()
 
 sessions: dict[str, dict] = {}
 
@@ -415,7 +404,6 @@ async def websocket_endpoint(websocket: WebSocket):
     t2s_speak_grace_task: asyncio.Task | None = None
     # 防抖参数：抑制句内停顿误判 turn-end。
     t2s_min_speech_ms = T2S_MIN_SPEECH_MS
-    t2s_intra_pause_ms = T2S_INTRA_PAUSE_MS
     t2s_min_turn_gap_ms = T2S_MIN_TURN_GAP_MS
     t2s_speech_started_ts: float = 0.0
     t2s_last_nonidle_ts: float = 0.0
@@ -1062,11 +1050,6 @@ async def websocket_endpoint(websocket: WebSocket):
         if source == "duplug":
             now = time.monotonic()
             if t2s_speech_started_ts > 0 and (now - t2s_speech_started_ts) * 1000.0 < t2s_min_speech_ms:
-                return
-            # `speak_grace_ms` already waits for a quiet window after `speak`.
-            # Apply intra-pause as an additional guard *beyond* grace to avoid double-blocking.
-            effective_extra_pause_ms = max(0, t2s_intra_pause_ms - t2s_speak_grace_ms)
-            if t2s_last_nonidle_ts > 0 and (now - t2s_last_nonidle_ts) * 1000.0 < effective_extra_pause_ms:
                 return
             if t2s_last_complete_ts > 0 and (now - t2s_last_complete_ts) * 1000.0 < t2s_min_turn_gap_ms:
                 return
