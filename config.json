@@ -48,8 +48,6 @@
     "t2s_min_speech_ms": 320,
     "t2s_intra_pause_ms_comment": "Intra-sentence pause tolerance; if recent nonidle is within this window, do not end turn.",
     "t2s_intra_pause_ms": 640,
-    "t2s_speak_confirm_frames_comment": "Require consecutive VAD speak states before scheduling completion.",
-    "t2s_speak_confirm_frames": 1,
     "t2s_min_turn_gap_ms_comment": "Minimum interval between two completed turns to prevent rapid re-trigger.",
     "t2s_min_turn_gap_ms": 400
   }

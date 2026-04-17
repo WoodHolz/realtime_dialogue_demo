@@ -249,19 +249,17 @@ def _load_t2s_pre_roll_and_speak_grace_ms() -> tuple[int, int]:
     return max(0, pre_roll), max(0, speak_grace)
 
 
-def _load_t2s_vad_hysteresis_config() -> tuple[int, int, int, int]:
+def _load_t2s_vad_hysteresis_config() -> tuple[int, int, int]:
     """
     t2s: VAD end-point debounce/hysteresis tuning.
 
     Values:
     - min_speech_ms: minimum effective speech duration before allowing completion
     - intra_pause_ms: if recent nonidle is within this window, treat as intra-sentence pause
-    - speak_confirm_frames: require N consecutive `speak` states before scheduling completion
     - min_turn_gap_ms: minimum interval between two finalized turns
     """
     min_speech_ms = 320
     intra_pause_ms = 640
-    speak_confirm_frames = 2
     min_turn_gap_ms = 400
     try:
         root = Path(__file__).resolve().parent.parent
@@ -274,8 +272,6 @@ def _load_t2s_vad_hysteresis_config() -> tuple[int, int, int, int]:
                 min_speech_ms = int(debug_cfg["t2s_min_speech_ms"])
             if "t2s_intra_pause_ms" in debug_cfg:
                 intra_pause_ms = int(debug_cfg["t2s_intra_pause_ms"])
-            if "t2s_speak_confirm_frames" in debug_cfg:
-                speak_confirm_frames = int(debug_cfg["t2s_speak_confirm_frames"])
             if "t2s_min_turn_gap_ms" in debug_cfg:
                 min_turn_gap_ms = int(debug_cfg["t2s_min_turn_gap_ms"])
     except Exception:
@@ -293,12 +289,6 @@ def _load_t2s_vad_hysteresis_config() -> tuple[int, int, int, int]:
             intra_pause_ms = int(env_ip)
         except ValueError:
             pass
-    env_sc = os.environ.get("T2S_SPEAK_CONFIRM_FRAMES")
-    if env_sc is not None and str(env_sc).strip():
-        try:
-            speak_confirm_frames = int(env_sc)
-        except ValueError:
-            pass
     env_tg = os.environ.get("T2S_MIN_TURN_GAP_MS")
     if env_tg is not None and str(env_tg).strip():
         try:
@@ -308,7 +298,6 @@ def _load_t2s_vad_hysteresis_config() -> tuple[int, int, int, int]:
     return (
         max(0, min_speech_ms),
         max(0, intra_pause_ms),
-        max(1, speak_confirm_frames),
         max(0, min_turn_gap_ms),
     )
 
@@ -318,9 +307,7 @@ ASR_APP_ID, ASR_ACCESS_KEY = _load_asr_credentials(APP_ID, ACCESS_KEY)
 T2S_DEBUG_AUDIO_DUMP, T2S_DEBUG_AUDIO_DIR = _load_t2s_debug_audio_config()
 T2S_ASR_KEEPALIVE_IDLE_SEC, T2S_ASR_KEEPALIVE_TICK_SEC = _load_t2s_asr_keepalive_config()
 T2S_PRE_ROLL_MS, T2S_SPEAK_GRACE_MS = _load_t2s_pre_roll_and_speak_grace_ms()
-T2S_MIN_SPEECH_MS, T2S_INTRA_PAUSE_MS, T2S_SPEAK_CONFIRM_FRAMES, T2S_MIN_TURN_GAP_MS = (
-    _load_t2s_vad_hysteresis_config()
-)
+T2S_MIN_SPEECH_MS, T2S_INTRA_PAUSE_MS, T2S_MIN_TURN_GAP_MS = _load_t2s_vad_hysteresis_config()
 
 sessions: dict[str, dict] = {}
 
@@ -429,12 +416,10 @@ async def websocket_endpoint(websocket: WebSocket):
     # 防抖参数：抑制句内停顿误判 turn-end。
     t2s_min_speech_ms = T2S_MIN_SPEECH_MS
     t2s_intra_pause_ms = T2S_INTRA_PAUSE_MS
-    t2s_speak_confirm_frames = T2S_SPEAK_CONFIRM_FRAMES
     t2s_min_turn_gap_ms = T2S_MIN_TURN_GAP_MS
     t2s_speech_started_ts: float = 0.0
     t2s_last_nonidle_ts: float = 0.0
     t2s_last_complete_ts: float = 0.0
-    t2s_speak_streak: int = 0
     # 调试：可选音频落盘（默认关闭）
     t2s_debug_audio_dump_enabled = T2S_DEBUG_AUDIO_DUMP
     t2s_debug_audio_dir = Path(T2S_DEBUG_AUDIO_DIR)
@@ -1442,7 +1427,6 @@ async def websocket_endpoint(websocket: WebSocket):
                                 send_json({"type": "vad_state", "provider": "duplug", "state": st.state})
                                 if st.state == "nonidle":
                                     _cancel_t2s_speak_grace()
-                                    t2s_speak_streak = 0
                                     t2s_last_nonidle_ts = time.monotonic()
                                     if not t2s_speech_started:
                                         t2s_speech_started = True
@@ -1475,11 +1459,8 @@ async def websocket_endpoint(websocket: WebSocket):
                                         # Continued speech after a tentative `speak`: keep ASR open.
                                         t2s_vad_idle_streak = 0
                                 elif st.state == "speak":
-                                    t2s_speak_streak += 1
-                                    if t2s_speak_streak >= t2s_speak_confirm_frames:
-                                        _schedule_t2s_speak_grace_complete()
+                                    _schedule_t2s_speak_grace_complete()
                                 elif st.state == "idle":
-                                    t2s_speak_streak = 0
                                     # Trigger completion after 4 consecutive idle states post-speech.
                                     if t2s_speech_started and t2s_idle4_complete_enabled:
                                         t2s_vad_idle_streak += 1
@@ -1591,7 +1572,6 @@ async def websocket_endpoint(websocket: WebSocket):
                         t2s_eou_fired = False
                         t2s_speech_started_ts = 0.0
                         t2s_last_nonidle_ts = 0.0
-                        t2s_speak_streak = 0
                         _cancel_t2s_speak_grace()
                         t2s_turn_id += 1
                         t2s_vad_idle_streak = 0
