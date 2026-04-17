@@ -4,6 +4,10 @@
 - **中文**：启动 SoulX-Duplug `ws://127.0.0.1:7997/turn` 服务，然后启动本项目后端并设置 `DUPLUG_VAD_ENABLED=true`。`t2s` 模式里后端会把 16k PCM 同时送给 ASR 与 Duplug VAD：`nonidle` 触发 barge-in；`speak` 后默认**等待 700ms**再结束 ASR（`config.json` → `debug.t2s_speak_grace_ms`，环境变量 `T2S_SPEAK_GRACE_MS` 可覆盖；`0` = 立即结束），等待期内若再次出现 `nonidle` 则取消结束并继续录制。首段语音 ASR pre-roll 默认 **1000ms**：`debug.t2s_pre_roll_ms`，`T2S_PRE_ROLL_MS` 可覆盖。
 - **English**: Start SoulX-Duplug at `ws://127.0.0.1:7997/turn`, then run this backend with `DUPLUG_VAD_ENABLED=true`. In `t2s`, backend streams PCM to ASR + Duplug VAD (`nonidle` => barge-in; after `speak`, **700ms** grace by default — `config.json` `debug.t2s_speak_grace_ms`, overridable with `T2S_SPEAK_GRACE_MS`; `0` = immediate finalize; any `nonidle` during grace cancels). ASR pre-roll default **1000ms**: `debug.t2s_pre_roll_ms`, overridable with `T2S_PRE_ROLL_MS`.
 
+## Data flow / 数据流（工程实现）
+- **中文**：`t2sbg` 页面是 **Browser -> Backend -> (Duplug VAD + ASR)**。浏览器只把麦克风 PCM 送到项目后端；后端再把同一份音频分发到 VAD 和 ASR，并根据 VAD state（`nonidle/speak/idle`）控制 barge-in 与收尾。浏览器**不直连** Duplug VAD 服务。
+- **English**: `t2sbg` uses **Browser -> Backend -> (Duplug VAD + ASR)**. Browser only uploads mic PCM to this backend; backend fans out the same audio to VAD + ASR and uses VAD states (`nonidle/speak/idle`) to drive barge-in and completion. Browser does **not** connect to Duplug directly.
+
 ## 0) 地址与访问范围 / Address and reachability
 - 当前建议启动参数是 `--host 127.0.0.1 --port 7997`，因此只在**本机/同网络命名空间**可访问。
 - If you need cross-machine access, use `--host 0.0.0.0` or put it behind a reverse proxy.

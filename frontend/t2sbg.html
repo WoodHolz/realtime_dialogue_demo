@@ -58,15 +58,15 @@
   </div>
 
   <div class="section">
-    <strong>VAD 最新状态</strong>
+    <strong>VAD 最新状态（后端判定）</strong>
     <div id="vadState" class="transcript" style="min-height:48px; font-size:0.9rem; color:#333; font-family: monospace;">
       provider=- state=-
     </div>
   </div>
 
   <div class="section">
-    <strong>录音调试预览（合并后）</strong>
-    <p style="font-size:12px; color:#666;">将本次会话里所有触发片段合并为两段音频（给 VAD / 给 ASR）用于排查。</p>
+    <strong>录音调试预览（后端合并）</strong>
+    <p style="font-size:12px; color:#666;">链路：Browser 上行音频 -> Backend -> (Duplug VAD + ASR)。Browser 不直连 VAD；下方两段音频由后端聚合回传用于排查。</p>
     <div style="margin-top:8px;">
       <div style="margin-bottom:10px;">
         <div style="font-size:12px; color:#666; margin-bottom:4px;">给 VAD 的录音（merged）</div>
@@ -147,7 +147,7 @@
       let ttsSuppressedByBargeIn = false;
       const TTS_SAMPLE_RATE = 24000;
       /** TTS 输出音量系数 (0–1)，低于 1 即比原先更轻 */
-      const TTS_OUTPUT_GAIN = 0.3;
+      const TTS_OUTPUT_GAIN = 1;
       const AUTO_CONTINUOUS_VOICE = true;
       const BARGE_IN_FADE_OUT_MS = 80;
 
@@ -671,6 +671,16 @@
         aiNodesByReplyId.clear();
       }
 
+      function sendAudioConfig(sampleRate) {
+        if (!ws || ws.readyState !== WebSocket.OPEN) return;
+        ws.send(JSON.stringify({
+          type: 'config_audio',
+          input_sample_rate: sampleRate || TARGET_SAMPLE_RATE,
+          format: 'pcm_s16le',
+          channels: 1,
+        }));
+      }
+
       function startAudioProcessor() {
         if (!mediaStream) return;
         const ctx = getMicAudioContext();
@@ -830,7 +840,16 @@
                 voiceStatusEl.textContent = '录音中... 说完后自动发送';
                 log('Voice streaming started');
                 voiceCapturing = true;
+                // Browser sends 16k s16le upstream after client-side resampling.
+                sendAudioConfig(TARGET_SAMPLE_RATE);
                 startAudioProcessor();
+              } else if (msg.type === 'audio_config_applied') {
+                log(
+                  'Audio config applied: input_sr=' + (msg.input_sample_rate || '-') +
+                  ' target_sr=' + (msg.vad_asr_target_sample_rate || '-') +
+                  ' resample=' + (!!msg.resample_enabled) +
+                  ' via=' + (msg.resampler || '-')
+                );
               } else if (msg.type === 'voice_input_complete_suggested') {
                 // Server-side VAD (e.g. Duplug) decided to complete; stop sending mic audio ASAP.
                 stopVoiceCapture();

@@ -40,6 +40,6 @@
     "t2s_asr_keepalive_idle_sec": 0.9,
     "t2s_asr_keepalive_tick_sec": 0.35,
     "t2s_pre_roll_ms": 1200,
-    "t2s_speak_grace_ms": 900
+    "t2s_speak_grace_ms": 100
   }
 }

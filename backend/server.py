@@ -26,8 +26,14 @@ import uuid
 from collections import deque
 from contextlib import asynccontextmanager
 from datetime import datetime
+import numpy as np
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse, FileResponse
+
+try:
+    import soxr
+except Exception:  # noqa: BLE001
+    soxr = None
 
 from backend.audio_stream import pcm_chunks_from_bytes
 from backend.latency_logger import LatencyLogger
@@ -69,6 +75,8 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="AI Interviewer Realtime Voice Demo", lifespan=lifespan)
+
+VAD_ASR_TARGET_SAMPLE_RATE = 16000
 
 
 
@@ -365,6 +373,57 @@ async def websocket_endpoint(websocket: WebSocket):
     t2s_asr_last_keepalive_monotonic: float = 0.0
     t2s_asr_keepalive_task: asyncio.Task | None = None
     _t2s_asr_silence_chunk: bytes = bytes(ASR_CHUNK_BYTES)
+    t2s_input_sample_rate = VAD_ASR_TARGET_SAMPLE_RATE
+
+    def _set_t2s_input_sample_rate(raw_value: object) -> int:
+        """Update browser upstream sample rate, defaulting to 16k on invalid input."""
+        nonlocal t2s_input_sample_rate
+        try:
+            parsed = int(raw_value)
+            if parsed <= 0:
+                raise ValueError("sample_rate must be > 0")
+            t2s_input_sample_rate = parsed
+        except Exception:
+            t2s_input_sample_rate = VAD_ASR_TARGET_SAMPLE_RATE
+        return t2s_input_sample_rate
+
+    def _resample_linear(audio_f32: np.ndarray, in_rate: int, out_rate: int) -> np.ndarray:
+        """Fallback resampler used when python-soxr is unavailable."""
+        if audio_f32.size == 0 or in_rate <= 0 or out_rate <= 0 or in_rate == out_rate:
+            return audio_f32
+        out_len = max(1, int(round(audio_f32.size * (out_rate / in_rate))))
+        in_idx = np.arange(audio_f32.size, dtype=np.float32)
+        out_idx = np.linspace(0, max(0, audio_f32.size - 1), out_len, dtype=np.float32)
+        return np.interp(out_idx, in_idx, audio_f32).astype(np.float32)
+
+    def _normalize_input_audio_to_16k(raw_pcm_s16le: bytes) -> bytes:
+        """
+        Browser upstream is PCM s16le mono. Convert to float32 first, then:
+        - if input SR != 16k, resample to 16k for VAD/ASR
+        - else pass through without resampling
+        """
+        in_bytes = raw_pcm_s16le
+        if len(in_bytes) % 2 != 0:
+            in_bytes = in_bytes[:-1]
+        if not in_bytes:
+            return b""
+
+        i16 = np.frombuffer(in_bytes, dtype="<i2")
+        if i16.size == 0:
+            return b""
+        audio = i16.astype(np.float32)
+        audio /= np.where(audio < 0, 32768.0, 32767.0)
+
+        current_sr = int(t2s_input_sample_rate or VAD_ASR_TARGET_SAMPLE_RATE)
+        if current_sr != VAD_ASR_TARGET_SAMPLE_RATE:
+            if soxr is not None:
+                audio = soxr.resample(audio, current_sr, VAD_ASR_TARGET_SAMPLE_RATE).astype(np.float32)
+            else:
+                audio = _resample_linear(audio, current_sr, VAD_ASR_TARGET_SAMPLE_RATE)
+
+        out = np.where(audio < 0, audio * 32768.0, audio * 32767.0)
+        out_i16 = np.clip(np.round(out), -32768, 32767).astype("<i2")
+        return out_i16.tobytes()
 
     def _cancel_t2s_speak_grace() -> None:
         nonlocal t2s_speak_grace_task
@@ -1267,6 +1326,10 @@ async def websocket_endpoint(websocket: WebSocket):
                 data = msg["bytes"]
                 if not client or client._session_id is None:
                     continue
+                if mode == "t2s":
+                    data = _normalize_input_audio_to_16k(data)
+                    if not data:
+                        continue
                 chunks = pcm_chunks_from_bytes(data)
                 for ch in chunks:
                     if mode == "t2s":
@@ -1364,6 +1427,31 @@ async def websocket_endpoint(websocket: WebSocket):
                     elif obj.get("type") == "set_stage":
                         prompt_manager.set_stage(obj.get("stage", "introduction"))
                         asyncio.create_task(restart_session("set_stage"))
+                    elif obj.get("type") == "config_audio":
+                        if mode != "t2s":
+                            continue
+                        sr = _set_t2s_input_sample_rate(
+                            obj.get("input_sample_rate", obj.get("sample_rate", VAD_ASR_TARGET_SAMPLE_RATE))
+                        )
+                        send_json(
+                            {
+                                "type": "audio_config_applied",
+                                "input_sample_rate": sr,
+                                "vad_asr_target_sample_rate": VAD_ASR_TARGET_SAMPLE_RATE,
+                                "resample_enabled": bool(sr != VAD_ASR_TARGET_SAMPLE_RATE),
+                                "resampler": "soxr" if soxr is not None else "linear_fallback",
+                            }
+                        )
+                        _t2s_log(
+                            "info",
+                            "audio_config",
+                            {
+                                "input_sample_rate": sr,
+                                "target_sample_rate": VAD_ASR_TARGET_SAMPLE_RATE,
+                                "resample_enabled": bool(sr != VAD_ASR_TARGET_SAMPLE_RATE),
+                                "resampler": "soxr" if soxr is not None else "linear_fallback",
+                            },
+                        )
                     elif obj.get("type") == "user_speech_end":
                         latency_logger.user_speech_end(obj.get("question_id", ""))
                     elif obj.get("type") == "conversation_update":
