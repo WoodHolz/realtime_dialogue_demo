@@ -1,6 +1,6 @@
 {
   "followup": {
-    "active": "kimi",
+    "active": "bailian",
     "kimi": {
       "enabled": true,
       "description": "Moonshot Kimi (OpenAI-compatible). Set KIMI_API_* in .env (see .env.example).",
@@ -20,6 +20,15 @@
           "enable_thinking": false
         }
       }
+    },
+    "bailian": {
+      "enabled": true,
+      "description": "Aliyun Bailian Responses API (OpenAI-compatible). Set DASHSCOPE_API_* in .env.",
+      "api_base": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+      "api_key": "",
+      "model": "qwen3.5-35b-a3b",
+      "output_format": "plain",
+      "api_style": "responses"
     }
   },
   "doubao": {

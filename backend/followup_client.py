@@ -66,6 +66,19 @@ def _merge_followup_block_from_env(active: str, block: dict[str, Any]) -> dict[s
             if parsed:
                 file_extra = _parse_extra_body(b.get("extra_body"))
                 b["extra_body"] = {**file_extra, **parsed}
+    elif active == "bailian":
+        if not str(b.get("api_base") or "").strip():
+            b["api_base"] = os.getenv("DASHSCOPE_API_BASE", "") or ""
+        if not str(b.get("api_key") or "").strip():
+            b["api_key"] = os.getenv("DASHSCOPE_API_KEY", "") or ""
+        if not str(b.get("model") or "").strip():
+            b["model"] = os.getenv("DASHSCOPE_MODEL", "") or ""
+        bailian_extra = os.getenv("DASHSCOPE_EXTRA_BODY")
+        if bailian_extra and str(bailian_extra).strip():
+            parsed = _parse_extra_body(bailian_extra)
+            if parsed:
+                file_extra = _parse_extra_body(b.get("extra_body"))
+                b["extra_body"] = {**file_extra, **parsed}
     return b
 
 
@@ -78,6 +91,7 @@ def _followup_block_from_config(block: dict[str, Any]) -> dict[str, Any]:
         "model": (block.get("model") or "").strip(),
         "extra_body": _parse_extra_body(block.get("extra_body")),
         "output_format": (block.get("output_format") or "").strip(),
+        "api_style": (block.get("api_style") or "").strip(),
     }
 
 
@@ -106,7 +120,7 @@ def _load_followup_model_from_config_file() -> dict[str, Any]:
         if fu:
             env_active = (os.getenv("FOLLOWUP_PROVIDER") or "").strip().lower()
             active = env_active or (fu.get("active") or fu.get("provider") or "kimi").strip().lower()
-            if active not in ("kimi", "eas"):
+            if active not in ("kimi", "eas", "bailian"):
                 active = "kimi"
             block = _merge_followup_block_from_env(active, fu.get(active) or {})
             out = _followup_block_from_config(block)
@@ -155,6 +169,10 @@ class FollowupQuestionClient:
             or (os.getenv("FOLLOWUP_OUTPUT_FORMAT") or "").strip()
             or "json"
         )
+        api_style = (
+            (file_cfg.get("api_style") or "").strip().lower()
+            or (os.getenv("FOLLOWUP_API_STYLE") or "").strip().lower()
+        )
 
         self._provider = (file_cfg.get("provider") or "").strip() or "unknown"
         self._api_base = final_base
@@ -163,8 +181,19 @@ class FollowupQuestionClient:
         self._timeout = timeout
         self._extra_body = merged_extra
         self._default_output_format = out_fmt.lower()
+        if not api_style:
+            api_style = "responses" if self._provider == "bailian" else "chat_completions"
+        if api_style not in ("chat_completions", "responses"):
+            api_style = "chat_completions"
+        self._api_style = api_style
         if self.enabled:
-            LOG.info("Follow-up model provider=%s base=%s model=%s", self._provider, self._api_base, self._model)
+            LOG.info(
+                "Follow-up model provider=%s style=%s base=%s model=%s",
+                self._provider,
+                self._api_style,
+                self._api_base,
+                self._model,
+            )
 
     @property
     def enabled(self) -> bool:
@@ -178,6 +207,7 @@ class FollowupQuestionClient:
             "model": self._model,
             "configured": self.enabled,
             "output_format": self._default_output_format,
+            "api_style": self._api_style,
             "has_extra_body": bool(self._extra_body),
         }
 
@@ -276,16 +306,17 @@ class FollowupQuestionClient:
             system_prompt, user_prompt = self._build_plain_prompts(
                 asr_text, stage, dialogue_history, stage_role_summary, stage_hint
             )
+            messages = [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ]
             payload = {
                 "model": self._model,
-                "messages": [
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt},
-                ],
+                "messages": messages,
                 "temperature": 0.5,
                 "max_tokens": 128,
             }
-            raw = await self._chat_completion(payload)
+            raw = await self._request_model(payload)
             return self._parse_plain_followup(raw, asr_text)
 
         # JSON 决策（e2e / semi 默认）：便于解析 need_followup。
@@ -327,17 +358,18 @@ class FollowupQuestionClient:
             "请先在心里判断是否存在需要【现在就补充】的追问点，然后用前面约定的 JSON 结构返回。"
         )
 
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
+        ]
         payload = {
             "model": self._model,
-            "messages": [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt},
-            ],
+            "messages": messages,
             "temperature": 0.5,
             "max_tokens": 64,
         }
 
-        raw = await self._chat_completion(payload)
+        raw = await self._request_model(payload)
 
         # 尝试解析 JSON 决策；如果模型偶尔输出包裹在 ```json 里的内容，做一次简单清洗。
         cleaned = raw.strip()
@@ -373,6 +405,11 @@ class FollowupQuestionClient:
 
         return question
 
+    async def _request_model(self, payload: dict[str, Any]) -> str:
+        if self._api_style == "responses":
+            return await self._responses(payload)
+        return await self._chat_completion(payload)
+
     async def _chat_completion(self, payload: dict[str, Any]) -> str:
         body = {**payload, **self._extra_body}
         headers = {
@@ -390,6 +427,37 @@ class FollowupQuestionClient:
         except Exception as exc:  # noqa: BLE001
             raise RuntimeError(f"Unexpected response format from follow-up model: {data}") from exc
         return (text or "").strip()
+
+    async def _responses(self, payload: dict[str, Any]) -> str:
+        # OpenAI-compatible Responses API: https://.../compatible-mode/v1/responses
+        request_payload: dict[str, Any] = {
+            "model": payload.get("model"),
+            "input": payload.get("messages") or [],
+        }
+        if payload.get("temperature") is not None:
+            request_payload["temperature"] = payload.get("temperature")
+        body = {**request_payload, **self._extra_body}
+        headers = {
+            "Authorization": f"Bearer {self._api_key}",
+            "Content-Type": "application/json",
+        }
+        async with httpx.AsyncClient(base_url=self._api_base, timeout=self._timeout) as client:
+            resp = await client.post("/responses", json=body, headers=headers)
+            resp.raise_for_status()
+            data = resp.json()
+
+        output_text = data.get("output_text")
+        if isinstance(output_text, str) and output_text.strip():
+            return output_text.strip()
+
+        for item in data.get("output", []) or []:
+            if item.get("type") != "message":
+                continue
+            for part in item.get("content", []) or []:
+                text = part.get("text")
+                if isinstance(text, str) and text.strip():
+                    return text.strip()
+        raise RuntimeError(f"Unexpected response format from follow-up model: {data}")
 
     def _parse_plain_followup(self, raw: str, asr_text: str) -> str:
         cleaned = (raw or "").strip()

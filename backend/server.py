@@ -40,6 +40,7 @@ from backend.latency_logger import LatencyLogger
 from backend.prompt_manager import PromptManager
 from backend.realtime_client import RealtimeVoiceClient
 from backend.followup_client import FollowupQuestionClient
+from backend.omni_bridge import OmniRealtimeBridge
 from backend.asr_client import (
     VolcAsrClient,
     VolcAsrStreamingSession,
@@ -333,6 +334,58 @@ async def t2sbg_voice_page():
     if not path.exists():
         return HTMLResponse("<p>t2sbg.html not found</p>", status_code=404)
     return FileResponse(path)
+
+
+@app.get("/t2sbg-omni")
+async def t2sbg_omni_page():
+    """Omni 直连演示页（内置 VAD，不走本地/后端 VAD）。"""
+    path = _frontend_dir() / "t2sbg_omni.html"
+    if not path.exists():
+        return HTMLResponse("<p>t2sbg_omni.html not found</p>", status_code=404)
+    return FileResponse(path)
+
+
+@app.websocket("/ws-omni")
+async def websocket_omni_endpoint(websocket: WebSocket):
+    await websocket.accept()
+    bridge = OmniRealtimeBridge(websocket)
+    try:
+        # Keep first client frame compatible with existing frontend config style.
+        initial_cfg: dict = {}
+        try:
+            raw = await websocket.receive_text()
+            initial_cfg = json.loads(raw) if raw else {}
+            if not isinstance(initial_cfg, dict):
+                initial_cfg = {}
+        except Exception:
+            initial_cfg = {}
+
+        await bridge.start(initial_cfg)
+
+        while True:
+            try:
+                msg = await websocket.receive()
+            except WebSocketDisconnect:
+                break
+            except RuntimeError as e:
+                # Same guard pattern as /ws endpoint: receive() after disconnect.
+                if 'Cannot call "receive" once a disconnect message has been received.' in str(e):
+                    break
+                raise
+            if "bytes" in msg and msg["bytes"]:
+                await bridge.handle_client_audio(msg["bytes"])
+            elif "text" in msg and msg["text"]:
+                await bridge.handle_client_text(msg["text"])
+    except WebSocketDisconnect:
+        LOG.info("Omni websocket disconnected")
+    except Exception as e:
+        LOG.exception("Omni WS handler error: %s", e)
+        try:
+            await websocket.send_text(json.dumps({"type": "error", "message": str(e)}, ensure_ascii=False))
+        except Exception:
+            pass
+    finally:
+        await bridge.close()
 
 
 @app.websocket("/ws")
