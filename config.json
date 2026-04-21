@@ -1,6 +1,6 @@
 {
   "followup": {
-    "active": "bailian",
+    "active": "kimi",
     "kimi": {
       "enabled": true,
       "description": "Moonshot Kimi (OpenAI-compatible). Set KIMI_API_* in .env (see .env.example).",
