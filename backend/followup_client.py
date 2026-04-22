@@ -417,10 +417,20 @@ class FollowupQuestionClient:
             "Content-Type": "application/json",
         }
         # NOTE: _api_base is expected to be the full API base, e.g. "https://api.moonshot.cn/v1"
-        async with httpx.AsyncClient(base_url=self._api_base, timeout=self._timeout) as client:
-            resp = await client.post("/chat/completions", json=body, headers=headers)
-            resp.raise_for_status()
-            data = resp.json()
+        try:
+            async with httpx.AsyncClient(base_url=self._api_base, timeout=self._timeout) as client:
+                resp = await client.post("/chat/completions", json=body, headers=headers)
+                resp.raise_for_status()
+                data = resp.json()
+        except httpx.HTTPStatusError as exc:
+            status = exc.response.status_code if exc.response is not None else "unknown"
+            body_text = (exc.response.text or "").strip() if exc.response is not None else ""
+            detail = body_text[:1000] if body_text else repr(exc)
+            raise RuntimeError(f"followup chat_completions HTTP {status}: {detail}") from exc
+        except httpx.TimeoutException as exc:
+            raise RuntimeError(f"followup chat_completions timeout after {self._timeout}s") from exc
+        except httpx.HTTPError as exc:
+            raise RuntimeError(f"followup chat_completions request failed: {type(exc).__name__}: {exc!r}") from exc
 
         try:
             text = data["choices"][0]["message"]["content"]
@@ -441,10 +451,20 @@ class FollowupQuestionClient:
             "Authorization": f"Bearer {self._api_key}",
             "Content-Type": "application/json",
         }
-        async with httpx.AsyncClient(base_url=self._api_base, timeout=self._timeout) as client:
-            resp = await client.post("/responses", json=body, headers=headers)
-            resp.raise_for_status()
-            data = resp.json()
+        try:
+            async with httpx.AsyncClient(base_url=self._api_base, timeout=self._timeout) as client:
+                resp = await client.post("/responses", json=body, headers=headers)
+                resp.raise_for_status()
+                data = resp.json()
+        except httpx.HTTPStatusError as exc:
+            status = exc.response.status_code if exc.response is not None else "unknown"
+            body_text = (exc.response.text or "").strip() if exc.response is not None else ""
+            detail = body_text[:1000] if body_text else repr(exc)
+            raise RuntimeError(f"followup responses HTTP {status}: {detail}") from exc
+        except httpx.TimeoutException as exc:
+            raise RuntimeError(f"followup responses timeout after {self._timeout}s") from exc
+        except httpx.HTTPError as exc:
+            raise RuntimeError(f"followup responses request failed: {type(exc).__name__}: {exc!r}") from exc
 
         output_text = data.get("output_text")
         if isinstance(output_text, str) and output_text.strip():

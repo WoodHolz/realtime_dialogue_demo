@@ -21,7 +21,7 @@ DEFAULT_CN_URL = "wss://dashscope.aliyuncs.com/api-ws/v1/realtime"
 DEFAULT_INTL_URL = "wss://dashscope-intl.aliyuncs.com/api-ws/v1/realtime"
 DEFAULT_MODEL = "qwen3-omni-flash-realtime"
 DEFAULT_VOICE = "Ethan"
-DEFAULT_TURN_DETECTION_TYPE = "semantic_vad"
+DEFAULT_TURN_DETECTION_TYPE = "server_vad"
 
 
 def _build_dashscope_url(region: str) -> str:
@@ -83,18 +83,24 @@ class OmniRealtimeBridge:
         self.omni_ws = await websockets.connect(url, additional_headers=headers)
 
     async def _update_omni_session(self) -> None:
-        # Let Omni server-side VAD decide turn boundaries.
+        # Let Omni server-side VAD decide turn boundaries by default.
+        turn_detection: dict[str, Any] | None
+        if self.turn_detection_type == "manual":
+            turn_detection = None
+        else:
+            turn_detection = {
+                "type": self.turn_detection_type,
+                "threshold": 0.1,
+                "prefix_padding_ms": 500,
+                "silence_duration_ms": 900,
+            }
         session = {
             "modalities": ["text", "audio"],
             "voice": self.voice,
             "instructions": self.instructions,
             "input_audio_format": "pcm",
             "output_audio_format": "pcm",
-            "turn_detection": {
-                "type": self.turn_detection_type,
-                "threshold": 0.5,
-                "silence_duration_ms": 800,
-            },
+            "turn_detection": turn_detection,
             "input_audio_transcription": {"model": "gummy-realtime-v1"},
         }
         await self._send_omni_event({"type": "session.update", "session": session})
@@ -149,6 +155,9 @@ class OmniRealtimeBridge:
                 elif t == "response.done":
                     await self._send_client_json({"type": "tts_end"})
                 elif t == "input_audio_buffer.speech_started":
+                    # Strong barge-in: cancel current generation on server side,
+                    # not only stop playback on frontend.
+                    await self._send_omni_event({"type": "response.cancel"})
                     await self._send_client_json({"type": "vad_state", "provider": "omni", "state": "nonidle"})
                     await self._send_client_json({"type": "barge_in", "source": "omni"})
                 elif t == "input_audio_buffer.speech_stopped":
@@ -165,7 +174,7 @@ class OmniRealtimeBridge:
         self.voice = (cfg.get("omni_voice") or self.voice or DEFAULT_VOICE).strip()
         self.instructions = (cfg.get("system_role") or self.instructions or "").strip() or self.instructions
         td = (cfg.get("omni_turn_detection_type") or self.turn_detection_type).strip()
-        if td in {"server_vad", "semantic_vad"}:
+        if td in {"server_vad", "semantic_vad", "manual"}:
             self.turn_detection_type = td
 
         await self._connect_omni()

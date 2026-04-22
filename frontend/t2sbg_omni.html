@@ -81,6 +81,8 @@
       const TTS_SAMPLE_RATE = 24000;
       let currentAiTextNode = null;
       let ttsNextPlayTime = 0;
+      let ttsSuppressedByBargeIn = false;
+      const ttsScheduledSources = new Set();
 
       const DEFAULT_SYSTEM_ROLE = `【角色设定】
 你是"芝麻背调"的专业背景调查访谈员，负责进行员工背景调查的电话/视频访谈。你需要以专业、亲和、严谨的态度完成证明人访谈，获取真实、全面的候选人信息。
@@ -279,6 +281,10 @@
         const src = ctx.createBufferSource();
         src.buffer = buf;
         src.connect(ctx.destination);
+        ttsScheduledSources.add(src);
+        src.onended = function () {
+          ttsScheduledSources.delete(src);
+        };
         const guardSec = 0.02;
         const now = ctx.currentTime;
         if (ttsNextPlayTime < now + guardSec) {
@@ -286,6 +292,19 @@
         }
         src.start(ttsNextPlayTime);
         ttsNextPlayTime += buf.duration;
+      }
+
+      function flushTTSPlayback() {
+        ttsScheduledSources.forEach(function (src) {
+          try { src.stop(); } catch (e) {}
+        });
+        ttsScheduledSources.clear();
+        if (ttsAudioContext) {
+          const now = ttsAudioContext.currentTime;
+          ttsNextPlayTime = now;
+        } else {
+          ttsNextPlayTime = 0;
+        }
       }
 
       function ensureAiLine() {
@@ -404,6 +423,19 @@
               } else {
                 ttsNextPlayTime = 0;
               }
+            } else if (msg.type === 'tts_start') {
+              // New response starts: accept audio packets again.
+              ttsSuppressedByBargeIn = false;
+            } else if (msg.type === 'tts_end') {
+              if (ttsAudioContext) {
+                const now = ttsAudioContext.currentTime;
+                if (ttsNextPlayTime < now) ttsNextPlayTime = now;
+              }
+            } else if (msg.type === 'barge_in') {
+              // Equivalent to interrupt_evt + queue.clear in Python demo.
+              ttsSuppressedByBargeIn = true;
+              flushTTSPlayback();
+              log('Barge-in: stop current TTS playback');
             } else if (msg.type === 'vad_state') {
               vadStateEl.textContent = 'provider=' + (msg.provider || '-') + ' state=' + (msg.state || '-');
             } else if (msg.type === 'error') {
@@ -412,6 +444,10 @@
               log((msg.message || '').trim());
             }
           } else {
+            if (ttsSuppressedByBargeIn) {
+              // Drop late packets from interrupted response.
+              return;
+            }
             playTTSChunk(new Uint8Array(ev.data));
           }
         };
