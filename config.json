@@ -50,14 +50,14 @@
     "t2s_asr_keepalive_idle_sec": 0.9,
     "t2s_asr_keepalive_tick_sec": 0.35,
     "t2s_pre_roll_ms_comment": "Pre-roll audio kept before first nonidle to avoid clipping initial phonemes.",
-    "t2s_pre_roll_ms": 800,
+    "t2s_pre_roll_ms": 1200,
     "t2s_speak_grace_ms_comment": "After VAD speak, wait this grace window before finalize; canceled if nonidle returns.",
     "t2s_speak_grace_ms": 0,
     "t2s_min_speech_ms_comment": "Minimum effective speech duration before allowing turn completion.",
     "t2s_min_speech_ms": 300,
     "t2s_min_turn_gap_ms_comment": "Minimum interval between two completed turns to prevent rapid re-trigger.",
     "t2s_min_turn_gap_ms": 300,
-    "t2s_tts_barge_suppress_ms": 800
+    "t2s_tts_barge_suppress_ms": 2000
   },
-  "t2sbg_voice_version": "0.0.3"
+  "t2sbg_voice_version": "0.0.4"
 }

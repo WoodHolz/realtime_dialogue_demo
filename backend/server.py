@@ -299,7 +299,7 @@ def _load_t2s_tts_barge_suppress_ms() -> int:
     也不把 Duplug 的首段 nonidle 当作「用户开说」（避免扬声器串音误打断）。
 
     - 0：关闭
-    - 非 0：限制在 [100, 1000] ms
+    - 非 0：下限 100 ms（避免误配过小）；不设上限，由 config / 环境变量决定。
 
     优先级：环境变量 T2S_TTS_BARGE_SUPPRESS_MS → config.json debug.t2s_tts_barge_suppress_ms → 默认 400。
     """
@@ -323,7 +323,7 @@ def _load_t2s_tts_barge_suppress_ms() -> int:
             pass
     if ms <= 0:
         return 0
-    return min(1000, max(100, ms))
+    return max(100, ms)
 
 
 APP_ID, ACCESS_KEY = _load_doubao_credentials()
