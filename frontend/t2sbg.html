@@ -65,7 +65,7 @@
     <strong>录音调试预览（后端合并）</strong>
     <button type="button" id="btnMonitorSync" disabled style="margin-left:8px;">同步到监控页</button>
     <span id="monitorSyncHint" style="font-size:12px;color:#888;margin-left:8px;"></span>
-    <p style="font-size:12px; color:#666;">链路：Browser 上行音频 -> Backend -> (Duplug VAD + ASR)。Browser 不直连 VAD；下方主播放器为<strong>跨轮合并</strong>后的 WAV；折叠内为<strong>每一轮单独</strong>的原始录音（未与历史轮次拼接）。监控页：<code>/t2sbg-monitor</code>（先打开监控页再点同步）。</p>
+    <p style="font-size:12px; color:#666;">链路：Browser 上行音频 → Backend →（Duplug VAD + ASR）。下方主播放器是<strong>跨轮合并</strong>后的 WAV；折叠里是<strong>每一轮单独</strong>的录音。</p>
     <div style="margin-top:8px;">
       <div style="margin-bottom:10px;">
         <div style="font-size:12px; color:#666; margin-bottom:4px;">给 VAD 的录音（merged）</div>
@@ -1292,7 +1292,7 @@
           .then(function (payload) {
             ws.send(JSON.stringify(payload));
             monitorSyncHint.textContent = '已发送';
-            log('Monitor sync requested（打开 /t2sbg-monitor 查看）');
+            log('Monitor sync OK');
           })
           .catch(function (e) {
             log('Monitor sync failed: ' + (e && e.message ? e.message : e), true);

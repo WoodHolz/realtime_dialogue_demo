@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>T2SBG 访谈监控（被动同步）</title>
+  <title>T2SBG demo 语音记录</title>
   <style>
     body { font-family: system-ui, sans-serif; max-width: 720px; margin: 1rem auto; padding: 0 1rem; }
     h1 { font-size: 1.25rem; }
@@ -46,7 +46,7 @@
 <body>
   <h1>T2SBG 访谈监控</h1>
   <p class="status" id="connStatus">连接监控通道…</p>
-  <p class="status" id="lastPub">尚无快照。请在 <code>/t2sbg-voice</code> 页点击「同步到监控页」。最多保留最近 <strong>5</strong> 次，新的在最上方。</p>
+  <p class="status" id="lastPub">尚无快照。</p>
 
   <div id="snapshotStack"></div>
 
@@ -334,8 +334,8 @@
         refreshBadgesAndOpenState();
         var newest = msg.published_at || '-';
         lastPubEl.innerHTML =
-          '缓存 <strong>' + snapshotCards.length + '</strong> / ' + MAX_SNAPSHOTS +
-          ' 次同步 · 最新在上 · 最近一条：<code>' + newest + '</code>';
+          '<strong>' + snapshotCards.length + '</strong> / ' + MAX_SNAPSHOTS +
+          ' · 最新在上 · <code>' + newest + '</code>';
         clog('snapshot #' + snapshotCards.length + ' (stack)');
       }
 

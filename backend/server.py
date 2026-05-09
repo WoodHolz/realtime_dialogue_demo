@@ -338,15 +338,20 @@ sessions: dict[str, dict] = {}
 
 _monitor_clients_lock = asyncio.Lock()
 _monitor_clients: list[WebSocket] = []
+# 最近 N 次同步（任意用户），左侧最新；监控页晚打开也会收到重放。仅当前 worker 进程内可见。
+MONITOR_SNAPSHOT_MAX = 5
+_monitor_snapshot_ring: deque[dict[str, object]] = deque(maxlen=MONITOR_SNAPSHOT_MAX)
 
 
 async def broadcast_t2sbg_monitor(payload: dict[str, object]) -> None:
     """Push a snapshot JSON to all connected /ws/t2sbg-monitor viewers."""
     payload = dict(payload)
     payload.setdefault("type", "monitor_snapshot")
-    raw = json.dumps(payload, ensure_ascii=False)
+    snap_store = dict(payload)
     async with _monitor_clients_lock:
+        _monitor_snapshot_ring.appendleft(snap_store)
         targets = list(_monitor_clients)
+    raw = json.dumps(payload, ensure_ascii=False)
     stale: list[WebSocket] = []
     for mws in targets:
         try:
@@ -367,7 +372,12 @@ def _startup_t2sbg_monitor_notice() -> None:
     port = (os.environ.get("PORT") or os.environ.get("UVICORN_PORT") or "7998").strip()
     base = (os.environ.get("T2SBG_PUBLIC_BASE") or f"http://127.0.0.1:{port}").rstrip("/")
     url = f"{base}/t2sbg-monitor"
-    LOG.info("T2SBG monitor page (sync target): %s", url)
+    LOG.info(
+        "T2SBG monitor page (sync target): %s — ring=%s (late viewers get replay; "
+        "use uvicorn --workers 1 so all users share one ring)",
+        url,
+        MONITOR_SNAPSHOT_MAX,
+    )
     if _parse_bool(os.environ.get("T2SBG_MONITOR_AUTOSTART"), default=False):
         import threading
         import webbrowser
@@ -437,6 +447,18 @@ async def t2sbg_monitor_page():
 @app.websocket("/ws/t2sbg-monitor")
 async def websocket_t2sbg_monitor(websocket: WebSocket):
     await websocket.accept()
+    # Oldest → newest so monitor UI (prepend per message) ends with newest on top.
+    async with _monitor_clients_lock:
+        history = list(reversed(_monitor_snapshot_ring))
+    for snap in history:
+        try:
+            await websocket.send_text(json.dumps(snap, ensure_ascii=False))
+        except Exception:
+            try:
+                await websocket.close()
+            except Exception:
+                pass
+            return
     async with _monitor_clients_lock:
         _monitor_clients.append(websocket)
     try:
