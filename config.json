@@ -56,6 +56,7 @@
     "t2s_min_speech_ms_comment": "Minimum effective speech duration before allowing turn completion.",
     "t2s_min_speech_ms": 300,
     "t2s_min_turn_gap_ms_comment": "Minimum interval between two completed turns to prevent rapid re-trigger.",
-    "t2s_min_turn_gap_ms": 300
+    "t2s_min_turn_gap_ms": 300,
+    "t2s_tts_barge_suppress_ms": 800
   }
 }
