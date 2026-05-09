@@ -134,15 +134,9 @@
 
   <script>
     (function () {
+      const T2SBG_VOICE_VERSION = '__T2SBG_VOICE_VERSION__';
       const pageVersionEl = document.getElementById('pageVersion');
-      function applyPageVersion(v) {
-        var s = v != null && String(v).trim() ? String(v).trim() : '?';
-        if (pageVersionEl) pageVersionEl.textContent = 't2sbg-voice v' + s;
-      }
-      fetch('/api/t2sbg-meta', { cache: 'no-store' })
-        .then(function (r) { return r.ok ? r.json() : Promise.reject(); })
-        .then(function (j) { applyPageVersion(j && j.t2sbg_voice_version); })
-        .catch(function () { applyPageVersion(null); });
+      if (pageVersionEl) pageVersionEl.textContent = 't2sbg-voice v' + T2SBG_VOICE_VERSION;
       const statusEl = document.getElementById('status');
       const modeLabel = document.getElementById('modeLabel');
       const stageLabel = document.getElementById('stageLabel');

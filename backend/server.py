@@ -414,11 +414,6 @@ def _read_t2sbg_voice_version_from_config() -> str:
     return "0.0.0"
 
 
-@app.get("/api/t2sbg-meta")
-async def t2sbg_meta():
-    return {"t2sbg_voice_version": _read_t2sbg_voice_version_from_config()}
-
-
 @app.get("/")
 async def root():
     return FileResponse(_frontend_dir() / "index.html")
@@ -446,7 +441,9 @@ async def t2sbg_voice_page():
     path = _frontend_dir() / "t2sbg.html"
     if not path.exists():
         return HTMLResponse("<p>t2sbg.html not found</p>", status_code=404)
-    return FileResponse(path)
+    raw = path.read_text(encoding="utf-8")
+    raw = raw.replace("'__T2SBG_VOICE_VERSION__'", json.dumps(_read_t2sbg_voice_version_from_config()))
+    return HTMLResponse(raw, media_type="text/html; charset=utf-8")
 
 
 @app.get("/t2sbg-omni")
