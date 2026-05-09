@@ -292,12 +292,46 @@ def _load_t2s_vad_hysteresis_config() -> tuple[int, int]:
     )
 
 
+def _load_t2s_tts_barge_suppress_ms() -> int:
+    """
+    t2sbg（非 omni）：服务端发出首帧 TTS PCM 后的若干毫秒内，不向浏览器发 barge_in，
+    也不把 Duplug 的首段 nonidle 当作「用户开说」（避免扬声器串音误打断）。
+
+    - 0：关闭
+    - 非 0：限制在 [100, 1000] ms
+
+    优先级：环境变量 T2S_TTS_BARGE_SUPPRESS_MS → config.json debug.t2s_tts_barge_suppress_ms → 默认 400。
+    """
+    ms = 400
+    try:
+        root = Path(__file__).resolve().parent.parent
+        cfg_path = root / "config.json"
+        if cfg_path.exists():
+            with cfg_path.open("r", encoding="utf-8") as f:
+                data = json.load(f)
+            debug_cfg = data.get("debug", {}) or {}
+            if "t2s_tts_barge_suppress_ms" in debug_cfg:
+                ms = int(debug_cfg["t2s_tts_barge_suppress_ms"])
+    except Exception:
+        pass
+    env_v = os.environ.get("T2S_TTS_BARGE_SUPPRESS_MS")
+    if env_v is not None and str(env_v).strip():
+        try:
+            ms = int(env_v)
+        except ValueError:
+            pass
+    if ms <= 0:
+        return 0
+    return min(1000, max(100, ms))
+
+
 APP_ID, ACCESS_KEY = _load_doubao_credentials()
 ASR_APP_ID, ASR_ACCESS_KEY = _load_asr_credentials(APP_ID, ACCESS_KEY)
 T2S_DEBUG_AUDIO_DUMP, T2S_DEBUG_AUDIO_DIR = _load_t2s_debug_audio_config()
 T2S_ASR_KEEPALIVE_IDLE_SEC, T2S_ASR_KEEPALIVE_TICK_SEC = _load_t2s_asr_keepalive_config()
 T2S_PRE_ROLL_MS, T2S_SPEAK_GRACE_MS = _load_t2s_pre_roll_and_speak_grace_ms()
 T2S_MIN_SPEECH_MS, T2S_MIN_TURN_GAP_MS = _load_t2s_vad_hysteresis_config()
+T2S_TTS_BARGE_SUPPRESS_MS = _load_t2s_tts_barge_suppress_ms()
 
 sessions: dict[str, dict] = {}
 
@@ -461,6 +495,8 @@ async def websocket_endpoint(websocket: WebSocket):
     t2s_speech_started_ts: float = 0.0
     t2s_last_nonidle_ts: float = 0.0
     t2s_last_complete_ts: float = 0.0
+    # 本轮 TTS：首帧 PCM 发给浏览器时的 monotonic 时间（0 表示尚未发过帧）
+    t2s_tts_first_audio_mono: float = 0.0
     # 调试：可选音频落盘（默认关闭）
     t2s_debug_audio_dump_enabled = T2S_DEBUG_AUDIO_DUMP
     t2s_debug_audio_dir = Path(T2S_DEBUG_AUDIO_DIR)
@@ -751,6 +787,14 @@ async def websocket_endpoint(websocket: WebSocket):
         payload.update({k: v for k, v in extra.items() if v is not None})
         send_json(payload)
 
+    def _t2s_tts_barge_suppress_active() -> bool:
+        """首帧 TTS 发出后的保护窗内为 True：不触发 barge_in / 不把 Duplug nonidle 当用户开说。"""
+        if mode != "t2s" or T2S_TTS_BARGE_SUPPRESS_MS <= 0:
+            return False
+        if t2s_tts_first_audio_mono <= 0:
+            return False
+        return (time.monotonic() - t2s_tts_first_audio_mono) * 1000.0 < float(T2S_TTS_BARGE_SUPPRESS_MS)
+
     def _t2s_append_followup_to_asr_text(asr_text: str, follow_q: str) -> str:
         """单条 501：在 ASR 文本末尾追加追问系统指令（不另发第二条 501）。"""
         fq = (follow_q or "").strip()
@@ -955,6 +999,9 @@ async def websocket_endpoint(websocket: WebSocket):
             send_json({"type": "next_turn_501_sent"})
 
     def on_tts_audio(data: bytes):
+        nonlocal t2s_tts_first_audio_mono
+        if mode == "t2s" and data and t2s_tts_first_audio_mono <= 0:
+            t2s_tts_first_audio_mono = time.monotonic()
         if barge_in_flag:
             return
         try:
@@ -965,6 +1012,8 @@ async def websocket_endpoint(websocket: WebSocket):
     def on_tts_start(payload: dict):
         nonlocal barge_in_flag
         nonlocal last_question_id, last_reply_id, reply_in_progress
+        nonlocal t2s_tts_first_audio_mono
+        t2s_tts_first_audio_mono = 0.0
         barge_in_flag = False
         reply_in_progress = True
         last_question_id = payload.get("question_id", "") or last_question_id
@@ -1058,6 +1107,14 @@ async def websocket_endpoint(websocket: WebSocket):
     def on_barge_in(question_id: str):
         nonlocal barge_in_flag
         nonlocal last_question_id
+        if _t2s_tts_barge_suppress_active():
+            LOG.info("t2s barge_in suppressed (Doubao ASR_INFO during TTS lead-in)")
+            push_server_log(
+                "info",
+                "barge_in suppressed (TTS lead-in window)",
+                ms=T2S_TTS_BARGE_SUPPRESS_MS,
+            )
+            return
         barge_in_flag = True
         last_question_id = question_id or last_question_id
         send_json({"type": "barge_in", "question_id": question_id})
@@ -1468,32 +1525,43 @@ async def websocket_endpoint(websocket: WebSocket):
                                     _cancel_t2s_speak_grace()
                                     t2s_last_nonidle_ts = time.monotonic()
                                     if not t2s_speech_started:
-                                        t2s_speech_started = True
-                                        t2s_speech_started_ts = t2s_last_nonidle_ts
-                                        # 1) Interrupt TTS immediately on speech start.
-                                        barge_in_flag = True
-                                        send_json({"type": "barge_in", "source": "duplug"})
-                                        # 2) Open ASR gate on nonidle.
-                                        t2s_asr_gate_open = True
-                                        t2s_vad_idle_streak = 0
-                                        # 3) Flush pre-roll into ASR so we don't cut initial phonemes.
-                                        if t2s_pre_roll_chunks:
-                                            if t2s_asr_streaming:
-                                                for pr in list(t2s_pre_roll_chunks):
-                                                    t2s_asr_stream_buffer.extend(pr)
-                                                    t2s_asr_capture_buffer.extend(pr)
-                                                while len(t2s_asr_stream_buffer) >= ASR_CHUNK_BYTES:
-                                                    to_send = bytes(t2s_asr_stream_buffer[:ASR_CHUNK_BYTES])
-                                                    del t2s_asr_stream_buffer[:ASR_CHUNK_BYTES]
-                                                    await t2s_asr_streaming.send_audio(to_send, is_last=False)
-                                                    _touch_t2s_asr_real_send()
-                                            else:
-                                                for pr in list(t2s_pre_roll_chunks):
-                                                    t2s_pcm_buffer.extend(pr)
-                                                    t2s_asr_capture_buffer.extend(pr)
-                                            t2s_pre_roll_chunks.clear()
-                                            # Current `ch` is part of pre-roll and has been forwarded.
-                                            chunk_forwarded_by_preroll = True
+                                        if _t2s_tts_barge_suppress_active():
+                                            LOG.info(
+                                                "t2s Duplug nonidle ignored (TTS lead-in %sms)",
+                                                T2S_TTS_BARGE_SUPPRESS_MS,
+                                            )
+                                            push_server_log(
+                                                "info",
+                                                "Duplug nonidle ignored (TTS lead-in window)",
+                                                ms=T2S_TTS_BARGE_SUPPRESS_MS,
+                                            )
+                                        else:
+                                            t2s_speech_started = True
+                                            t2s_speech_started_ts = t2s_last_nonidle_ts
+                                            # 1) Interrupt TTS immediately on speech start.
+                                            barge_in_flag = True
+                                            send_json({"type": "barge_in", "source": "duplug"})
+                                            # 2) Open ASR gate on nonidle.
+                                            t2s_asr_gate_open = True
+                                            t2s_vad_idle_streak = 0
+                                            # 3) Flush pre-roll into ASR so we don't cut initial phonemes.
+                                            if t2s_pre_roll_chunks:
+                                                if t2s_asr_streaming:
+                                                    for pr in list(t2s_pre_roll_chunks):
+                                                        t2s_asr_stream_buffer.extend(pr)
+                                                        t2s_asr_capture_buffer.extend(pr)
+                                                    while len(t2s_asr_stream_buffer) >= ASR_CHUNK_BYTES:
+                                                        to_send = bytes(t2s_asr_stream_buffer[:ASR_CHUNK_BYTES])
+                                                        del t2s_asr_stream_buffer[:ASR_CHUNK_BYTES]
+                                                        await t2s_asr_streaming.send_audio(to_send, is_last=False)
+                                                        _touch_t2s_asr_real_send()
+                                                else:
+                                                    for pr in list(t2s_pre_roll_chunks):
+                                                        t2s_pcm_buffer.extend(pr)
+                                                        t2s_asr_capture_buffer.extend(pr)
+                                                t2s_pre_roll_chunks.clear()
+                                                # Current `ch` is part of pre-roll and has been forwarded.
+                                                chunk_forwarded_by_preroll = True
                                     else:
                                         # Continued speech after a tentative `speak`: keep ASR open.
                                         t2s_vad_idle_streak = 0
