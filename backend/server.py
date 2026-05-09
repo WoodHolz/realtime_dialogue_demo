@@ -396,6 +396,29 @@ def _frontend_dir() -> Path:
     return Path(__file__).resolve().parent.parent / "frontend"
 
 
+def _repo_root() -> Path:
+    return Path(__file__).resolve().parent.parent
+
+
+def _read_t2sbg_voice_version_from_config() -> str:
+    """Expose frontend/t2sbg.html build label from root config.json (safe for clients)."""
+    cfg_path = _repo_root() / "config.json"
+    try:
+        with cfg_path.open("r", encoding="utf-8") as f:
+            data = json.load(f)
+        v = data.get("t2sbg_voice_version")
+        if isinstance(v, str) and v.strip():
+            return v.strip()
+    except Exception:
+        pass
+    return "0.0.0"
+
+
+@app.get("/api/t2sbg-meta")
+async def t2sbg_meta():
+    return {"t2sbg_voice_version": _read_t2sbg_voice_version_from_config()}
+
+
 @app.get("/")
 async def root():
     return FileResponse(_frontend_dir() / "index.html")

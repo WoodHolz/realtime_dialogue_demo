@@ -58,5 +58,6 @@
     "t2s_min_turn_gap_ms_comment": "Minimum interval between two completed turns to prevent rapid re-trigger.",
     "t2s_min_turn_gap_ms": 300,
     "t2s_tts_barge_suppress_ms": 800
-  }
+  },
+  "t2sbg_voice_version": "0.0.3"
 }
