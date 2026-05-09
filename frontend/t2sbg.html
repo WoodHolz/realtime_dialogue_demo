@@ -63,7 +63,9 @@
 
   <div class="section">
     <strong>录音调试预览（后端合并）</strong>
-    <p style="font-size:12px; color:#666;">链路：Browser 上行音频 -> Backend -> (Duplug VAD + ASR)。Browser 不直连 VAD；下方主播放器为<strong>跨轮合并</strong>后的 WAV；折叠内为<strong>每一轮单独</strong>的原始录音（未与历史轮次拼接）。</p>
+    <button type="button" id="btnMonitorSync" disabled style="margin-left:8px;">同步到监控页</button>
+    <span id="monitorSyncHint" style="font-size:12px;color:#888;margin-left:8px;"></span>
+    <p style="font-size:12px; color:#666;">链路：Browser 上行音频 -> Backend -> (Duplug VAD + ASR)。Browser 不直连 VAD；下方主播放器为<strong>跨轮合并</strong>后的 WAV；折叠内为<strong>每一轮单独</strong>的原始录音（未与历史轮次拼接）。监控页：<code>/t2sbg-monitor</code>（先打开监控页再点同步）。</p>
     <div style="margin-top:8px;">
       <div style="margin-bottom:10px;">
         <div style="font-size:12px; color:#666; margin-bottom:4px;">给 VAD 的录音（merged）</div>
@@ -160,6 +162,8 @@
       const asrRawTurnClipsEl = document.getElementById('asrRawTurnClips');
       const fullRawTurnClipsEl = document.getElementById('fullRawTurnClips');
       const serverLogEl = document.getElementById('serverLog');
+      const btnMonitorSync = document.getElementById('btnMonitorSync');
+      const monitorSyncHint = document.getElementById('monitorSyncHint');
 
       let ws = null;
       let micAudioContext = null;
@@ -264,6 +268,41 @@
           for (let j = 0; j < seg.length; j++) arrays.push(seg[j]);
         }
         return arrays;
+      }
+
+      function blobToBase64(blob) {
+        return new Promise(function (resolve, reject) {
+          const r = new FileReader();
+          r.onloadend = function () {
+            const s = r.result;
+            const i = typeof s === 'string' ? s.indexOf(',') : -1;
+            resolve(i >= 0 ? s.slice(i + 1) : '');
+          };
+          r.onerror = reject;
+          r.readAsDataURL(blob);
+        });
+      }
+
+      async function buildMonitorPublishPayload() {
+        const fullFlat = flattenSegments(fullSegments);
+        const fullMerged = concatUint8Arrays(fullFlat);
+        let fullMergedB64 = '';
+        if (fullMerged.length) {
+          fullMergedB64 = await blobToBase64(buildWavBlobFromPcmS16(fullMerged, TARGET_SAMPLE_RATE));
+        }
+        const fullTurns = [];
+        for (let i = 0; i < fullSegments.length; i++) {
+          const pcm = concatUint8Arrays(fullSegments[i]);
+          if (!pcm.length) continue;
+          fullTurns.push(await blobToBase64(buildWavBlobFromPcmS16(pcm, TARGET_SAMPLE_RATE)));
+        }
+        return {
+          type: 'monitor_publish',
+          transcript_html: transcriptEl.innerHTML,
+          log_html: logEl.innerHTML,
+          full_merged_wav_base64: fullMergedB64,
+          full_turn_wavs_base64: fullTurns,
+        };
       }
 
       function getDurationSecFromBytes(byteLen) {
@@ -992,11 +1031,16 @@
               const msg = JSON.parse(ev.data);
               if (msg.type === 'server_log') {
                 serverLogAppend(msg.level || 'info', (msg.message || '').trim(), serverLogExtras(msg));
+              } else if (msg.type === 'monitor_publish_ok') {
+                log(
+                  'Monitor sync OK · subscribers=' + (msg.monitor_subscribers != null ? msg.monitor_subscribers : '?')
+                );
               } else if (msg.type === 'ready') {
                 setStatus('Ready. 输入文本或使用语音。');
                 log('Session ' + msg.session_id + ' mode=' + (msg.mode || 't2s'));
                 btnSendText.disabled = false;
                 btnVoiceStart.disabled = false;
+                btnMonitorSync.disabled = false;
                 t501 = 0;
                 updateLatencyDisplay();
                 requestVoiceStart('ready');
@@ -1183,6 +1227,7 @@
           btnSendText.disabled = true;
           btnVoiceStart.disabled = true;
           btnVoiceStop.disabled = true;
+          btnMonitorSync.disabled = true;
         };
         ws.onerror = function () {
           setStatus('WebSocket error');
@@ -1231,8 +1276,32 @@
         btnSendText.disabled = true;
         btnVoiceStart.disabled = true;
         btnVoiceStop.disabled = true;
+        btnMonitorSync.disabled = true;
         voiceStatusEl.textContent = '';
         setStatus('Stopped');
+      };
+
+      btnMonitorSync.onclick = function () {
+        if (!ws || ws.readyState !== WebSocket.OPEN) {
+          log('Not connected.', true);
+          return;
+        }
+        monitorSyncHint.textContent = '打包中…';
+        btnMonitorSync.disabled = true;
+        buildMonitorPublishPayload()
+          .then(function (payload) {
+            ws.send(JSON.stringify(payload));
+            monitorSyncHint.textContent = '已发送';
+            log('Monitor sync requested（打开 /t2sbg-monitor 查看）');
+          })
+          .catch(function (e) {
+            log('Monitor sync failed: ' + (e && e.message ? e.message : e), true);
+            monitorSyncHint.textContent = '';
+          })
+          .then(function () {
+            btnMonitorSync.disabled = false;
+            setTimeout(function () { monitorSyncHint.textContent = ''; }, 2500);
+          });
       };
 
       btnSendText.onclick = function () {

@@ -25,7 +25,7 @@ import time
 import uuid
 from collections import deque
 from contextlib import asynccontextmanager
-from datetime import datetime
+from datetime import datetime, timezone
 import numpy as np
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse, FileResponse
@@ -71,6 +71,7 @@ async def lifespan(app: FastAPI):
         except Exception as exc:  # noqa: BLE001
             LOG.warning("Duplug local VAD init failed: %s", exc)
             _LOCAL_DUPLUG_MANAGER = None
+    _startup_t2sbg_monitor_notice()
     yield
     _LOCAL_DUPLUG_MANAGER = None
 
@@ -335,6 +336,51 @@ T2S_TTS_BARGE_SUPPRESS_MS = _load_t2s_tts_barge_suppress_ms()
 
 sessions: dict[str, dict] = {}
 
+_monitor_clients_lock = asyncio.Lock()
+_monitor_clients: list[WebSocket] = []
+
+
+async def broadcast_t2sbg_monitor(payload: dict[str, object]) -> None:
+    """Push a snapshot JSON to all connected /ws/t2sbg-monitor viewers."""
+    payload = dict(payload)
+    payload.setdefault("type", "monitor_snapshot")
+    raw = json.dumps(payload, ensure_ascii=False)
+    async with _monitor_clients_lock:
+        targets = list(_monitor_clients)
+    stale: list[WebSocket] = []
+    for mws in targets:
+        try:
+            await mws.send_text(raw)
+        except Exception:
+            stale.append(mws)
+    if stale:
+        async with _monitor_clients_lock:
+            for mws in stale:
+                try:
+                    _monitor_clients.remove(mws)
+                except ValueError:
+                    pass
+
+
+def _startup_t2sbg_monitor_notice() -> None:
+    """Log monitor URL; optionally open browser (T2SBG_MONITOR_AUTOSTART=1)."""
+    port = (os.environ.get("PORT") or os.environ.get("UVICORN_PORT") or "7998").strip()
+    base = (os.environ.get("T2SBG_PUBLIC_BASE") or f"http://127.0.0.1:{port}").rstrip("/")
+    url = f"{base}/t2sbg-monitor"
+    LOG.info("T2SBG monitor page (sync target): %s", url)
+    if _parse_bool(os.environ.get("T2SBG_MONITOR_AUTOSTART"), default=False):
+        import threading
+        import webbrowser
+
+        def _open_browser() -> None:
+            time.sleep(0.7)
+            try:
+                webbrowser.open(url)
+            except Exception as exc:  # noqa: BLE001
+                LOG.warning("T2SBG_MONITOR_AUTOSTART: browser open failed: %s", exc)
+
+        threading.Thread(target=_open_browser, daemon=True).start()
+
 
 def _frontend_dir() -> Path:
     return Path(__file__).resolve().parent.parent / "frontend"
@@ -377,6 +423,38 @@ async def t2sbg_omni_page():
     if not path.exists():
         return HTMLResponse("<p>t2sbg_omni.html not found</p>", status_code=404)
     return FileResponse(path)
+
+
+@app.get("/t2sbg-monitor")
+async def t2sbg_monitor_page():
+    """被动接收 t2sbg 访谈页「同步到监控页」快照（录音自后端内存 + 正文来自浏览器）。"""
+    path = _frontend_dir() / "t2sbg_monitor.html"
+    if not path.exists():
+        return HTMLResponse("<p>t2sbg_monitor.html not found</p>", status_code=404)
+    return FileResponse(path)
+
+
+@app.websocket("/ws/t2sbg-monitor")
+async def websocket_t2sbg_monitor(websocket: WebSocket):
+    await websocket.accept()
+    async with _monitor_clients_lock:
+        _monitor_clients.append(websocket)
+    try:
+        while True:
+            try:
+                await websocket.receive_text()
+            except WebSocketDisconnect:
+                break
+            except RuntimeError as e:
+                if 'Cannot call "receive" once a disconnect message has been received.' in str(e):
+                    break
+                raise
+    finally:
+        async with _monitor_clients_lock:
+            try:
+                _monitor_clients.remove(websocket)
+            except ValueError:
+                pass
 
 
 @app.websocket("/ws-omni")
@@ -461,6 +539,8 @@ async def websocket_endpoint(websocket: WebSocket):
     t2s_vad_turn_buffer = bytearray()  # 调试：按“实际送入 VAD 的顺序”累计当前轮音频
     t2s_vad_merged_buffer = bytearray()  # 调试：会话累计 VAD 音频（内存）
     t2s_asr_merged_buffer = bytearray()  # 调试：会话累计 ASR 音频（内存）
+    t2s_vad_turn_pcm_history: list[bytes] = []  # 按轮快照，供监控页未合并列表
+    t2s_asr_turn_pcm_history: list[bytes] = []
     t2s_vad_segments = 0
     t2s_asr_segments = 0
     asr_client: VolcAsrClient | None = None
@@ -852,6 +932,42 @@ async def websocket_endpoint(websocket: WebSocket):
         if asr_last_turn_wav_b64:
             payload["asr_last_turn_wav_base64"] = asr_last_turn_wav_b64
         send_json(payload)
+
+    def _build_monitor_snapshot(
+        *,
+        transcript_html: str,
+        log_html: str,
+        full_merged_wav_b64: str,
+        full_turn_wavs_b64: list[str],
+    ) -> dict[str, object]:
+        vad_pcm = bytes(t2s_vad_merged_buffer)
+        asr_pcm = bytes(t2s_asr_merged_buffer)
+        vad_wav_b64 = base64.b64encode(_pcm16le_to_wav_bytes(vad_pcm)).decode("ascii") if vad_pcm else ""
+        asr_wav_b64 = base64.b64encode(_pcm16le_to_wav_bytes(asr_pcm)).decode("ascii") if asr_pcm else ""
+        vad_turn_b64 = [
+            base64.b64encode(_pcm16le_to_wav_bytes(seg)).decode("ascii") for seg in t2s_vad_turn_pcm_history if seg
+        ]
+        asr_turn_b64 = [
+            base64.b64encode(_pcm16le_to_wav_bytes(seg)).decode("ascii") for seg in t2s_asr_turn_pcm_history if seg
+        ]
+        published_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        return {
+            "type": "monitor_snapshot",
+            "vad_wav_base64": vad_wav_b64,
+            "asr_wav_base64": asr_wav_b64,
+            "vad_turn_wavs_base64": vad_turn_b64,
+            "asr_turn_wavs_base64": asr_turn_b64,
+            "vad_segments": t2s_vad_segments,
+            "asr_segments": t2s_asr_segments,
+            "vad_duration_sec": round(len(vad_pcm) / 2 / 16000, 3),
+            "asr_duration_sec": round(len(asr_pcm) / 2 / 16000, 3),
+            "transcript_html": transcript_html,
+            "log_html": log_html,
+            "full_merged_wav_base64": full_merged_wav_b64,
+            "full_turn_wavs_base64": full_turn_wavs_b64,
+            "published_at": published_at,
+            "source_conn_id": conn_id,
+        }
 
     def on_asr(text: str, is_interim: bool):
         nonlocal auto_followup_waiting_user
@@ -1355,12 +1471,14 @@ async def websocket_endpoint(websocket: WebSocket):
                 asr_last_turn_wav_b64 = ""
                 if t2s_vad_turn_buffer:
                     snap_v = bytes(t2s_vad_turn_buffer)
+                    t2s_vad_turn_pcm_history.append(snap_v)
                     vad_last_turn_wav_b64 = base64.b64encode(_pcm16le_to_wav_bytes(snap_v)).decode("ascii")
                     t2s_vad_merged_buffer.extend(t2s_vad_turn_buffer)
                     t2s_vad_segments += 1
                     t2s_vad_turn_buffer.clear()
                 if t2s_asr_capture_buffer:
                     snap_a = bytes(t2s_asr_capture_buffer)
+                    t2s_asr_turn_pcm_history.append(snap_a)
                     asr_last_turn_wav_b64 = base64.b64encode(_pcm16le_to_wav_bytes(snap_a)).decode("ascii")
                     t2s_asr_merged_buffer.extend(t2s_asr_capture_buffer)
                     t2s_asr_segments += 1
@@ -1628,7 +1746,20 @@ async def websocket_endpoint(websocket: WebSocket):
             elif "text" in msg and msg["text"]:
                 try:
                     obj = json.loads(msg["text"])
-                    if obj.get("type") == "update_prompt":
+                    if obj.get("type") == "monitor_publish":
+                        ft_raw = obj.get("full_turn_wavs_base64")
+                        ft_list = [str(x) for x in ft_raw] if isinstance(ft_raw, list) else []
+                        snap = _build_monitor_snapshot(
+                            transcript_html=str(obj.get("transcript_html") or ""),
+                            log_html=str(obj.get("log_html") or ""),
+                            full_merged_wav_b64=str(obj.get("full_merged_wav_base64") or ""),
+                            full_turn_wavs_b64=[x for x in ft_list if x],
+                        )
+                        await broadcast_t2sbg_monitor(snap)
+                        async with _monitor_clients_lock:
+                            n_sub = len(_monitor_clients)
+                        send_json({"type": "monitor_publish_ok", "monitor_subscribers": n_sub})
+                    elif obj.get("type") == "update_prompt":
                         prompt_manager.set_custom_prompt(
                             system_role=obj.get("system_role"),
                             speaking_style=obj.get("speaking_style"),

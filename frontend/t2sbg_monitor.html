@@ -1,0 +1,367 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>T2SBG 访谈监控（被动同步）</title>
+  <style>
+    body { font-family: system-ui, sans-serif; max-width: 720px; margin: 1rem auto; padding: 0 1rem; }
+    h1 { font-size: 1.25rem; }
+    .status { color: #666; margin: 0.5rem 0; font-size: 0.9rem; }
+    .transcript { white-space: pre-wrap; min-height: 80px; padding: 0.5rem; border: 1px solid #ccc; border-radius: 6px; margin: 0.5rem 0; background: #fafafa; }
+    .section { margin-top: 1rem; padding-top: 1rem; border-top: 1px solid #eee; }
+    details.debug-raw-clips { margin-top: 8px; font-size: 12px; }
+    details.debug-raw-clips summary { cursor: pointer; color: #555; user-select: none; }
+    details.debug-raw-clips .raw-clips-body { margin-top: 6px; padding-left: 8px; border-left: 2px solid #eee; }
+    #clientLog { max-height: 180px; overflow-y: auto; font-family: monospace; font-size: 0.75rem; background: #f6f8fa; }
+    details.snapshot-card {
+      border: 1px solid #ddd;
+      border-radius: 8px;
+      margin-bottom: 14px;
+      padding: 0 10px 10px;
+      background: #fff;
+    }
+    details.snapshot-card > summary {
+      cursor: pointer;
+      font-weight: 600;
+      padding: 10px 4px;
+      list-style-position: outside;
+    }
+    details.snapshot-card .snapshot-body { padding-top: 4px; }
+    .snapshot-badge {
+      display: inline-block;
+      font-size: 11px;
+      font-weight: 600;
+      padding: 2px 6px;
+      border-radius: 4px;
+      background: #e8f4ff;
+      color: #06c;
+      margin-right: 8px;
+    }
+    .snapshot-badge.is-latest { background: #e6ffed; color: #0a0; }
+    .snapshot-inner-section { margin-top: 0.75rem; padding-top: 0.75rem; border-top: 1px solid #eee; }
+    .snapshot-inner-section:first-child { border-top: none; padding-top: 0; margin-top: 0; }
+  </style>
+</head>
+<body>
+  <h1>T2SBG 访谈监控</h1>
+  <p class="status" id="connStatus">连接监控通道…</p>
+  <p class="status" id="lastPub">尚无快照。请在 <code>/t2sbg-voice</code> 页点击「同步到监控页」。最多保留最近 <strong>5</strong> 次，新的在最上方。</p>
+
+  <div id="snapshotStack"></div>
+
+  <div class="section">
+    <strong>监控页本地 log</strong>
+    <div id="clientLog" class="transcript"></div>
+  </div>
+
+  <script>
+    (function () {
+      const SR = 16000;
+      const MAX_SNAPSHOTS = 5;
+      const connStatusEl = document.getElementById('connStatus');
+      const lastPubEl = document.getElementById('lastPub');
+      const clientLogEl = document.getElementById('clientLog');
+      const snapshotStackEl = document.getElementById('snapshotStack');
+
+      /** @type {{ el: HTMLDetailsElement, revoke: () => void }[]} */
+      let snapshotCards = [];
+
+      function clog(msg) {
+        var p = document.createElement('div');
+        p.textContent = new Date().toISOString().slice(11, 19) + ' ' + msg;
+        clientLogEl.appendChild(p);
+        clientLogEl.scrollTop = clientLogEl.scrollHeight;
+      }
+
+      function getDurationSecFromBytes(byteLen) {
+        return (byteLen / 2) / SR;
+      }
+
+      function _pcmByteLenFromWavBase64(b64) {
+        try {
+          var bin = atob(b64);
+          if (bin.length < 44) return 0;
+          return bin.length - 44;
+        } catch (err) {
+          return 0;
+        }
+      }
+
+      function renderRawTurnClipsFromB64(containerEl, b64List, labelPrefix) {
+        if (!containerEl) return;
+        containerEl.innerHTML = '';
+        if (!b64List || !b64List.length) {
+          var empty = document.createElement('div');
+          empty.style.color = '#999';
+          empty.textContent = '暂无';
+          containerEl.appendChild(empty);
+          return;
+        }
+        for (var j = 0; j < b64List.length; j++) {
+          var wrap = document.createElement('div');
+          wrap.style.marginTop = j ? '8px' : '0';
+          var cap = document.createElement('div');
+          cap.style.fontSize = '12px';
+          cap.style.color = '#666';
+          var pcmLen = _pcmByteLenFromWavBase64(b64List[j]);
+          cap.textContent = labelPrefix + ' 第 ' + (j + 1) + ' 轮 · ' + getDurationSecFromBytes(pcmLen).toFixed(2) + 's';
+          var audio = document.createElement('audio');
+          audio.controls = true;
+          audio.style.width = '100%';
+          audio.src = 'data:audio/wav;base64,' + b64List[j];
+          wrap.appendChild(cap);
+          wrap.appendChild(audio);
+          containerEl.appendChild(wrap);
+        }
+      }
+
+      function base64ToUint8(b64) {
+        var bin = atob(b64);
+        var len = bin.length;
+        var bytes = new Uint8Array(len);
+        for (var i = 0; i < len; i++) bytes[i] = bin.charCodeAt(i) & 0xff;
+        return bytes;
+      }
+
+      /**
+       * @returns {{ el: HTMLDetailsElement, revoke: () => void }}
+       */
+      function buildSnapshotCard(msg, indexInStack) {
+        var vadB64 = msg.vad_wav_base64 || '';
+        var asrB64 = msg.asr_wav_base64 || '';
+        var vadTurns = msg.vad_turn_wavs_base64 || [];
+        var asrTurns = msg.asr_turn_wavs_base64 || [];
+        var fullMergedB64 = msg.full_merged_wav_base64 || '';
+        var ft = msg.full_turn_wavs_base64 || [];
+
+        var fullPreviewUrl = null;
+        var fullRawClipUrls = [];
+
+        function revoke() {
+          if (fullPreviewUrl) {
+            try { URL.revokeObjectURL(fullPreviewUrl); } catch (e) {}
+            fullPreviewUrl = null;
+          }
+          for (var r = 0; r < fullRawClipUrls.length; r++) {
+            try { URL.revokeObjectURL(fullRawClipUrls[r]); } catch (e2) {}
+          }
+          fullRawClipUrls = [];
+        }
+
+        var details = document.createElement('details');
+        details.className = 'snapshot-card';
+        details.open = indexInStack === 0;
+
+        var sum = document.createElement('summary');
+        var badge = document.createElement('span');
+        badge.className = 'snapshot-badge' + (indexInStack === 0 ? ' is-latest' : '');
+        badge.textContent = indexInStack === 0 ? '最新' : '#' + (indexInStack + 1);
+        sum.appendChild(badge);
+        var meta = document.createElement('span');
+        meta.style.fontWeight = 'normal';
+        meta.style.fontSize = '13px';
+        meta.style.color = '#444';
+        meta.textContent =
+          (msg.published_at || '-') +
+          ' · conn ' + (msg.source_conn_id || '-') +
+          ' · VAD轮 ' + vadTurns.length +
+          ' · ASR轮 ' + asrTurns.length +
+          ' · 麦克风轮 ' + ft.length;
+        sum.appendChild(meta);
+        details.appendChild(sum);
+
+        var body = document.createElement('div');
+        body.className = 'snapshot-body';
+
+        function addInner(title, buildFn) {
+          var sec = document.createElement('div');
+          sec.className = 'snapshot-inner-section';
+          var h = document.createElement('strong');
+          h.textContent = title;
+          sec.appendChild(h);
+          buildFn(sec);
+          body.appendChild(sec);
+        }
+
+        addInner('录音调试预览（后端内存 + 浏览器麦克风）', function (sec) {
+          var hint = document.createElement('p');
+          hint.style.fontSize = '12px';
+          hint.style.color = '#666';
+          hint.textContent = 'VAD/ASR 来自同步时的服务端内存；麦克风轨由会话页打包上传。';
+          sec.appendChild(hint);
+          var wrap = document.createElement('div');
+          wrap.style.marginTop = '8px';
+
+          function row(label, vadLike) {
+            var block = document.createElement('div');
+            block.style.marginBottom = '10px';
+            var lab = document.createElement('div');
+            lab.style.fontSize = '12px';
+            lab.style.color = '#666';
+            lab.style.marginBottom = '4px';
+            lab.textContent = label;
+            block.appendChild(lab);
+            var audio = document.createElement('audio');
+            audio.controls = true;
+            audio.style.width = '100%';
+            if (vadLike) audio.src = 'data:audio/wav;base64,' + vadLike;
+            block.appendChild(audio);
+            var metaEl = document.createElement('div');
+            metaEl.style.fontSize = '12px';
+            metaEl.style.color = '#666';
+            metaEl.style.marginTop = '4px';
+            block.appendChild(metaEl);
+            var det = document.createElement('details');
+            det.className = 'debug-raw-clips';
+            var sm = document.createElement('summary');
+            sm.textContent = '未合并原始录音（按轮）';
+            det.appendChild(sm);
+            var rawBody = document.createElement('div');
+            rawBody.className = 'raw-clips-body';
+            det.appendChild(rawBody);
+            block.appendChild(det);
+            wrap.appendChild(block);
+            return { metaEl: metaEl, rawBody: rawBody, audio: audio };
+          }
+
+          var rVad = row('给 VAD 的录音（merged）', vadB64);
+          rVad.metaEl.textContent =
+            '片段数: ' + (msg.vad_segments || 0) +
+            ', 时长: ' + (typeof msg.vad_duration_sec === 'number' ? msg.vad_duration_sec.toFixed(2) : '0.00') + 's';
+          if (!vadB64) {
+            rVad.audio.removeAttribute('src');
+            rVad.audio.load();
+          }
+          renderRawTurnClipsFromB64(rVad.rawBody, vadTurns, 'VAD 送入');
+
+          var rAsr = row('给 ASR 的录音（merged）', asrB64);
+          rAsr.metaEl.textContent =
+            '片段数: ' + (msg.asr_segments || 0) +
+            ', 时长: ' + (typeof msg.asr_duration_sec === 'number' ? msg.asr_duration_sec.toFixed(2) : '0.00') + 's';
+          if (!asrB64) {
+            rAsr.audio.removeAttribute('src');
+            rAsr.audio.load();
+          }
+          renderRawTurnClipsFromB64(rAsr.rawBody, asrTurns, 'ASR 送入');
+
+          var rFull = row('完整麦克风录音通道（merged）', '');
+          if (fullMergedB64) {
+            fullPreviewUrl = URL.createObjectURL(new Blob([base64ToUint8(fullMergedB64)], { type: 'audio/wav' }));
+            rFull.audio.src = fullPreviewUrl;
+          } else {
+            rFull.audio.removeAttribute('src');
+            rFull.audio.load();
+          }
+          var mergedPcmLen = fullMergedB64 ? _pcmByteLenFromWavBase64(fullMergedB64) : 0;
+          rFull.metaEl.textContent =
+            '轮次: ' + ft.length + ', merged 时长: ' + getDurationSecFromBytes(mergedPcmLen).toFixed(2) + 's';
+
+          rFull.rawBody.innerHTML = '';
+          if (!ft.length) {
+            var fe = document.createElement('div');
+            fe.style.color = '#999';
+            fe.textContent = '暂无';
+            rFull.rawBody.appendChild(fe);
+          } else {
+            for (var t = 0; t < ft.length; t++) {
+              var url = URL.createObjectURL(new Blob([base64ToUint8(ft[t])], { type: 'audio/wav' }));
+              fullRawClipUrls.push(url);
+              var pcmLen = _pcmByteLenFromWavBase64(ft[t]);
+              var w = document.createElement('div');
+              w.style.marginTop = t ? '8px' : '0';
+              var c = document.createElement('div');
+              c.style.fontSize = '12px';
+              c.style.color = '#666';
+              c.textContent = '麦克风 第 ' + (t + 1) + ' 轮 · ' + getDurationSecFromBytes(pcmLen).toFixed(2) + 's';
+              var a = document.createElement('audio');
+              a.controls = true;
+              a.style.width = '100%';
+              a.src = url;
+              w.appendChild(c);
+              w.appendChild(a);
+              rFull.rawBody.appendChild(w);
+            }
+          }
+
+          sec.appendChild(wrap);
+        });
+
+        addInner('AI 面试官回复（文本 + 语音）', function (sec) {
+          var tr = document.createElement('div');
+          tr.className = 'transcript';
+          tr.innerHTML = msg.transcript_html || '';
+          sec.appendChild(tr);
+        });
+
+        addInner('会话页调试 log', function (sec) {
+          var lg = document.createElement('div');
+          lg.className = 'transcript';
+          lg.style.maxHeight = '220px';
+          lg.style.overflowY = 'auto';
+          lg.innerHTML = msg.log_html || '';
+          sec.appendChild(lg);
+        });
+
+        details.appendChild(body);
+        return { el: details, revoke: revoke };
+      }
+
+      function refreshBadgesAndOpenState() {
+        for (var i = 0; i < snapshotCards.length; i++) {
+          var card = snapshotCards[i];
+          var badge = card.el.querySelector('.snapshot-badge');
+          if (badge) {
+            badge.className = 'snapshot-badge' + (i === 0 ? ' is-latest' : '');
+            badge.textContent = i === 0 ? '最新' : '#' + (i + 1);
+          }
+          card.el.open = i === 0;
+        }
+      }
+
+      function pushSnapshot(msg) {
+        for (var i = 0; i < snapshotCards.length; i++) {
+          snapshotCards[i].el.open = false;
+        }
+        var card = buildSnapshotCard(msg, 0);
+        snapshotStackEl.insertBefore(card.el, snapshotStackEl.firstChild);
+        snapshotCards.unshift(card);
+        while (snapshotCards.length > MAX_SNAPSHOTS) {
+          var old = snapshotCards.pop();
+          old.revoke();
+          if (old.el.parentNode) old.el.parentNode.removeChild(old.el);
+        }
+        refreshBadgesAndOpenState();
+        var newest = msg.published_at || '-';
+        lastPubEl.innerHTML =
+          '缓存 <strong>' + snapshotCards.length + '</strong> / ' + MAX_SNAPSHOTS +
+          ' 次同步 · 最新在上 · 最近一条：<code>' + newest + '</code>';
+        clog('snapshot #' + snapshotCards.length + ' (stack)');
+      }
+
+      var protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+      var wsUrl = protocol + '//' + location.host + '/ws/t2sbg-monitor';
+      var ws = new WebSocket(wsUrl);
+
+      ws.onopen = function () {
+        connStatusEl.textContent = '监控通道已连接 · ' + wsUrl;
+        clog('monitor ws open');
+      };
+      ws.onclose = function () {
+        connStatusEl.textContent = '监控通道已断开';
+      };
+      ws.onerror = function () {
+        connStatusEl.textContent = '监控通道错误';
+      };
+      ws.onmessage = function (ev) {
+        try {
+          var msg = JSON.parse(ev.data);
+          if (msg.type === 'monitor_snapshot') pushSnapshot(msg);
+        } catch (e) {
+          clog('parse error: ' + e.message);
+        }
+      };
+    })();
+  </script>
+</body>
+</html>
