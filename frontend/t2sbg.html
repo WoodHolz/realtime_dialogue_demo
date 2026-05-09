@@ -14,10 +14,13 @@
     button:disabled { opacity: 0.6; cursor: not-allowed; }
     .error { color: #c00; }
     .section { margin-top: 1rem; padding-top: 1rem; border-top: 1px solid #eee; }
+    .page-version { color: #888; font-size: 0.85rem; margin: 0.25rem 0 0; }
+    .barge-in-log { color: #a60; font-size: 0.9rem; }
   </style>
 </head>
 <body>
   <h1>芝麻背调证明人访谈（T2S 纯文本 → 语音）</h1>
+  <p class="page-version" id="pageVersion"></p>
   <p style="color:#666; font-size:0.9rem;">
     支持直接以文本形式发起对话，或使用麦克风说话（豆包 ASR 识别后发送给语音对话模型）。
     服务端使用 <code>input_mod: "text"</code>，自动保证流式链路完整性。
@@ -113,6 +116,9 @@
 
   <script>
     (function () {
+      const T2SBG_VOICE_VERSION = '0.0.1';
+      const pageVersionEl = document.getElementById('pageVersion');
+      if (pageVersionEl) pageVersionEl.textContent = 't2sbg-voice v' + T2SBG_VOICE_VERSION;
       const statusEl = document.getElementById('status');
       const modeLabel = document.getElementById('modeLabel');
       const stageLabel = document.getElementById('stageLabel');
@@ -335,6 +341,30 @@
       }
 
       function setStatus(t) { statusEl.textContent = t; }
+
+      function bargeInReasonLabel(msg) {
+        if (msg && msg.reason_label) return String(msg.reason_label);
+        if (msg && msg.reason === 'user_speech') return '用户打断';
+        var s = msg && msg.source;
+        if (s === 'duplug') return '用户打断（VAD）';
+        return '用户打断';
+      }
+
+      function appendTranscriptBargeInLog(msg) {
+        var t = new Date().toISOString().slice(11, 19);
+        var src = (msg && msg.source) ? msg.source : '-';
+        var why = bargeInReasonLabel(msg);
+        var qid = (msg && msg.question_id) ? String(msg.question_id) : '';
+        var parts = ['[' + t + '] 打断', '原因: ' + why, 'TTS 已停止', 'source=' + src];
+        if (qid) parts.push('question_id=' + qid);
+        transcriptEl.appendChild(document.createElement('br'));
+        var line = document.createElement('span');
+        line.className = 'barge-in-log';
+        line.textContent = '— ' + parts.join(' · ') + ' —';
+        transcriptEl.appendChild(line);
+        transcriptEl.appendChild(document.createElement('br'));
+        transcriptEl.scrollTop = transcriptEl.scrollHeight;
+      }
       function updateVadState(provider, state) {
         vadStateEl.textContent = 'provider=' + (provider || '-') + ' state=' + (state || '-');
       }
@@ -946,7 +976,11 @@
               } else if (msg.type === 'barge_in') {
                 ttsSuppressedByBargeIn = true;
                 fadeOutAndStopTTSPlayback(BARGE_IN_FADE_OUT_MS);
-                log('Barge-in: stop current TTS playback');
+                appendTranscriptBargeInLog(msg);
+                log(
+                  'Barge-in: stop TTS · 原因: ' + bargeInReasonLabel(msg) +
+                    ' · source=' + ((msg && msg.source) ? msg.source : '-')
+                );
               } else if (msg.type === 'tts_start') {
                 // New TTS turn starts: allow playback again after prior barge-in suppression.
                 ttsSuppressedByBargeIn = false;

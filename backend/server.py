@@ -1117,7 +1117,15 @@ async def websocket_endpoint(websocket: WebSocket):
             return
         barge_in_flag = True
         last_question_id = question_id or last_question_id
-        send_json({"type": "barge_in", "question_id": question_id})
+        send_json(
+            {
+                "type": "barge_in",
+                "source": "doubao_realtime",
+                "question_id": question_id,
+                "reason": "user_speech",
+                "reason_label": "用户打断（检测到说话）",
+            }
+        )
 
     def on_session_started(dialog_id: str):
         nonlocal dialog_id_latest
@@ -1540,7 +1548,14 @@ async def websocket_endpoint(websocket: WebSocket):
                                             t2s_speech_started_ts = t2s_last_nonidle_ts
                                             # 1) Interrupt TTS immediately on speech start.
                                             barge_in_flag = True
-                                            send_json({"type": "barge_in", "source": "duplug"})
+                                            send_json(
+                                                {
+                                                    "type": "barge_in",
+                                                    "source": "duplug",
+                                                    "reason": "user_speech",
+                                                    "reason_label": "用户打断（检测到说话）",
+                                                }
+                                            )
                                             # 2) Open ASR gate on nonidle.
                                             t2s_asr_gate_open = True
                                             t2s_vad_idle_streak = 0
