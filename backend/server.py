@@ -829,22 +829,29 @@ async def websocket_endpoint(websocket: WebSocket):
         )
         return header + pcm_bytes
 
-    def _send_t2s_debug_preview() -> None:
+    def _send_t2s_debug_preview(
+        *,
+        vad_last_turn_wav_b64: str = "",
+        asr_last_turn_wav_b64: str = "",
+    ) -> None:
         vad_pcm = bytes(t2s_vad_merged_buffer)
         asr_pcm = bytes(t2s_asr_merged_buffer)
         vad_wav_b64 = base64.b64encode(_pcm16le_to_wav_bytes(vad_pcm)).decode("ascii") if vad_pcm else ""
         asr_wav_b64 = base64.b64encode(_pcm16le_to_wav_bytes(asr_pcm)).decode("ascii") if asr_pcm else ""
-        send_json(
-            {
-                "type": "debug_audio_preview",
-                "vad_wav_base64": vad_wav_b64,
-                "asr_wav_base64": asr_wav_b64,
-                "vad_segments": t2s_vad_segments,
-                "asr_segments": t2s_asr_segments,
-                "vad_duration_sec": round(len(vad_pcm) / 2 / 16000, 3),
-                "asr_duration_sec": round(len(asr_pcm) / 2 / 16000, 3),
-            }
-        )
+        payload: dict[str, object] = {
+            "type": "debug_audio_preview",
+            "vad_wav_base64": vad_wav_b64,
+            "asr_wav_base64": asr_wav_b64,
+            "vad_segments": t2s_vad_segments,
+            "asr_segments": t2s_asr_segments,
+            "vad_duration_sec": round(len(vad_pcm) / 2 / 16000, 3),
+            "asr_duration_sec": round(len(asr_pcm) / 2 / 16000, 3),
+        }
+        if vad_last_turn_wav_b64:
+            payload["vad_last_turn_wav_base64"] = vad_last_turn_wav_b64
+        if asr_last_turn_wav_b64:
+            payload["asr_last_turn_wav_base64"] = asr_last_turn_wav_b64
+        send_json(payload)
 
     def on_asr(text: str, is_interim: bool):
         nonlocal auto_followup_waiting_user
@@ -1344,14 +1351,23 @@ async def websocket_endpoint(websocket: WebSocket):
                     }
                 )
             finally:
+                vad_last_turn_wav_b64 = ""
+                asr_last_turn_wav_b64 = ""
                 if t2s_vad_turn_buffer:
+                    snap_v = bytes(t2s_vad_turn_buffer)
+                    vad_last_turn_wav_b64 = base64.b64encode(_pcm16le_to_wav_bytes(snap_v)).decode("ascii")
                     t2s_vad_merged_buffer.extend(t2s_vad_turn_buffer)
                     t2s_vad_segments += 1
                     t2s_vad_turn_buffer.clear()
                 if t2s_asr_capture_buffer:
+                    snap_a = bytes(t2s_asr_capture_buffer)
+                    asr_last_turn_wav_b64 = base64.b64encode(_pcm16le_to_wav_bytes(snap_a)).decode("ascii")
                     t2s_asr_merged_buffer.extend(t2s_asr_capture_buffer)
                     t2s_asr_segments += 1
-                _send_t2s_debug_preview()
+                _send_t2s_debug_preview(
+                    vad_last_turn_wav_b64=vad_last_turn_wav_b64,
+                    asr_last_turn_wav_b64=asr_last_turn_wav_b64,
+                )
                 t2s_voice_active = False
                 send_json(
                     {
