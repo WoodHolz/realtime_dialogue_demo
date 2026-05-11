@@ -10,6 +10,40 @@
 (function () {
   const PARENT_TARGET = document.body.dataset.ttfsParentOrigin || '*';
 
+  /**
+   * Host pages (e.g. t2sbg) may duplicate generic ids like btnStop — use prefixed ids there.
+   * Standalone embed.html keeps legacy ids; resolver tries prefixed first, then legacy.
+   */
+  const TTFS_DOM_IDS = {
+    btnMic: 'ttfs-btn-mic',
+    btnShare: 'ttfs-btn-share',
+    btnStop: 'ttfs-btn-stop',
+    chkVoice: 'ttfs-chk-voice',
+    stateLab: 'ttfs-state-lab',
+    latMs: 'ttfs-lat-ms',
+    labMicT: 'ttfs-lab-mic-t',
+    labPbT: 'ttfs-lab-pb-t',
+    labHang: 'ttfs-lab-hang',
+    rngMic: 'ttfs-rng-mic',
+    rngPb: 'ttfs-rng-pb',
+    rngHang: 'ttfs-rng-hang',
+    waveformCanvasMic: 'ttfs-waveform-mic',
+    waveformCanvasPlayback: 'ttfs-waveform-pb',
+    timelineCanvas: 'ttfs-timeline',
+    panelMedia: 'ttfs-panel-media',
+    keepAlive: 'ttfs-keep-alive',
+    log: 'ttfs-log',
+  };
+
+  function $(legacyId) {
+    const alt = TTFS_DOM_IDS[legacyId];
+    if (alt) {
+      const scoped = document.getElementById(alt);
+      if (scoped) return scoped;
+    }
+    return document.getElementById(legacyId);
+  }
+
   function pm(msg) {
     try {
       if (window.parent && window.parent !== window) {
@@ -18,9 +52,8 @@
     } catch (_) {}
   }
 
-  const $ = (id) => document.getElementById(id);
   const log = (msg, err) => {
-    const el = $('ttfsLog') || $('log');
+    const el = $('log');
     if (!el) return;
     el.textContent = msg;
     el.classList.toggle('err', !!err);
@@ -30,7 +63,7 @@
   const btnShare = $('btnShare');
   const btnStop = $('btnStop');
   const stateLab = $('stateLab');
-  const keepAlive = $('keepAlive') || $('ttfsKeepAlive');
+  const keepAlive = $('keepAlive');
 
   const cvMic = $('waveformCanvasMic');
   const cvPb = $('waveformCanvasPlayback');
@@ -365,7 +398,11 @@
   function loop(tWall) {
     raf = requestAnimationFrame(loop);
     const ac = ctx;
-    if (!ac || ac.state === 'suspended') return;
+    if (!ac) return;
+    if (ac.state === 'suspended') {
+      ac.resume().catch(() => {});
+      return;
+    }
 
     if (lastT == null) lastT = tWall;
     const dtFrame = Math.min(0.05, Math.max(0, (tWall - lastT) / 1000));
