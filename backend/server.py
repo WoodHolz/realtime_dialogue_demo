@@ -419,6 +419,26 @@ def _read_t2sbg_voice_version_from_config() -> str:
     return "0.0.0"
 
 
+_T2SBG_TTFS_SCRIPT_MARKER = '<script src="/static/ttfs-app.js"></script>'
+
+
+def _inline_ttfs_script_into_t2sbg_html(html: str) -> str:
+    """Replace external ttfs script tag with inlined JS.
+
+    Production reverse proxies often forward only /t2sbg-voice and /ws, not /static/*,
+    which leaves TTFS uninitialized (no waveforms). Inlining avoids a second HTTP fetch.
+    """
+    if _T2SBG_TTFS_SCRIPT_MARKER not in html:
+        return html
+    js_path = _ttfs_logger_dir() / "ttfs-app.js"
+    if not js_path.exists():
+        LOG.warning("ttfs-app.js not found at %s; TTFS panel will not work without /static/", js_path)
+        return html
+    js_body = js_path.read_text(encoding="utf-8")
+    js_body = js_body.replace("</script>", "<\\/script>")
+    return html.replace(_T2SBG_TTFS_SCRIPT_MARKER, "<script>\n" + js_body + "\n</script>", 1)
+
+
 @app.get("/")
 async def root():
     return FileResponse(_frontend_dir() / "index.html")
@@ -448,6 +468,7 @@ async def t2sbg_voice_page():
         return HTMLResponse("<p>t2sbg.html not found</p>", status_code=404)
     raw = path.read_text(encoding="utf-8")
     raw = raw.replace("'__T2SBG_VOICE_VERSION__'", json.dumps(_read_t2sbg_voice_version_from_config()))
+    raw = _inline_ttfs_script_into_t2sbg_html(raw)
     return HTMLResponse(raw, media_type="text/html; charset=utf-8")
 
 
