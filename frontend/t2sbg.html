@@ -19,6 +19,73 @@
     details.debug-raw-clips .raw-clips-body { margin-top: 6px; padding-left: 8px; border-left: 2px solid #eee; }
     .page-version { color: #888; font-size: 0.85rem; margin: 0.25rem 0 0; }
     .barge-in-log { color: #a60; font-size: 0.9rem; }
+    .ttfs-hint { font-size: 12px; color: #666; margin: 6px 0 8px; }
+    /* TTFS inlined (same document as host) */
+    .ttfs-inline-root {
+      --ttfs-bg: #0f1218;
+      --ttfs-panel: #171b24;
+      --ttfs-text: #e8ecf4;
+      --ttfs-muted: #8b93a7;
+      --ttfs-grid: #2a3142;
+      --ttfs-accent: #fbbf24;
+      --ttfs-danger: #f87171;
+      border: 1px solid #ddd;
+      border-radius: 10px;
+      overflow: hidden;
+      background: var(--ttfs-bg);
+      color: var(--ttfs-text);
+      font-family: ui-sans-serif, system-ui, "Segoe UI", Roboto, "PingFang SC", sans-serif;
+      font-size: 13px;
+      line-height: 1.35;
+      max-width: 720px;
+    }
+    .ttfs-inline-root * { box-sizing: border-box; }
+    .ttfs-inline-root .embed-root { padding: 8px; display: flex; flex-direction: column; gap: 8px; max-width: 100%; }
+    .ttfs-inline-root .controls {
+      display: flex; flex-wrap: wrap; gap: 6px; align-items: center;
+      background: var(--ttfs-panel); padding: 8px; border-radius: 8px; border: 1px solid var(--ttfs-grid);
+    }
+    .ttfs-inline-root button {
+      border: none; border-radius: 6px; padding: 0.4rem 0.65rem; font-weight: 600; cursor: pointer; font-size: 0.78rem;
+    }
+    .ttfs-inline-root button.primary { background: linear-gradient(180deg, #22d3ee 0%, #06b6d4 100%); color: #041016; }
+    .ttfs-inline-root button.secondary { background: #3730a3; color: #eef; }
+    .ttfs-inline-root button.ghost { background: #252b38; color: var(--ttfs-text); border: 1px solid var(--ttfs-grid); }
+    .ttfs-inline-root button:disabled { opacity: 0.45; cursor: not-allowed; }
+    .ttfs-inline-root label.chk-inline {
+      display: flex; align-items: center; gap: 0.35rem; font-size: 0.72rem; color: var(--ttfs-muted); cursor: pointer; user-select: none;
+    }
+    .ttfs-inline-root label.chk-inline input { accent-color: #5eead4; width: 0.95rem; height: 0.95rem; }
+    .ttfs-inline-root .metrics {
+      display: flex; flex-wrap: wrap; gap: 8px; align-items: center;
+      background: var(--ttfs-panel); padding: 8px; border-radius: 8px; border: 1px solid var(--ttfs-grid);
+    }
+    .ttfs-inline-root .big { font-size: 1.35rem; font-weight: 750; font-variant-numeric: tabular-nums; color: var(--ttfs-accent); }
+    .ttfs-inline-root .ttfs-hint-inline { font-size: 0.72rem; color: var(--ttfs-muted); }
+    .ttfs-inline-root .knobs { display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: center; }
+    .ttfs-inline-root .knobs label { font-size: 0.62rem; color: var(--ttfs-muted); display: flex; flex-direction: column; gap: 2px; }
+    .ttfs-inline-root .knobs input[type="range"] { width: 100px; }
+    .ttfs-inline-root .main { display: flex; flex-wrap: wrap; gap: 8px; align-items: flex-start; }
+    .ttfs-inline-root #panelMedia.panel-media {
+      display: flex; gap: 8px; align-items: flex-end; padding: 8px;
+      background: var(--ttfs-panel); border: 1px solid var(--ttfs-grid); border-radius: 8px;
+    }
+    .ttfs-inline-root .strip-wrap { display: flex; flex-direction: column; align-items: center; gap: 4px; }
+    .ttfs-inline-root .strip-label { font-size: 0.58rem; letter-spacing: 0.1em; text-transform: uppercase; color: var(--ttfs-muted); }
+    .ttfs-inline-root canvas.waveformCanvas {
+      display: block; width: 88px; height: 160px; border-radius: 6px; background: #0a0c10; border: 1px solid #1c2230;
+    }
+    .ttfs-inline-root .timeline-wrap {
+      flex: 1 1 200px; min-width: 180px; background: var(--ttfs-panel); border: 1px solid var(--ttfs-grid); border-radius: 8px; padding: 8px;
+    }
+    .ttfs-inline-root .timeline-wrap h2 {
+      margin: 0 0 6px; font-size: 0.62rem; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: var(--ttfs-muted);
+    }
+    .ttfs-inline-root canvas#timelineCanvas {
+      display: block; width: 100%; height: 140px; border-radius: 6px; background: #0a0c10; border: 1px solid #1c2230;
+    }
+    .ttfs-inline-root #ttfsLog { font-family: ui-monospace, monospace; font-size: 0.68rem; color: var(--ttfs-muted); min-height: 1rem; margin: 0; }
+    .ttfs-inline-root #ttfsLog.err { color: var(--ttfs-danger); }
   </style>
 </head>
 <body>
@@ -27,6 +94,7 @@
   <p style="color:#666; font-size:0.9rem;">
     支持直接以文本形式发起对话，或使用麦克风说话（豆包 ASR 识别后发送给语音对话模型）。
     服务端使用 <code>input_mod: "text"</code>，自动保证流式链路完整性。
+    TTFS 延迟面板已<strong>内联在本页</strong>：点 <strong>Start Session</strong> 时会自动请求 TTFS 麦克风（也可手动点 Mic）；AI TTS 自动接入 Playback 测光。停止会话会 <code>TTFS.stop()</code>。
   </p>
   <div class="status" id="status">点击 Start 建立会话，然后输入文本或语音。</div>
   <div class="status">
@@ -37,6 +105,58 @@
   <div class="controls">
     <button id="btnStart">Start Session</button>
     <button id="btnStop" disabled>Stop</button>
+  </div>
+
+  <div class="section">
+    <strong>TTFS 麦克风 / 延迟面板（本页内联）</strong>
+    <p class="ttfs-hint">
+      <strong>Start Session</strong> 会自动调用 <code>TTFS.startMic()</code> 并 <code>cloneMicForConsumer()</code>。亦可手动点 Mic。端到端延迟 = 本轮麦克风 utterance 结束（Hang ms 静默）→ 下一轮扬声器输出<strong>起始</strong>（Playback 能量上升沿）；Stop 会清空读数。
+    </p>
+    <div class="ttfs-inline-root">
+      <div class="embed-root">
+        <div class="controls">
+          <button type="button" class="primary" id="btnMic">Mic</button>
+          <button type="button" class="secondary" id="btnShare">Playback</button>
+          <button type="button" class="ghost" id="btnStop">Stop</button>
+          <label class="chk-inline">
+            <input type="checkbox" id="chkVoice" /> DSP
+          </label>
+          <span class="ttfs-hint-inline" id="stateLab">idle</span>
+        </div>
+        <div class="metrics">
+          <div>
+            <div class="ttfs-hint-inline">端到端延迟</div>
+            <div class="big" id="latMs">—</div>
+            <div class="ttfs-hint-inline" style="margin-top:4px;max-width:14rem;line-height:1.3;font-size:0.65rem;">
+              麦克风声学结束 → 扬声器下一次起声
+            </div>
+          </div>
+          <div class="knobs">
+            <label>Mic <span id="labMicT"></span><input type="range" id="rngMic" min="0.002" max="0.08" step="0.001" value="0.018" /></label>
+            <label>Pb <span id="labPbT"></span><input type="range" id="rngPb" min="0.002" max="0.12" step="0.001" value="0.012" /></label>
+            <label>Hang ms <span id="labHang"></span><input type="range" id="rngHang" min="80" max="900" step="10" value="320" /></label>
+          </div>
+        </div>
+        <div class="main">
+          <div id="panelMedia" class="panel-media">
+            <div class="strip-wrap">
+              <span class="strip-label">Mic</span>
+              <canvas id="waveformCanvasMic" class="waveformCanvas" width="117" height="218"></canvas>
+            </div>
+            <div class="strip-wrap">
+              <span class="strip-label">PB</span>
+              <canvas id="waveformCanvasPlayback" class="waveformCanvas" width="117" height="218"></canvas>
+            </div>
+          </div>
+          <div class="timeline-wrap">
+            <h2>Timeline</h2>
+            <canvas id="timelineCanvas" width="640" height="200"></canvas>
+          </div>
+        </div>
+        <p id="ttfsLog"></p>
+      </div>
+      <video id="ttfsKeepAlive" autoplay muted playsinline style="position:absolute;width:1px;height:1px;opacity:0;pointer-events:none"></video>
+    </div>
   </div>
 
   <div class="section">
@@ -132,6 +252,7 @@
     </div>
   </div>
 
+  <script src="/static/ttfs-app.js"></script>
   <script>
     (function () {
       const T2SBG_VOICE_VERSION = '__T2SBG_VOICE_VERSION__';
@@ -164,6 +285,13 @@
       const serverLogEl = document.getElementById('serverLog');
       const btnMonitorSync = document.getElementById('btnMonitorSync');
       const monitorSyncHint = document.getElementById('monitorSyncHint');
+
+      window.addEventListener('ttfs-mic-ready', function () {
+        voiceStatusEl.textContent = 'TTFS 麦克风已就绪，可点 Start Session';
+      });
+      window.addEventListener('ttfs-mic-stopped', function () {
+        if (!voiceCapturing && (!ws || ws.readyState !== WebSocket.OPEN)) voiceStatusEl.textContent = '';
+      });
 
       let ws = null;
       let micAudioContext = null;
@@ -536,6 +664,19 @@
         return ttsAudioContext;
       }
 
+      /** Routes TTS into TTFS Playback analyser without screen capture. */
+      function ensureTtsPlaybackTapDest(ctx) {
+        if (!ctx._ttfsPlaybackTapDest) {
+          ctx._ttfsPlaybackTapDest = ctx.createMediaStreamDestination();
+          try {
+            if (window.TTFS && typeof TTFS.attachPlaybackMediaStream === 'function') {
+              TTFS.attachPlaybackMediaStream(ctx._ttfsPlaybackTapDest.stream);
+            }
+          } catch (err) { /* ignore */ }
+        }
+        return ctx._ttfsPlaybackTapDest;
+      }
+
       function openProcessedMic() {
         return navigator.mediaDevices.getUserMedia({
           audio: {
@@ -546,6 +687,46 @@
           },
           video: false,
         });
+      }
+
+      function tryTtfsCloneMic() {
+        try {
+          const T = window.TTFS;
+          if (!T || typeof T.cloneMicForConsumer !== 'function') return null;
+          const s = T.cloneMicForConsumer();
+          if (s && s.getAudioTracks && s.getAudioTracks().length) return s;
+          return null;
+        } catch (err) {
+          return null;
+        }
+      }
+
+      /** Auto TTFS.startMic() then clone; fallback browser mic. */
+      function acquireInterviewMic() {
+        function pickStream() {
+          const cloned = tryTtfsCloneMic();
+          if (cloned) {
+            log('[mic] TTFS cloneMicForConsumer()');
+            return Promise.resolve(cloned);
+          }
+          log('[mic] TTFS 无克隆流 — 回退 getUserMedia');
+          return openProcessedMic();
+        }
+        if (window.TTFS && typeof TTFS.startMic === 'function') {
+          return TTFS.startMic()
+            .then(pickStream)
+            .catch(function (err) {
+              log('TTFS.startMic 失败，回退 getUserMedia: ' + (err && err.message ? err.message : err), true);
+              return openProcessedMic();
+            });
+        }
+        return pickStream();
+      }
+
+      function stopTtfsEmbedCapture() {
+        try {
+          if (window.TTFS && typeof TTFS.stop === 'function') TTFS.stop();
+        } catch (e) { /* ignore */ }
       }
 
       function pcmS16ToFloat32(pcmS16) {
@@ -600,6 +781,7 @@
         const gainNode = ctx.createGain();
         gainNode.gain.setValueAtTime(TTS_OUTPUT_GAIN, ctx.currentTime);
         src.connect(gainNode);
+        gainNode.connect(ensureTtsPlaybackTapDest(ctx));
         gainNode.connect(ctx.destination);
         activeTtsSource = src;
         activeTtsGain = gainNode;
@@ -635,6 +817,11 @@
           try { activeTtsSource.stop(); } catch (e) {}
           activeTtsSource = null;
         }
+        try {
+          if (window.TTFS && typeof TTFS.detachPlaybackMediaStream === 'function') {
+            TTFS.detachPlaybackMediaStream();
+          }
+        } catch (e) { /* ignore */ }
         if (ttsAudioContext) {
           try { ttsAudioContext.close(); } catch (e) {}
           ttsAudioContext = null;
@@ -1242,7 +1429,7 @@
         resetAiStreamingState();
         flushTTSQueue();
         resetRecordingDebugCache();
-        openProcessedMic()
+        acquireInterviewMic()
           .then(function (stream) {
             mediaStream = stream;
             try {
@@ -1263,11 +1450,12 @@
       };
 
       btnStop.onclick = function () {
+        stopVoiceCapture();
         if (mediaStream) {
           mediaStream.getTracks().forEach(function (t) { t.stop(); });
           mediaStream = null;
         }
-        stopVoiceCapture();
+        stopTtfsEmbedCapture();
         if (ws) { ws.close(); ws = null; }
         updateVadState('-', '-');
         hardStopTTSPlayback();

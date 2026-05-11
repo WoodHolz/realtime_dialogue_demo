@@ -400,6 +400,11 @@ def _repo_root() -> Path:
     return Path(__file__).resolve().parent.parent
 
 
+def _ttfs_logger_dir() -> Path:
+    """TTFS latency logger embed widget (iframe + shared ttfs-app.js)."""
+    return _repo_root() / "ttfs_logger"
+
+
 def _read_t2sbg_voice_version_from_config() -> str:
     """Expose frontend/t2sbg.html build label from root config.json (safe for clients)."""
     cfg_path = _repo_root() / "config.json"
@@ -462,6 +467,24 @@ async def t2sbg_monitor_page():
     if not path.exists():
         return HTMLResponse("<p>t2sbg_monitor.html not found</p>", status_code=404)
     return FileResponse(path)
+
+
+@app.get("/embed.html")
+async def ttfs_embed_page():
+    """TTFS latency widget — same-origin iframe for t2sbg-voice and other demos."""
+    path = _ttfs_logger_dir() / "embed.html"
+    if not path.exists():
+        return HTMLResponse("<p>embed.html not found</p>", status_code=404)
+    return FileResponse(path, media_type="text/html; charset=utf-8")
+
+
+@app.get("/static/ttfs-app.js")
+async def ttfs_app_js():
+    """Shared TTFS script referenced by embed.html."""
+    path = _ttfs_logger_dir() / "ttfs-app.js"
+    if not path.exists():
+        return HTMLResponse("// ttfs-app.js not found\n", status_code=404, media_type="application/javascript")
+    return FileResponse(path, media_type="application/javascript; charset=utf-8")
 
 
 @app.websocket("/ws/t2sbg-monitor")
