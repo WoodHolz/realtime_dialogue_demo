@@ -38,8 +38,12 @@
     "asr_app_id": "",
     "asr_access_key": ""
   },
+  "omni": {
+    "description": "Qwen Omni (/t2sbg-omni): follows vad.provider for local Smart Turn; override with OMNI_VAD=server.",
+    "use_local_smart_turn": true
+  },
   "vad": {
-    "description": "VAD provider: smart_turn_v3 (default) or duplug. Env: VAD_PROVIDER, SMART_TURN_*.",
+    "description": "VAD provider: smart_turn_v3 (default) or duplug. Used by t2sbg and t2sbg-omni. Env: VAD_PROVIDER, SMART_TURN_*.",
     "provider": "smart_turn_v3",
     "smart_turn": {
       "model_path": null,
@@ -66,5 +70,6 @@
     "t2s_min_turn_gap_ms": 300,
     "t2s_tts_barge_suppress_ms": 2000
   },
-  "t2sbg_voice_version": "0.0.5"
+  "t2sbg_voice_version": "0.0.5",
+  "omni_voice_version": "0.0.6"
 }

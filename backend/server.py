@@ -400,18 +400,26 @@ def _ttfs_logger_dir() -> Path:
     return _repo_root() / "ttfs_logger"
 
 
-def _read_t2sbg_voice_version_from_config() -> str:
-    """Expose frontend/t2sbg.html build label from root config.json (safe for clients)."""
+def _read_config_version(key: str, *, default: str = "0.0.0") -> str:
+    """Read a version string from root config.json (safe for clients)."""
     cfg_path = _repo_root() / "config.json"
     try:
         with cfg_path.open("r", encoding="utf-8") as f:
             data = json.load(f)
-        v = data.get("t2sbg_voice_version")
+        v = data.get(key)
         if isinstance(v, str) and v.strip():
             return v.strip()
     except Exception:
         pass
-    return "0.0.0"
+    return default
+
+
+def _read_t2sbg_voice_version_from_config() -> str:
+    return _read_config_version("t2sbg_voice_version")
+
+
+def _read_omni_voice_version_from_config() -> str:
+    return _read_config_version("omni_voice_version")
 
 
 _T2SBG_TTFS_SCRIPT_MARKER = '<script src="/static/ttfs-app.js"></script>'
@@ -469,11 +477,14 @@ async def t2sbg_voice_page():
 
 @app.get("/t2sbg-omni")
 async def t2sbg_omni_page():
-    """Omni 直连演示页（内置 VAD，不走本地/后端 VAD）。"""
+    """Omni 直连演示页（Qwen Omni；默认 Smart Turn v3 本地判停 + manual commit）。"""
     path = _frontend_dir() / "t2sbg_omni.html"
     if not path.exists():
         return HTMLResponse("<p>t2sbg_omni.html not found</p>", status_code=404)
-    return FileResponse(path)
+    raw = path.read_text(encoding="utf-8")
+    raw = raw.replace("'__OMNI_VOICE_VERSION__'", json.dumps(_read_omni_voice_version_from_config()))
+    raw = _inline_ttfs_script_into_t2sbg_html(raw)
+    return HTMLResponse(raw, media_type="text/html; charset=utf-8")
 
 
 @app.get("/t2sbg-monitor")
