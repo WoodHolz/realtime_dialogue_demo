@@ -48,32 +48,27 @@ from backend.asr_client import (
     CHUNK_BYTES as ASR_CHUNK_BYTES,
     asr_error_hint,
 )
-from backend.duplug_vad_client import DuplugVadSession, duplug_enabled, duplug_server_url
-from backend.duplug_vad_local import (
-    DuplugLocalVadManager,
-    duplug_local_config_path,
-    duplug_local_enabled,
+from backend.duplug_vad_local import duplug_local_config_path, duplug_local_enabled
+from backend.vad import (
+    SEMANTIC_VAD_SOURCES,
+    VadEvent,
+    create_vad_backend,
+    shutdown_duplug_local_manager,
+    vad_provider,
+    vad_status_on_init_failure,
 )
+from backend.vad.duplug_backend import init_duplug_local_manager
 
 LOG = logging.getLogger(__name__)
-
-_LOCAL_DUPLUG_MANAGER: DuplugLocalVadManager | None = None
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global _LOCAL_DUPLUG_MANAGER
-    if duplug_local_enabled():
-        try:
-            mgr = DuplugLocalVadManager(config_path=duplug_local_config_path())
-            mgr.load_once()
-            _LOCAL_DUPLUG_MANAGER = mgr
-        except Exception as exc:  # noqa: BLE001
-            LOG.warning("Duplug local VAD init failed: %s", exc)
-            _LOCAL_DUPLUG_MANAGER = None
+    if vad_provider() == "duplug" and duplug_local_enabled():
+        init_duplug_local_manager(duplug_local_config_path())
     _startup_t2sbg_monitor_notice()
     yield
-    _LOCAL_DUPLUG_MANAGER = None
+    shutdown_duplug_local_manager()
 
 
 app = FastAPI(title="AI Interviewer Realtime Voice Demo", lifespan=lifespan)
@@ -630,9 +625,8 @@ async def websocket_endpoint(websocket: WebSocket):
     t2s_vad_segments = 0
     t2s_asr_segments = 0
     asr_client: VolcAsrClient | None = None
-    # t2s + Duplug VAD: external semantic VAD for barge-in & EoU
-    t2s_duplug: DuplugVadSession | None = None
-    t2s_duplug_local_sid: str = ""
+    # t2s + pluggable VAD (Smart Turn v3 / Duplug) for barge-in & EoU
+    t2s_vad = None
     t2s_voice_active = False
     t2s_speech_started = False
     t2s_eou_fired = False
@@ -735,19 +729,19 @@ async def websocket_endpoint(websocket: WebSocket):
             t2s_speak_grace_task.cancel()
         t2s_speak_grace_task = None
 
-    def _schedule_t2s_speak_grace_complete() -> None:
-        """On Duplug `speak`, wait grace_ms then finalize ASR; cancel on next `nonidle`."""
+    def _schedule_t2s_speak_grace_complete(*, source: str) -> None:
+        """On semantic turn-end (`speak`), wait grace_ms then finalize ASR; cancel on next speech."""
         nonlocal t2s_speak_grace_task
         _cancel_t2s_speak_grace()
         if t2s_speak_grace_ms <= 0:
-            asyncio.create_task(_t2s_trigger_complete(source="duplug"))
+            asyncio.create_task(_t2s_trigger_complete(source=source))
             return
 
         async def _grace_wait() -> None:
             me = asyncio.current_task()
             try:
                 await asyncio.sleep(t2s_speak_grace_ms / 1000.0)
-                await _t2s_trigger_complete(source="duplug")
+                await _t2s_trigger_complete(source=source)
             except asyncio.CancelledError:
                 raise
             finally:
@@ -954,12 +948,88 @@ async def websocket_endpoint(websocket: WebSocket):
         send_json(payload)
 
     def _t2s_tts_barge_suppress_active() -> bool:
-        """首帧 TTS 发出后的保护窗内为 True：不触发 barge_in / 不把 Duplug nonidle 当用户开说。"""
+        """首帧 TTS 发出后的保护窗内为 True：不触发 barge_in / 不把 VAD speech_start 当用户开说。"""
         if mode != "t2s" or T2S_TTS_BARGE_SUPPRESS_MS <= 0:
             return False
         if t2s_tts_first_audio_mono <= 0:
             return False
         return (time.monotonic() - t2s_tts_first_audio_mono) * 1000.0 < float(T2S_TTS_BARGE_SUPPRESS_MS)
+
+    async def _apply_t2s_vad_event(ev: VadEvent) -> bool:
+        """
+        Map VAD module events to t2s turn logic.
+        Returns True if the current PCM chunk was already forwarded via pre-roll flush.
+        """
+        nonlocal barge_in_flag, t2s_speech_started, t2s_speech_started_ts, t2s_last_nonidle_ts
+        nonlocal t2s_asr_gate_open, t2s_vad_idle_streak, t2s_asr_stream_buffer, t2s_pcm_buffer
+        nonlocal t2s_asr_capture_buffer, t2s_pre_roll_chunks
+
+        payload: dict[str, object] = {
+            "type": "vad_state",
+            "provider": ev.provider,
+            "state": ev.state,
+        }
+        if ev.meta:
+            payload.update(ev.meta)
+        send_json(payload)
+
+        if ev.kind == "speech_start":
+            _cancel_t2s_speak_grace()
+            t2s_last_nonidle_ts = time.monotonic()
+            if not t2s_speech_started:
+                if _t2s_tts_barge_suppress_active():
+                    LOG.info(
+                        "t2s VAD speech_start ignored (TTS lead-in %sms)",
+                        T2S_TTS_BARGE_SUPPRESS_MS,
+                    )
+                    push_server_log(
+                        "info",
+                        "VAD speech_start ignored (TTS lead-in window)",
+                        ms=T2S_TTS_BARGE_SUPPRESS_MS,
+                    )
+                    return False
+                t2s_speech_started = True
+                t2s_speech_started_ts = t2s_last_nonidle_ts
+                barge_in_flag = True
+                send_json(
+                    {
+                        "type": "barge_in",
+                        "source": ev.provider,
+                        "reason": "user_speech",
+                        "reason_label": "用户打断（检测到说话）",
+                    }
+                )
+                t2s_asr_gate_open = True
+                t2s_vad_idle_streak = 0
+                if t2s_pre_roll_chunks:
+                    if t2s_asr_streaming:
+                        for pr in list(t2s_pre_roll_chunks):
+                            t2s_asr_stream_buffer.extend(pr)
+                            t2s_asr_capture_buffer.extend(pr)
+                        while len(t2s_asr_stream_buffer) >= ASR_CHUNK_BYTES:
+                            to_send = bytes(t2s_asr_stream_buffer[:ASR_CHUNK_BYTES])
+                            del t2s_asr_stream_buffer[:ASR_CHUNK_BYTES]
+                            await t2s_asr_streaming.send_audio(to_send, is_last=False)
+                            _touch_t2s_asr_real_send()
+                    else:
+                        for pr in list(t2s_pre_roll_chunks):
+                            t2s_pcm_buffer.extend(pr)
+                            t2s_asr_capture_buffer.extend(pr)
+                    t2s_pre_roll_chunks.clear()
+                    return True
+            else:
+                t2s_vad_idle_streak = 0
+        elif ev.kind == "speech_continue":
+            _cancel_t2s_speak_grace()
+            t2s_vad_idle_streak = 0
+        elif ev.kind == "turn_end_candidate":
+            _schedule_t2s_speak_grace_complete(source=ev.provider)
+        elif ev.kind == "silence":
+            if t2s_speech_started and t2s_idle4_complete_enabled:
+                t2s_vad_idle_streak += 1
+                if t2s_vad_idle_streak >= 4:
+                    asyncio.create_task(_t2s_trigger_complete(source="idle4"))
+        return False
 
     def _t2s_append_followup_to_asr_text(asr_text: str, follow_q: str) -> str:
         """单条 501：在 ASR 文本末尾追加追问系统指令（不另发第二条 501）。"""
@@ -1374,7 +1444,7 @@ async def websocket_endpoint(websocket: WebSocket):
             return
         if not t2s_asr_streaming and not t2s_pcm_buffer:
             return
-        if source == "duplug":
+        if source in SEMANTIC_VAD_SOURCES:
             now = time.monotonic()
             if t2s_speech_started_ts > 0 and (now - t2s_speech_started_ts) * 1000.0 < t2s_min_speech_ms:
                 return
@@ -1731,8 +1801,7 @@ async def websocket_endpoint(websocket: WebSocket):
                         if t2s_eou_fired:
                             continue
 
-                        # Duplug semantic VAD (t2s only)
-                        st = None
+                        # Pluggable semantic VAD (t2s only)
                         chunk_forwarded_by_preroll = False
                         if t2s_voice_active and not t2s_eou_fired:
                             t2s_vad_turn_buffer.extend(ch)
@@ -1741,73 +1810,12 @@ async def websocket_endpoint(websocket: WebSocket):
                                     t2s_debug_vad_file.write(ch)
                                 except Exception:
                                     pass
-                            # Keep a small pre-roll buffer; flushed into ASR once speech starts.
                             t2s_pre_roll_chunks.append(ch)
-                            if _LOCAL_DUPLUG_MANAGER is not None and t2s_duplug_local_sid:
-                                st = _LOCAL_DUPLUG_MANAGER.feed_pcm_s16le_16k(t2s_duplug_local_sid, ch)
-                            elif t2s_duplug is not None:
-                                st = await t2s_duplug.feed_pcm_s16le_16k(ch)
-                            if st is not None:
-                                send_json({"type": "vad_state", "provider": "duplug", "state": st.state})
-                                if st.state == "nonidle":
-                                    _cancel_t2s_speak_grace()
-                                    t2s_last_nonidle_ts = time.monotonic()
-                                    if not t2s_speech_started:
-                                        if _t2s_tts_barge_suppress_active():
-                                            LOG.info(
-                                                "t2s Duplug nonidle ignored (TTS lead-in %sms)",
-                                                T2S_TTS_BARGE_SUPPRESS_MS,
-                                            )
-                                            push_server_log(
-                                                "info",
-                                                "Duplug nonidle ignored (TTS lead-in window)",
-                                                ms=T2S_TTS_BARGE_SUPPRESS_MS,
-                                            )
-                                        else:
-                                            t2s_speech_started = True
-                                            t2s_speech_started_ts = t2s_last_nonidle_ts
-                                            # 1) Interrupt TTS immediately on speech start.
-                                            barge_in_flag = True
-                                            send_json(
-                                                {
-                                                    "type": "barge_in",
-                                                    "source": "duplug",
-                                                    "reason": "user_speech",
-                                                    "reason_label": "用户打断（检测到说话）",
-                                                }
-                                            )
-                                            # 2) Open ASR gate on nonidle.
-                                            t2s_asr_gate_open = True
-                                            t2s_vad_idle_streak = 0
-                                            # 3) Flush pre-roll into ASR so we don't cut initial phonemes.
-                                            if t2s_pre_roll_chunks:
-                                                if t2s_asr_streaming:
-                                                    for pr in list(t2s_pre_roll_chunks):
-                                                        t2s_asr_stream_buffer.extend(pr)
-                                                        t2s_asr_capture_buffer.extend(pr)
-                                                    while len(t2s_asr_stream_buffer) >= ASR_CHUNK_BYTES:
-                                                        to_send = bytes(t2s_asr_stream_buffer[:ASR_CHUNK_BYTES])
-                                                        del t2s_asr_stream_buffer[:ASR_CHUNK_BYTES]
-                                                        await t2s_asr_streaming.send_audio(to_send, is_last=False)
-                                                        _touch_t2s_asr_real_send()
-                                                else:
-                                                    for pr in list(t2s_pre_roll_chunks):
-                                                        t2s_pcm_buffer.extend(pr)
-                                                        t2s_asr_capture_buffer.extend(pr)
-                                                t2s_pre_roll_chunks.clear()
-                                                # Current `ch` is part of pre-roll and has been forwarded.
-                                                chunk_forwarded_by_preroll = True
-                                    else:
-                                        # Continued speech after a tentative `speak`: keep ASR open.
-                                        t2s_vad_idle_streak = 0
-                                elif st.state == "speak":
-                                    _schedule_t2s_speak_grace_complete()
-                                elif st.state == "idle":
-                                    # Trigger completion after 4 consecutive idle states post-speech.
-                                    if t2s_speech_started and t2s_idle4_complete_enabled:
-                                        t2s_vad_idle_streak += 1
-                                        if t2s_vad_idle_streak >= 4:
-                                            asyncio.create_task(_t2s_trigger_complete(source="idle4"))
+                            if t2s_vad is not None:
+                                vad_events = await t2s_vad.feed_pcm_s16le_16k(ch)
+                                for vad_ev in vad_events:
+                                    if await _apply_t2s_vad_event(vad_ev):
+                                        chunk_forwarded_by_preroll = True
 
                         # Gate ASR: only forward audio after nonidle.
                         if (
@@ -1936,60 +1944,33 @@ async def websocket_endpoint(websocket: WebSocket):
                         t2s_vad_turn_buffer.clear()
                         _close_t2s_debug_files()
                         _open_t2s_debug_files_for_turn()
-                        t2s_duplug_local_sid = uuid.uuid4().hex
-
-                        if _LOCAL_DUPLUG_MANAGER is not None:
+                        t2s_vad = create_vad_backend()
+                        if t2s_vad is not None:
                             try:
-                                _LOCAL_DUPLUG_MANAGER.ensure_session(t2s_duplug_local_sid)
-                                send_json(
-                                    {
-                                        "type": "vad_status",
-                                        "provider": "duplug",
-                                        "enabled": True,
-                                        "mode": "local",
-                                        "config_path": duplug_local_config_path(),
-                                    }
-                                )
+                                vad_status = await t2s_vad.start_session(uuid.uuid4().hex)
+                                send_json({"type": "vad_status", **vad_status})
                             except Exception as e:
-                                LOG.warning("Duplug local init failed: %s", e)
-                                t2s_duplug_local_sid = ""
+                                LOG.warning("VAD start_session failed: %s", e)
+                                push_server_log("warning", f"VAD start_session failed: {e}")
+                                provider = getattr(t2s_vad, "provider", vad_provider())
+                                await t2s_vad.close_session()
+                                t2s_vad = None
                                 send_json(
                                     {
                                         "type": "vad_status",
-                                        "provider": "duplug",
-                                        "enabled": False,
-                                        "mode": "local",
-                                        "error": str(e),
+                                        **vad_status_on_init_failure(provider, str(e)),
                                     }
                                 )
-                        elif duplug_enabled():
-                            try:
-                                if t2s_duplug is None:
-                                    t2s_duplug = DuplugVadSession(server_url=duplug_server_url())
-                                else:
-                                    t2s_duplug.session_id = uuid.uuid4().hex
-                                await t2s_duplug.connect()
-                                send_json(
-                                    {
-                                        "type": "vad_status",
-                                        "provider": "duplug",
-                                        "enabled": True,
-                                        "mode": "remote",
-                                        "server_url": duplug_server_url(),
-                                    }
-                                )
-                            except Exception as e:
-                                LOG.warning("Duplug connect failed: %s", e)
-                                push_server_log("warning", f"Duplug connect failed: {e}")
-                                send_json(
-                                    {
-                                        "type": "vad_status",
-                                        "provider": "duplug",
-                                        "enabled": False,
-                                        "mode": "remote",
-                                        "error": str(e),
-                                    }
-                                )
+                        else:
+                            send_json(
+                                {
+                                    "type": "vad_status",
+                                    **vad_status_on_init_failure(
+                                        vad_provider(),
+                                        "VAD backend unavailable (check provider / dependencies)",
+                                    ),
+                                }
+                            )
 
                         async def _on_asr_partial(text: str, is_interim: bool) -> None:
                             send_json({"type": "asr", "text": text, "is_interim": is_interim})
@@ -2108,14 +2089,9 @@ async def websocket_endpoint(websocket: WebSocket):
             await _cleanup_t2s_on_ws_close()
         except Exception as exc:
             LOG.debug("t2s ASR cleanup on disconnect: %s", exc)
-        if _LOCAL_DUPLUG_MANAGER is not None and t2s_duplug_local_sid:
+        if t2s_vad is not None:
             try:
-                _LOCAL_DUPLUG_MANAGER.close_session(t2s_duplug_local_sid)
-            except Exception:
-                pass
-        if t2s_duplug is not None:
-            try:
-                await t2s_duplug.close()
+                await t2s_vad.close_session()
             except Exception:
                 pass
         _close_t2s_debug_files()

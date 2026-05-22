@@ -39,7 +39,14 @@
     "asr_access_key": ""
   },
   "vad": {
-    "description": "Duplug VAD: use DUPLUG_VAD_ENABLED and DUPLUG_VAD_URL in .env (see .env.example).",
+    "description": "VAD provider: smart_turn_v3 (default) or duplug. Env: VAD_PROVIDER, SMART_TURN_*.",
+    "provider": "smart_turn_v3",
+    "smart_turn": {
+      "model_path": null,
+      "cpu_count": 1,
+      "silero_stop_secs": 0.2,
+      "silero_confidence": 0.7
+    },
     "duplug_enabled": false,
     "duplug_url": ""
   },

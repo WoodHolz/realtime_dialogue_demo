@@ -185,7 +185,7 @@
     <strong>录音调试预览（后端合并）</strong>
     <button type="button" id="btnMonitorSync" disabled style="margin-left:8px;">同步到监控页</button>
     <span id="monitorSyncHint" style="font-size:12px;color:#888;margin-left:8px;"></span>
-    <p style="font-size:12px; color:#666;">链路：Browser 上行音频 → Backend →（Duplug VAD + ASR）。下方主播放器是<strong>跨轮合并</strong>后的 WAV；折叠里是<strong>每一轮单独</strong>的录音。</p>
+    <p style="font-size:12px; color:#666;">链路：Browser 上行音频 → Backend →（Smart Turn v3 + ASR）。下方主播放器是<strong>跨轮合并</strong>后的 WAV；折叠里是<strong>每一轮单独</strong>的录音。</p>
     <div style="margin-top:8px;">
       <div style="margin-bottom:10px;">
         <div style="font-size:12px; color:#666; margin-bottom:4px;">给 VAD 的录音（merged）</div>
@@ -793,7 +793,7 @@
         if (msg && msg.reason_label) return String(msg.reason_label);
         if (msg && msg.reason === 'user_speech') return '用户打断';
         var s = msg && msg.source;
-        if (s === 'duplug') return '用户打断（VAD）';
+        if (s === 'duplug' || s === 'smart_turn_v3') return '用户打断（VAD）';
         return '用户打断';
       }
 
@@ -1486,7 +1486,7 @@
                   logStageLatency('VAD 判停', Date.now() - tsVadVoiceInputStartSent, 'voice_input_start → voice_input_complete_suggested（无首帧 PCM 时间戳）· source=' + (msg.source || '-'));
                 }
                 tsAsrTrigger = Date.now();
-                // Server-side VAD (e.g. Duplug) decided to complete; stop sending mic audio ASAP.
+                // Server-side VAD decided to complete; stop sending mic audio ASAP.
                 stopVoiceCapture();
                 btnVoiceStart.disabled = false;
                 btnVoiceStop.disabled = true;
@@ -1542,8 +1542,8 @@
                 voiceE2eMark('tts_start');
                 // New TTS turn starts: allow playback again after prior barge-in suppression.
                 ttsSuppressedByBargeIn = false;
-                // Keep mic upstream alive during AI playback so server-side Duplug can detect
-                // user speech ("nonidle") and trigger barge-in immediately.
+                // Keep mic upstream alive during AI playback so server-side VAD can detect
+                // user speech and trigger barge-in immediately.
                 if (AUTO_CONTINUOUS_VOICE) {
                   setTimeout(function () { requestVoiceStart('tts_start_barge_listen'); }, 20);
                 }
