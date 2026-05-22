@@ -348,6 +348,177 @@
       /** 追问 API 已发 followup_request_start，尚未收到 generated/skipped/error */
       let followupPending = false;
 
+      /** 分阶段延时（ms）— VAD / ASR / 501 / 追问（与旧版打点一致，不含 t2s_speech_started） */
+      let tsVadVoiceInputStartSent = 0;
+      let tsVadFirstPcmAfterStarted = 0;
+      let tsVoiceInputStartedAt = 0;
+      let vadAwaitingFirstPcm = false;
+      let vadFirstStateLogged = false;
+      let tsAsrTrigger = 0;
+      let ts501ClientTextSend = 0;
+      let tsFollowupRequestStart = 0;
+
+      function logStageLatency(label, ms, note) {
+        var n = note ? ' · ' + note : '';
+        if (ms == null || ms < 0 || !isFinite(ms)) {
+          log('[latency] ' + label + ': -' + n);
+          return;
+        }
+        log('[latency] ' + label + ': ' + Math.round(ms) + ' ms' + n);
+      }
+
+      /**
+       * 统一「声学 hang 结束 → 扬声器 RMS 起声」量测（仅 performance.now() + TTFS 音频线 ms）
+       * - 锚点：优先 TTFS `ttfs-utterance-end`（与 TTFS 面板 Hang ms 一致，如 50）；若无则回退服务端 voice_input_complete 时刻
+       * - 全程只存各里程碑绝对 perf，不在中途用会变的锚点打 Δ，避免顺序错乱；分解只在 e2e 结算一行
+       * - [latency] 仍用 Date.now() 与服务器语义对齐，与本块独立
+       */
+      var voiceE2eTurn = null;
+      var voiceE2eMarkKey = {
+        voice_input_complete_suggested: 'vadEou',
+        local_asr_text: 'asr',
+        followup_request_start: 'fuStart',
+        followup_generated: 'fuDone',
+        followup_skipped: 'fuDone',
+        followup_error: 'fuDone',
+        chat_text_query_sent: 'q501',
+        'chat首字': 'chat1',
+        tts_start: 'tts0',
+        'TTS首帧调度(playTTSChunk)': 'tts1',
+      };
+
+      function voiceE2eEnsure() {
+        if (!voiceE2eTurn) {
+          voiceE2eTurn = {
+            marks: {},
+            anchorTtfsPerf: null,
+            anchorTtfsHangMs: null,
+            serverVadPerf: null,
+          };
+        }
+        return voiceE2eTurn;
+      }
+
+      function voiceE2eReset(reason) {
+        if (voiceE2eTurn) {
+          log('[voice-e2e] reset reason=' + reason);
+        }
+        voiceE2eTurn = null;
+      }
+
+      /** TTFS：本地克隆麦上已连续静音 ≥ Hang ms 的时刻（与面板设置一致） */
+      window.addEventListener('ttfs-utterance-end', function (ev) {
+        var det = ev.detail || {};
+        var p = typeof det.perfNow === 'number' ? det.perfNow : performance.now();
+        var hang = det.hangMs != null ? det.hangMs : null;
+        var tr = voiceE2eEnsure();
+        if (tr.marks.q501 != null) {
+          log('[voice-e2e] note ignore_ttfs_after_501 (等本轮 RMS e2e，避免打断后误锚)');
+          return;
+        }
+        if (tr.marks.vadEou != null && tr.anchorTtfsPerf != null && p > tr.anchorTtfsPerf) {
+          log(
+            '[voice-e2e] note ignore_later_ttfs_utterance_end Δ=' +
+              Math.round(p - tr.anchorTtfsPerf) +
+              ' ms (保留较早 hang 结束锚点)'
+          );
+          return;
+        }
+        if (tr.anchorTtfsPerf == null || p < tr.anchorTtfsPerf) {
+          tr.anchorTtfsPerf = p;
+          tr.anchorTtfsHangMs = hang != null ? hang : tr.anchorTtfsHangMs;
+        }
+        log(
+          '[voice-e2e] ttfs_acoustic_hang_end hangMs=' + (tr.anchorTtfsHangMs != null ? tr.anchorTtfsHangMs : '?') +
+            ' perf=' + tr.anchorTtfsPerf.toFixed(2) +
+            ' (TTFS clone-mic silence ≥ hang；在 TTFS 面板把 Hang 设为 50 即此处 hangMs=50)'
+        );
+      });
+
+      function voiceE2eMark(stage) {
+        var tr = voiceE2eEnsure();
+        var mk = voiceE2eMarkKey[stage];
+        var now = performance.now();
+        if (mk) tr.marks[mk] = now;
+        if (stage === 'voice_input_complete_suggested') {
+          tr.serverVadPerf = now;
+        }
+      }
+
+      function voiceE2eSegSigned(a, b) {
+        if (typeof a !== 'number' || typeof b !== 'number') return '-';
+        return String(Math.round(b - a));
+      }
+
+      function voiceE2eSeg(a, b) {
+        if (typeof a !== 'number' || typeof b !== 'number' || b < a) return '-';
+        return String(Math.round(b - a));
+      }
+
+      function voiceE2eFinalize(det) {
+        var tr = voiceE2eTurn;
+        var pb = typeof det.perfNow === 'number' ? det.perfNow : null;
+        if (!tr || pb == null) return;
+
+        var anchor =
+          typeof tr.anchorTtfsPerf === 'number' ? tr.anchorTtfsPerf : typeof tr.serverVadPerf === 'number' ? tr.serverVadPerf : null;
+        var anchorLabel =
+          typeof tr.anchorTtfsPerf === 'number' ? 'ttfs_hang' : typeof tr.serverVadPerf === 'number' ? 'server_VAD_complete_only' : 'none';
+        var hangStr = tr.anchorTtfsHangMs != null ? String(tr.anchorTtfsHangMs) : '-';
+
+        var audioMs = det.ms != null ? det.ms : '?';
+        log(
+          '[voice-e2e] TTFS_audio_line_ms=' + audioMs +
+            ' (AudioContext: silence→playback RMS) · playback_perf=' + pb.toFixed(2)
+        );
+
+        if (anchor == null) {
+          log('[voice-e2e] skip_breakdown no_anchor (无 TTFS 事件且无 server VAD 时间戳)');
+          voiceE2eTurn = null;
+          return;
+        }
+
+        var m = tr.marks;
+        var wallTotal = Math.round(pb - anchor);
+        var parts = [];
+        parts.push('anchor=' + anchorLabel + ' hangMs=' + hangStr);
+        parts.push('锚→server_VAD=' + voiceE2eSegSigned(anchor, m.vadEou));
+        parts.push('VAD→ASR=' + voiceE2eSeg(m.vadEou, m.asr));
+        if (m.asr != null && m.q501 != null) {
+          if (m.fuStart != null && m.fuDone != null) {
+            parts.push('ASR→追问起=' + voiceE2eSeg(m.asr, m.fuStart));
+            parts.push('追问=' + voiceE2eSeg(m.fuStart, m.fuDone));
+            parts.push('追问末→501=' + voiceE2eSeg(m.fuDone, m.q501));
+          } else {
+            parts.push('ASR→501=' + voiceE2eSeg(m.asr, m.q501));
+          }
+        } else {
+          parts.push('ASR→501=-');
+        }
+        parts.push('501→首字=' + voiceE2eSeg(m.q501, m.chat1));
+        parts.push('首字→tts_start=' + voiceE2eSeg(m.chat1, m.tts0));
+        parts.push('tts→首帧调度=' + voiceE2eSeg(m.tts0, m.tts1));
+        if (m.tts1 != null) {
+          parts.push('首帧→RMS起声=' + voiceE2eSeg(m.tts1, pb));
+        } else if (m.chat1 != null) {
+          parts.push('首字→RMS起声=' + voiceE2eSeg(m.chat1, pb));
+        } else {
+          parts.push('起声尾段=-');
+        }
+        parts.push('锚→RMS起声_wall_ms=' + wallTotal);
+        log('[voice-e2e] breakdown ' + parts.join(' | '));
+
+        if (anchorLabel === 'server_VAD_complete_only') {
+          log('[voice-e2e] note 未收到 ttfs_acoustic_hang_end，墙钟总时长以 server VAD 为锚；请在页面加载 TTFS 面板并把 Hang 设为 50ms 等以对齐「本地静音 hang」');
+        }
+
+        voiceE2eTurn = null;
+      }
+
+      window.addEventListener('ttfs-e2e-latency', function (ev) {
+        voiceE2eFinalize(ev.detail || {});
+      });
+
       function updateLatencyDisplay() {
         const c = latencyChatMs != null ? latencyChatMs + ' ms' : '-';
         const t = latencyTTSMs != null ? latencyTTSMs + ' ms' : '-';
@@ -772,6 +943,8 @@
           latencyTTSMs = Date.now() - t501;
           latencyTTSMeasured = true;
           updateLatencyDisplay();
+          logStageLatency('501→首帧语音(TTS)', latencyTTSMs, '自 chat_text_query_sent');
+          voiceE2eMark('TTS首帧调度(playTTSChunk)');
         }
         const ctx = getTtsAudioContext();
         const pcmF32 = pcmS16ToFloat32(pcmS16);
@@ -1136,6 +1309,10 @@
             if (ws && ws.readyState === WebSocket.OPEN) {
               const chunkU8 = new Uint8Array(s16);
               appendRecordingChunk(chunkU8);
+              if (voiceCapturing && vadAwaitingFirstPcm) {
+                tsVadFirstPcmAfterStarted = Date.now();
+                vadAwaitingFirstPcm = false;
+              }
               ws.send(s16);
             }
           }
@@ -1177,6 +1354,7 @@
         btnVoiceStop.disabled = true;
         voiceStatusEl.textContent = '';
         if (ws && ws.readyState === WebSocket.OPEN) {
+          tsAsrTrigger = Date.now();
           ws.send(JSON.stringify({ type: 'voice_input_complete', source: 'manual' }));
         }
       }
@@ -1186,6 +1364,11 @@
         if (!mediaStream) return;
         if (!ws || ws.readyState !== WebSocket.OPEN) return;
         if (voiceCapturing) return;
+        tsVadVoiceInputStartSent = Date.now();
+        vadAwaitingFirstPcm = false;
+        tsVadFirstPcmAfterStarted = 0;
+        tsVoiceInputStartedAt = 0;
+        vadFirstStateLogged = false;
         ws.send(JSON.stringify({ type: 'voice_input_start' }));
         btnVoiceStart.disabled = true;
         btnVoiceStop.disabled = false;
@@ -1230,7 +1413,16 @@
                 btnVoiceStart.disabled = false;
                 btnMonitorSync.disabled = false;
                 t501 = 0;
+                tsVadVoiceInputStartSent = 0;
+                tsVadFirstPcmAfterStarted = 0;
+                vadAwaitingFirstPcm = false;
+                tsVoiceInputStartedAt = 0;
+                vadFirstStateLogged = false;
+                tsAsrTrigger = 0;
+                ts501ClientTextSend = 0;
+                tsFollowupRequestStart = 0;
                 updateLatencyDisplay();
+                voiceE2eReset('ready');
                 requestVoiceStart('ready');
               } else if (msg.type === 'start_session_config') {
                 log('StartSession: mode=' + msg.mode + ' input_mod=' + msg.input_mod);
@@ -1252,6 +1444,8 @@
                   latencyChatMs = Date.now() - t501;
                   latencyChatMeasured = true;
                   updateLatencyDisplay();
+                  logStageLatency('501→首字(chat)', latencyChatMs, '自 chat_text_query_sent');
+                  voiceE2eMark('chat首字');
                 }
                 const node = ensureAiLine(msg.reply_id);
                 node.textContent += (msg.content || '');
@@ -1263,6 +1457,13 @@
                 asrPreviewEl.textContent = msg.text || '';
                 asrPreviewEl.style.opacity = msg.is_interim ? '0.7' : '1';
               } else if (msg.type === 'voice_input_started') {
+                if (tsVadVoiceInputStartSent) {
+                  logStageLatency('VAD/ASR 通道', Date.now() - tsVadVoiceInputStartSent, 'voice_input_start → voice_input_started');
+                }
+                tsVoiceInputStartedAt = Date.now();
+                vadFirstStateLogged = false;
+                vadAwaitingFirstPcm = true;
+                tsVadFirstPcmAfterStarted = 0;
                 startTurnRecordingCache();
                 asrPreviewEl.textContent = '';
                 voiceStatusEl.textContent = '录音中... 说完后自动发送';
@@ -1279,12 +1480,19 @@
                   ' via=' + (msg.resampler || '-')
                 );
               } else if (msg.type === 'voice_input_complete_suggested') {
+                if (tsVadFirstPcmAfterStarted) {
+                  logStageLatency('VAD 判停', Date.now() - tsVadFirstPcmAfterStarted, '首帧上行 PCM → voice_input_complete_suggested · source=' + (msg.source || '-'));
+                } else if (tsVadVoiceInputStartSent) {
+                  logStageLatency('VAD 判停', Date.now() - tsVadVoiceInputStartSent, 'voice_input_start → voice_input_complete_suggested（无首帧 PCM 时间戳）· source=' + (msg.source || '-'));
+                }
+                tsAsrTrigger = Date.now();
                 // Server-side VAD (e.g. Duplug) decided to complete; stop sending mic audio ASAP.
                 stopVoiceCapture();
                 btnVoiceStart.disabled = false;
                 btnVoiceStop.disabled = true;
                 voiceStatusEl.textContent = '';
                 log('Server VAD completed voice input [source=' + (msg.source || '-') + ']');
+                voiceE2eMark('voice_input_complete_suggested');
               } else if (msg.type === 'vad_status') {
                 const provider = msg.provider || 'vad';
                 const enabled = !!msg.enabled;
@@ -1295,6 +1503,10 @@
               } else if (msg.type === 'vad_state') {
                 const provider = msg.provider || 'vad';
                 const state = msg.state || '-';
+                if (tsVoiceInputStartedAt && !vadFirstStateLogged) {
+                  vadFirstStateLogged = true;
+                  logStageLatency('VAD 状态首包', Date.now() - tsVoiceInputStartedAt, 'voice_input_started → vad_state · ' + provider + '=' + state);
+                }
                 updateVadState(provider, state);
               } else if (msg.type === 'debug_audio_preview') {
                 const vadB64 = msg.vad_wav_base64 || '';
@@ -1325,7 +1537,9 @@
                   'Barge-in: stop TTS · 原因: ' + bargeInReasonLabel(msg) +
                     ' · source=' + ((msg && msg.source) ? msg.source : '-')
                 );
+                voiceE2eReset('barge_in');
               } else if (msg.type === 'tts_start') {
+                voiceE2eMark('tts_start');
                 // New TTS turn starts: allow playback again after prior barge-in suppression.
                 ttsSuppressedByBargeIn = false;
                 // Keep mic upstream alive during AI playback so server-side Duplug can detect
@@ -1343,6 +1557,11 @@
                   setTimeout(function () { requestVoiceStart('asr_empty'); }, 50);
                 }
               } else if (msg.type === 'local_asr_text') {
+                voiceE2eMark('local_asr_text');
+                if (tsAsrTrigger) {
+                  logStageLatency('ASR', Date.now() - tsAsrTrigger, '判停/complete → local_asr_text');
+                  tsAsrTrigger = 0;
+                }
                 asrPreviewEl.textContent = msg.text || '';
                 asrPreviewEl.style.opacity = '1';
                 log('ASR 最终: ' + (msg.text || ''));
@@ -1358,10 +1577,17 @@
                 }
               } else if (msg.type === 'followup_request_start') {
                 followupPending = true;
+                tsFollowupRequestStart = Date.now();
+                voiceE2eMark('followup_request_start');
                 log('追问模型请求中… [stage=' + (msg.stage || '-') + ']  ASR预览: ' + (msg.source_asr_preview || ''));
               } else if (msg.type === 'followup_deferred_applied') {
                 log('上轮迟到的追问已合并到本轮 501 末尾: ' + (msg.question || ''));
               } else if (msg.type === 'followup_generated') {
+                if (tsFollowupRequestStart) {
+                  logStageLatency('追问', Date.now() - tsFollowupRequestStart, 'followup_request_start → followup_generated');
+                  tsFollowupRequestStart = 0;
+                }
+                voiceE2eMark('followup_generated');
                 followupPending = false;
                 if (msg.deferred_to_next_asr) {
                   log('追问迟到（超时后返回），已记入下一轮 ASR 末尾: ' + (msg.question || ''));
@@ -1371,10 +1597,24 @@
                   log('追问: ' + (msg.question || ''));
                 }
               } else if (msg.type === 'followup_skipped') {
+                if (tsFollowupRequestStart) {
+                  logStageLatency('追问', Date.now() - tsFollowupRequestStart, 'followup_request_start → followup_skipped');
+                  tsFollowupRequestStart = 0;
+                }
+                voiceE2eMark('followup_skipped');
                 followupPending = false;
                 log('追问模型判定无需追问 [' + (msg.reason || '-') + ']' + (msg.deferred ? ' [deferred]' : ''));
               } else if (msg.type === 'chat_text_query_sent') {
                 t501 = Date.now();
+                if (ts501ClientTextSend) {
+                  logStageLatency('501(文本)', t501 - ts501ClientTextSend, '浏览器 chat_text_query → chat_text_query_sent');
+                  ts501ClientTextSend = 0;
+                } else {
+                  log(
+                    '[latency] 501 起点: chat_text_query_sent（语音/ASR 合并路径）· reason=' + (msg.reason || '-') +
+                    ' · trigger=' + (msg.trigger || '-')
+                  );
+                }
                 latencyChatMs = null;
                 latencyTTSMs = null;
                 latencyChatMeasured = false;
@@ -1384,7 +1624,13 @@
                 const trigger = msg.trigger || '-';
                 const merged = msg.merged_followup ? ' merged_followup=1' : '';
                 log('ChatTextQuery sent [reason=' + reason + ', trigger=' + trigger + ']' + merged);
+                voiceE2eMark('chat_text_query_sent');
               } else if (msg.type === 'error') {
+                if (followupPending && tsFollowupRequestStart) {
+                  logStageLatency('追问', Date.now() - tsFollowupRequestStart, 'followup_request_start → error');
+                  tsFollowupRequestStart = 0;
+                  voiceE2eMark('followup_error');
+                }
                 followupPending = false;
                 log(msg.message, true);
                 serverLogAppend('error', (msg.message || '').trim(), serverLogExtras(msg));
@@ -1406,6 +1652,14 @@
         ws.onclose = function () {
           updateVadState('-', '-');
           setStatus('Disconnected');
+          tsVadVoiceInputStartSent = 0;
+          tsVadFirstPcmAfterStarted = 0;
+          vadAwaitingFirstPcm = false;
+          tsVoiceInputStartedAt = 0;
+          vadFirstStateLogged = false;
+          tsAsrTrigger = 0;
+          ts501ClientTextSend = 0;
+          tsFollowupRequestStart = 0;
           if (followupPending) {
             log('WebSocket closed（追问模型尚未返回：若刚断开连接，log 里可能看不到「追问已合并进 501」）');
             followupPending = false;
@@ -1500,6 +1754,7 @@
           return;
         }
         if (ws && ws.readyState === WebSocket.OPEN) {
+          ts501ClientTextSend = Date.now();
           ws.send(JSON.stringify({
             type: 'chat_text_query',
             content: text,

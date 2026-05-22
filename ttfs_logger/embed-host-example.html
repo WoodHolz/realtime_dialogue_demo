@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>TTFS embed parent example</title>
+  <style>
+    body { font-family: system-ui, sans-serif; margin: 16px; background: #111; color: #eee; line-height: 1.5; }
+    iframe { width: min(100%, 720px); height: 520px; border: 1px solid #444; border-radius: 8px; background: #0a0c10; }
+    code, pre { background: #1a1a24; padding: 2px 6px; border-radius: 4px; font-size: 12px; }
+    pre { padding: 12px; overflow-x: auto; }
+    .ok { color: #6ee7b7; }
+    .warn { color: #fcd34d; }
+  </style>
+</head>
+<body>
+  <h1>TTFS 内嵌示例 · Embed parent (same origin)</h1>
+  <p class="warn">
+    父页面与 iframe 必须<strong>同源</strong>（同一 scheme + host + port），否则拿不到 <code>contentWindow.TTFS</code>，也无法传 <code>MediaStream</code>。
+    跨端口可用反向代理：例如 Vite <code>server.proxy</code> 把 <code>/ttfs</code> 指到 <code>http://127.0.0.1:8765</code>。
+  </p>
+
+  <iframe id="ttfsFrame" title="TTFS" src="/embed.html"></iframe>
+
+  <h2>父页面最小接入代码</h2>
+  <pre><code>const iframe = document.getElementById('ttfsFrame');
+
+window.addEventListener('message', (ev) => {
+  if (ev.data?.source !== 'ttfs-embed') return;
+  // 生产环境请校验 ev.origin
+  if (ev.data.type === 'ttfs-mic-ready') {
+    const w = iframe.contentWindow;
+    const micClone = w.TTFS.cloneMicForConsumer(); // 交给 RTC / WS，勿再 getUserMedia
+    console.log('mic clone', micClone);
+  }
+  if (ev.data.type === 'ttfs-latency-ms') {
+    console.log('latency ms', ev.data.ms);
+  }
+});</code></pre>
+
+  <p id="status" class="ok">等你先在 iframe 里点 Mic…</p>
+  <audio id="sinkTest" autoplay playsinline style="display:none"></audio>
+
+  <script>
+    const iframe = document.getElementById('ttfsFrame');
+    const status = document.getElementById('status');
+
+    window.addEventListener('message', (ev) => {
+      if (ev.data?.source !== 'ttfs-embed') return;
+
+      if (ev.data.type === 'ttfs-mic-ready') {
+        try {
+          const w = iframe.contentWindow;
+          const clone = w.TTFS && w.TTFS.cloneMicForConsumer && w.TTFS.cloneMicForConsumer();
+          status.textContent = clone
+            ? '同源 OK：已拿到 clone MediaStream（示例未播放到扬声器）。'
+            : '拿到消息但 clone 失败 — 检查是否同源。';
+        } catch (e) {
+          status.textContent = '无法访问 iframe.TTFS（多半跨域）：' + e;
+          status.className = 'warn';
+        }
+      }
+
+      if (ev.data.type === 'ttfs-latency-ms') {
+        status.textContent = '上次延迟 ~ ' + ev.data.ms + ' ms（可在父页更新 UI）';
+        status.className = 'ok';
+      }
+
+      if (ev.data.type === 'ttfs-mic-stopped') {
+        status.textContent = 'TTFS 已停止';
+      }
+    });
+  </script>
+</body>
+</html>

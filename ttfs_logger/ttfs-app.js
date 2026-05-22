@@ -5,7 +5,8 @@
  * Optional host TTS tap: TTFS.attachPlaybackMediaStream(dest.stream) from createMediaStreamDestination()
  * Latency (latMs): time from end of mic utterance (Hang ms below Mic threshold) to first playback onset (Pb RMS rising edge), TTFS AudioContext clock; debounced ~120ms after utterance end.
  * Auto mic: await TTFS.startMic() — idempotent if tracks already live.
- * Notifications: postMessage { source: 'ttfs-embed', type, ... } when embedded in iframe
+ * Notifications: postMessage { source: 'ttfs-embed', type, ... } when embedded in iframe.
+ * Same-window: CustomEvent `ttfs-utterance-end` (mic hang satisfied) and `ttfs-e2e-latency` (playback onset) with detail.perfNow for host alignment.
  */
 (function () {
   const PARENT_TARGET = document.body.dataset.ttfsParentOrigin || '*';
@@ -49,6 +50,17 @@
       if (window.parent && window.parent !== window) {
         window.parent.postMessage({ source: 'ttfs-embed', version: 1, ...msg }, PARENT_TARGET);
       }
+    } catch (_) {}
+  }
+
+  /** Same-window hosts (e.g. t2sbg) align WS milestones via performance.now(). */
+  function ttfsEmitHost(name, detail) {
+    const d = detail && typeof detail === 'object' ? detail : {};
+    try {
+      window.dispatchEvent(new CustomEvent(name, { detail: d }));
+    } catch (_) {}
+    try {
+      pm(Object.assign({ type: name }, d));
     } catch (_) {}
   }
 
@@ -366,6 +378,12 @@
         quietMs = 0;
         prevRPb = 0;
         waitPbArmUntil = nowAudio + WAIT_PB_DEBOUNCE_S;
+        const perfNow = typeof performance !== 'undefined' && performance.now ? performance.now() : Date.now();
+        ttfsEmitHost('ttfs-utterance-end', {
+          perfNow,
+          hangMs,
+          nowAudio,
+        });
         return;
       }
       prevRPb = rPb;
@@ -386,7 +404,13 @@
         lastPbFire = nowAudio;
         const el = $('latMs');
         if (el) el.textContent = ms.toFixed(0) + ' ms';
-        pm({ type: 'ttfs-latency-ms', ms: Math.round(ms) });
+        const perfNow = typeof performance !== 'undefined' && performance.now ? performance.now() : Date.now();
+        pm({ type: 'ttfs-latency-ms', ms: Math.round(ms), perfNow });
+        ttfsEmitHost('ttfs-e2e-latency', {
+          ms: Math.round(ms),
+          perfNow,
+          nowAudioPlayback: nowAudio,
+        });
         phase = Phase.WAIT;
         tSilenceAudio = null;
       }
