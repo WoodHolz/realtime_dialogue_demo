@@ -290,8 +290,8 @@ def _load_t2s_vad_hysteresis_config() -> tuple[int, int]:
 
 def _load_t2s_tts_barge_suppress_ms() -> int:
     """
-    t2sbg（非 omni）：服务端发出首帧 TTS PCM 后的若干毫秒内，不向浏览器发 barge_in，
-    也不把 Duplug 的首段 nonidle 当作「用户开说」（避免扬声器串音误打断）。
+    t2sbg / t2sbg-omni：服务端发出首帧 TTS PCM 后的若干毫秒内，不向浏览器发 barge_in，
+    也不把 VAD speech_start / Omni speech_started 当作「用户开说」（避免扬声器串音误打断）。
 
     - 0：关闭
     - 非 0：下限 100 ms（避免误配过小）；不设上限，由 config / 环境变量决定。

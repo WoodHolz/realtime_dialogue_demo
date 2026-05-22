@@ -58,6 +58,16 @@ def _build_dashscope_url(region: str) -> str:
     return DEFAULT_CN_URL
 
 
+def _tts_barge_suppress_ms() -> int:
+    """Same knob as t2sbg: debug.t2s_tts_barge_suppress_ms / T2S_TTS_BARGE_SUPPRESS_MS."""
+    try:
+        from backend.server import T2S_TTS_BARGE_SUPPRESS_MS
+
+        return int(T2S_TTS_BARGE_SUPPRESS_MS)
+    except Exception:
+        return 0
+
+
 def _safe_json_loads(text: str) -> dict[str, Any]:
     try:
         obj = json.loads(text)
@@ -86,6 +96,17 @@ class OmniRealtimeBridge:
         self.turn_detection_type = DEFAULT_TURN_DETECTION_TYPE
         self._use_local_smart_turn = False
         self._local_vad = None
+        # First TTS PCM sent to browser (monotonic); 0 = not in a playback burst yet.
+        self._tts_first_audio_mono: float = 0.0
+
+    def _tts_barge_suppress_active(self) -> bool:
+        """True during lead-in after first downstream TTS chunk (echo barge-in guard)."""
+        ms = _tts_barge_suppress_ms()
+        if ms <= 0:
+            return False
+        if self._tts_first_audio_mono <= 0:
+            return False
+        return (time.monotonic() - self._tts_first_audio_mono) * 1000.0 < float(ms)
 
     async def _send_client_json(self, payload: dict[str, Any]) -> None:
         try:
@@ -154,7 +175,10 @@ class OmniRealtimeBridge:
                     delta = event.get("delta", "")
                     if delta:
                         try:
-                            await self._send_client_audio(base64.b64decode(delta))
+                            pcm = base64.b64decode(delta)
+                            if pcm and self._tts_first_audio_mono <= 0:
+                                self._tts_first_audio_mono = time.monotonic()
+                            await self._send_client_audio(pcm)
                         except Exception:
                             pass
                 elif t == "conversation.item.input_audio_transcription.completed":
@@ -181,20 +205,36 @@ class OmniRealtimeBridge:
                         }
                     )
                 elif t == "response.created":
+                    self._tts_first_audio_mono = 0.0
                     await self._send_client_json({"type": "tts_start"})
                 elif t == "response.done":
                     await self._send_client_json({"type": "tts_end"})
                 elif t == "input_audio_buffer.speech_started" and not self._use_local_smart_turn:
-                    await self._send_omni_event({"type": "response.cancel"})
-                    await self._send_client_json({"type": "vad_state", "provider": "omni", "state": "nonidle"})
-                    await self._send_client_json(
-                        {
-                            "type": "barge_in",
-                            "source": "omni",
-                            "reason": "user_speech",
-                            "reason_label": "用户打断（检测到说话）",
-                        }
-                    )
+                    if self._tts_barge_suppress_active():
+                        suppress_ms = _tts_barge_suppress_ms()
+                        LOG.info(
+                            "omni speech_started ignored (TTS lead-in %sms)",
+                            suppress_ms,
+                        )
+                        await self._send_client_json(
+                            {
+                                "type": "server_log",
+                                "level": "info",
+                                "message": "Omni speech_started ignored (TTS lead-in window)",
+                                "ms": suppress_ms,
+                            }
+                        )
+                    else:
+                        await self._send_omni_event({"type": "response.cancel"})
+                        await self._send_client_json({"type": "vad_state", "provider": "omni", "state": "nonidle"})
+                        await self._send_client_json(
+                            {
+                                "type": "barge_in",
+                                "source": "omni",
+                                "reason": "user_speech",
+                                "reason_label": "用户打断（检测到说话）",
+                            }
+                        )
                 elif t == "input_audio_buffer.speech_stopped" and not self._use_local_smart_turn:
                     await self._send_client_json({"type": "vad_state", "provider": "omni", "state": "idle"})
         except asyncio.CancelledError:
@@ -213,15 +253,30 @@ class OmniRealtimeBridge:
         await self._send_client_json(payload)
 
         if ev.kind == "speech_start":
-            await self._send_omni_event({"type": "response.cancel"})
-            await self._send_client_json(
-                {
-                    "type": "barge_in",
-                    "source": ev.provider,
-                    "reason": "user_speech",
-                    "reason_label": "用户打断（检测到说话）",
-                }
-            )
+            if self._tts_barge_suppress_active():
+                suppress_ms = _tts_barge_suppress_ms()
+                LOG.info(
+                    "omni VAD speech_start ignored (TTS lead-in %sms)",
+                    suppress_ms,
+                )
+                await self._send_client_json(
+                    {
+                        "type": "server_log",
+                        "level": "info",
+                        "message": "VAD speech_start ignored (TTS lead-in window)",
+                        "ms": suppress_ms,
+                    }
+                )
+            else:
+                await self._send_omni_event({"type": "response.cancel"})
+                await self._send_client_json(
+                    {
+                        "type": "barge_in",
+                        "source": ev.provider,
+                        "reason": "user_speech",
+                        "reason_label": "用户打断（检测到说话）",
+                    }
+                )
         elif ev.kind == "turn_end_candidate":
             await self._send_omni_event({"type": "input_audio_buffer.commit"})
             await self._send_omni_event(

@@ -39,7 +39,7 @@
     "asr_access_key": ""
   },
   "omni": {
-    "description": "Qwen Omni (/t2sbg-omni): follows vad.provider for local Smart Turn; override with OMNI_VAD=server.",
+    "description": "Qwen Omni (/t2sbg-omni): follows vad.provider for local Smart Turn; override with OMNI_VAD=server. TTS lead-in uses debug.t2s_tts_barge_suppress_ms (same as t2sbg).",
     "use_local_smart_turn": true
   },
   "vad": {
@@ -71,5 +71,5 @@
     "t2s_tts_barge_suppress_ms": 2000
   },
   "t2sbg_voice_version": "0.0.5",
-  "omni_voice_version": "0.0.6"
+  "omni_voice_version": "0.0.7"
 }
