@@ -18,6 +18,7 @@ from typing import Any
 import websockets
 from fastapi import WebSocket
 
+from backend.monitor_snapshot import build_monitor_snapshot, pcm16le_to_wav_bytes
 from backend.vad import (
     VadEvent,
     create_vad_backend,
@@ -83,9 +84,21 @@ class OmniRealtimeBridge:
 
     def __init__(self, websocket: WebSocket):
         self.client_ws = websocket
+        self.conn_id = uuid.uuid4().hex
         self.omni_ws: websockets.WebSocketClientProtocol | None = None
         self.omni_recv_task: asyncio.Task | None = None
         self.closed = False
+
+        # Debug recording (VAD feed + Omni uplink), same semantics as t2sbg monitor.
+        self._vad_turn_buffer = bytearray()
+        self._vad_merged_buffer = bytearray()
+        self._omni_turn_buffer = bytearray()
+        self._omni_merged_buffer = bytearray()
+        self._vad_turn_pcm_history: list[bytes] = []
+        self._omni_turn_pcm_history: list[bytes] = []
+        self._vad_segments = 0
+        self._omni_segments = 0
+        self._turn_capture_active = False
 
         # runtime settings (can be overridden by first browser config frame)
         self.api_key = os.environ.get("DASHSCOPE_API_KEY", "")
@@ -119,6 +132,87 @@ class OmniRealtimeBridge:
             await self.client_ws.send_bytes(pcm_s16le)
         except Exception:
             pass
+
+    async def _begin_turn_capture(self) -> None:
+        if self._turn_capture_active:
+            return
+        self._turn_capture_active = True
+        self._vad_turn_buffer.clear()
+        self._omni_turn_buffer.clear()
+        await self._send_client_json({"type": "voice_input_started"})
+
+    def _finalize_turn_capture(self) -> tuple[str, str]:
+        """Snapshot current turn into merged buffers; return per-turn WAV b64 for preview."""
+        vad_last_turn_wav_b64 = ""
+        omni_last_turn_wav_b64 = ""
+        if self._vad_turn_buffer:
+            snap_v = bytes(self._vad_turn_buffer)
+            self._vad_turn_pcm_history.append(snap_v)
+            vad_last_turn_wav_b64 = base64.b64encode(pcm16le_to_wav_bytes(snap_v)).decode("ascii")
+            self._vad_merged_buffer.extend(self._vad_turn_buffer)
+            self._vad_segments += 1
+            self._vad_turn_buffer.clear()
+        if self._omni_turn_buffer:
+            snap_o = bytes(self._omni_turn_buffer)
+            self._omni_turn_pcm_history.append(snap_o)
+            omni_last_turn_wav_b64 = base64.b64encode(pcm16le_to_wav_bytes(snap_o)).decode("ascii")
+            self._omni_merged_buffer.extend(self._omni_turn_buffer)
+            self._omni_segments += 1
+            self._omni_turn_buffer.clear()
+        self._turn_capture_active = False
+        return vad_last_turn_wav_b64, omni_last_turn_wav_b64
+
+    async def _send_debug_audio_preview(
+        self,
+        *,
+        vad_last_turn_wav_b64: str = "",
+        omni_last_turn_wav_b64: str = "",
+    ) -> None:
+        vad_pcm = bytes(self._vad_merged_buffer)
+        omni_pcm = bytes(self._omni_merged_buffer)
+        vad_wav_b64 = (
+            base64.b64encode(pcm16le_to_wav_bytes(vad_pcm)).decode("ascii") if vad_pcm else ""
+        )
+        omni_wav_b64 = (
+            base64.b64encode(pcm16le_to_wav_bytes(omni_pcm)).decode("ascii") if omni_pcm else ""
+        )
+        payload: dict[str, object] = {
+            "type": "debug_audio_preview",
+            "vad_wav_base64": vad_wav_b64,
+            "asr_wav_base64": omni_wav_b64,
+            "vad_segments": self._vad_segments,
+            "asr_segments": self._omni_segments,
+            "vad_duration_sec": round(len(vad_pcm) / 2 / 16000, 3),
+            "asr_duration_sec": round(len(omni_pcm) / 2 / 16000, 3),
+        }
+        if vad_last_turn_wav_b64:
+            payload["vad_last_turn_wav_base64"] = vad_last_turn_wav_b64
+        if omni_last_turn_wav_b64:
+            payload["asr_last_turn_wav_base64"] = omni_last_turn_wav_b64
+        await self._send_client_json(payload)
+
+    def build_monitor_snapshot(
+        self,
+        *,
+        transcript_html: str,
+        log_html: str,
+        full_merged_wav_b64: str,
+        full_turn_wavs_b64: list[str],
+    ) -> dict[str, object]:
+        return build_monitor_snapshot(
+            conn_id=self.conn_id,
+            vad_merged=bytes(self._vad_merged_buffer),
+            asr_merged=bytes(self._omni_merged_buffer),
+            vad_turn_history=list(self._vad_turn_pcm_history),
+            asr_turn_history=list(self._omni_turn_pcm_history),
+            vad_segments=self._vad_segments,
+            asr_segments=self._omni_segments,
+            transcript_html=transcript_html,
+            log_html=log_html,
+            full_merged_wav_b64=full_merged_wav_b64,
+            full_turn_wavs_b64=full_turn_wavs_b64,
+            source_mode="omni",
+        )
 
     async def _send_omni_event(self, event: dict[str, Any]) -> None:
         if not self.omni_ws:
@@ -210,6 +304,7 @@ class OmniRealtimeBridge:
                 elif t == "response.done":
                     await self._send_client_json({"type": "tts_end"})
                 elif t == "input_audio_buffer.speech_started" and not self._use_local_smart_turn:
+                    await self._begin_turn_capture()
                     if self._tts_barge_suppress_active():
                         suppress_ms = _tts_barge_suppress_ms()
                         LOG.info(
@@ -236,6 +331,11 @@ class OmniRealtimeBridge:
                             }
                         )
                 elif t == "input_audio_buffer.speech_stopped" and not self._use_local_smart_turn:
+                    vad_b64, omni_b64 = self._finalize_turn_capture()
+                    await self._send_debug_audio_preview(
+                        vad_last_turn_wav_b64=vad_b64,
+                        omni_last_turn_wav_b64=omni_b64,
+                    )
                     await self._send_client_json({"type": "vad_state", "provider": "omni", "state": "idle"})
         except asyncio.CancelledError:
             pass
@@ -253,6 +353,7 @@ class OmniRealtimeBridge:
         await self._send_client_json(payload)
 
         if ev.kind == "speech_start":
+            await self._begin_turn_capture()
             if self._tts_barge_suppress_active():
                 suppress_ms = _tts_barge_suppress_ms()
                 LOG.info(
@@ -278,6 +379,11 @@ class OmniRealtimeBridge:
                     }
                 )
         elif ev.kind == "turn_end_candidate":
+            vad_b64, omni_b64 = self._finalize_turn_capture()
+            await self._send_debug_audio_preview(
+                vad_last_turn_wav_b64=vad_b64,
+                omni_last_turn_wav_b64=omni_b64,
+            )
             await self._send_omni_event({"type": "input_audio_buffer.commit"})
             await self._send_omni_event(
                 {
@@ -385,6 +491,10 @@ class OmniRealtimeBridge:
 
     async def handle_client_audio(self, pcm_s16le: bytes) -> None:
         # Browser sends raw PCM16 mono 16k chunks.
+        if self._turn_capture_active:
+            self._omni_turn_buffer.extend(pcm_s16le)
+            if self._local_vad is not None:
+                self._vad_turn_buffer.extend(pcm_s16le)
         audio_b64 = base64.b64encode(pcm_s16le).decode("ascii")
         await self._send_omni_event({"type": "input_audio_buffer.append", "audio": audio_b64})
         if self._local_vad is not None:

@@ -579,7 +579,27 @@ async def websocket_omni_endpoint(websocket: WebSocket):
             if "bytes" in msg and msg["bytes"]:
                 await bridge.handle_client_audio(msg["bytes"])
             elif "text" in msg and msg["text"]:
-                await bridge.handle_client_text(msg["text"])
+                try:
+                    obj = json.loads(msg["text"])
+                except json.JSONDecodeError:
+                    obj = None
+                if isinstance(obj, dict) and obj.get("type") == "monitor_publish":
+                    ft_raw = obj.get("full_turn_wavs_base64")
+                    ft_list = [str(x) for x in ft_raw] if isinstance(ft_raw, list) else []
+                    snap = bridge.build_monitor_snapshot(
+                        transcript_html=str(obj.get("transcript_html") or ""),
+                        log_html=str(obj.get("log_html") or ""),
+                        full_merged_wav_b64=str(obj.get("full_merged_wav_base64") or ""),
+                        full_turn_wavs_b64=[x for x in ft_list if x],
+                    )
+                    await broadcast_t2sbg_monitor(snap)
+                    async with _monitor_clients_lock:
+                        n_sub = len(_monitor_clients)
+                    await bridge._send_client_json(
+                        {"type": "monitor_publish_ok", "monitor_subscribers": n_sub}
+                    )
+                else:
+                    await bridge.handle_client_text(msg["text"])
     except WebSocketDisconnect:
         LOG.info("Omni websocket disconnected")
     except Exception as e:

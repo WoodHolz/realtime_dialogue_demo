@@ -27,6 +27,9 @@
       border-radius: 6px;
     }
     .section { margin-top: 1rem; padding-top: 1rem; border-top: 1px solid #eee; }
+    details.debug-raw-clips { margin-top: 8px; font-size: 12px; }
+    details.debug-raw-clips summary { cursor: pointer; color: #555; user-select: none; }
+    details.debug-raw-clips .raw-clips-body { margin-top: 6px; padding-left: 8px; border-left: 2px solid #eee; }
     .ttfs-hint { font-size: 12px; color: #666; margin: 6px 0 8px; }
     .ttfs-inline-root {
       --ttfs-bg: #0f1218;
@@ -181,6 +184,42 @@
   </div>
 
   <div class="section">
+    <strong>录音调试预览（后端合并）</strong>
+    <button type="button" id="btnMonitorSync" disabled style="margin-left:8px;">同步到监控页</button>
+    <span id="monitorSyncHint" style="font-size:12px;color:#888;margin-left:8px;"></span>
+    <p style="font-size:12px; color:#666;">链路：Browser 上行音频 → Backend Omni Bridge →（Smart Turn v3 + Qwen Omni）。下方主播放器是<strong>跨轮合并</strong>后的 WAV；折叠里是<strong>每一轮单独</strong>的录音。</p>
+    <div style="margin-top:8px;">
+      <div style="margin-bottom:10px;">
+        <div style="font-size:12px; color:#666; margin-bottom:4px;">给 VAD 的录音（merged）</div>
+        <audio id="vadAudioPreview" controls style="width:100%;"></audio>
+        <div id="vadAudioMeta" style="font-size:12px; color:#666; margin-top:4px;">片段数: 0, 时长: 0.00s</div>
+        <details class="debug-raw-clips">
+          <summary>未合并原始录音（按轮）</summary>
+          <div class="raw-clips-body" id="vadRawTurnClips">暂无</div>
+        </details>
+      </div>
+      <div>
+        <div style="font-size:12px; color:#666; margin-bottom:4px;">给 Omni 上行的录音（merged）</div>
+        <audio id="asrAudioPreview" controls style="width:100%;"></audio>
+        <div id="asrAudioMeta" style="font-size:12px; color:#666; margin-top:4px;">片段数: 0, 时长: 0.00s</div>
+        <details class="debug-raw-clips">
+          <summary>未合并原始录音（按轮）</summary>
+          <div class="raw-clips-body" id="asrRawTurnClips">暂无</div>
+        </details>
+      </div>
+      <div style="margin-top:10px;">
+        <div style="font-size:12px; color:#666; margin-bottom:4px;">完整麦克风录音通道（trigger-start 到 turn-end，merged）</div>
+        <audio id="fullAudioPreview" controls style="width:100%;"></audio>
+        <div id="fullAudioMeta" style="font-size:12px; color:#666; margin-top:4px;">片段数: 0, 时长: 0.00s</div>
+        <details class="debug-raw-clips">
+          <summary>未合并原始录音（按轮，前端采集分片拼成单轮 WAV）</summary>
+          <div class="raw-clips-body" id="fullRawTurnClips">暂无</div>
+        </details>
+      </div>
+    </div>
+  </div>
+
+  <div class="section">
     <strong>AI 面试官回复（文本 + 语音）</strong>
     <div class="transcript" id="transcript"></div>
   </div>
@@ -204,7 +243,27 @@
       const btnStop = document.getElementById('btnStop');
       const btnMute = document.getElementById('btnMute');
       const btnSendText = document.getElementById('btnSendText');
+      const btnMonitorSync = document.getElementById('btnMonitorSync');
+      const monitorSyncHint = document.getElementById('monitorSyncHint');
+      const vadAudioPreviewEl = document.getElementById('vadAudioPreview');
+      const asrAudioPreviewEl = document.getElementById('asrAudioPreview');
+      const fullAudioPreviewEl = document.getElementById('fullAudioPreview');
+      const vadAudioMetaEl = document.getElementById('vadAudioMeta');
+      const asrAudioMetaEl = document.getElementById('asrAudioMeta');
+      const fullAudioMetaEl = document.getElementById('fullAudioMeta');
+      const vadRawTurnClipsEl = document.getElementById('vadRawTurnClips');
+      const asrRawTurnClipsEl = document.getElementById('asrRawTurnClips');
+      const fullRawTurnClipsEl = document.getElementById('fullRawTurnClips');
       const userTextEl = document.getElementById('userText');
+
+      const TARGET_SAMPLE_RATE = 16000;
+      let currentFullChunks = [];
+      let fullSegments = [];
+      let vadRawTurnB64s = [];
+      let asrRawTurnB64s = [];
+      let fullPreviewUrl = null;
+      let fullRawClipUrls = [];
+      let fullMicRecording = false;
 
       let ws = null;
       let mediaStream = null;
@@ -403,6 +462,225 @@
         logEl.scrollTop = logEl.scrollHeight;
       }
 
+      function concatUint8Arrays(arrays) {
+        let total = 0;
+        for (let i = 0; i < arrays.length; i++) total += arrays[i].length;
+        const merged = new Uint8Array(total);
+        let offset = 0;
+        for (let j = 0; j < arrays.length; j++) {
+          merged.set(arrays[j], offset);
+          offset += arrays[j].length;
+        }
+        return merged;
+      }
+
+      function buildWavBlobFromPcmS16(pcmS16U8, sampleRate) {
+        const dataBytes = pcmS16U8.length;
+        const wav = new ArrayBuffer(44 + dataBytes);
+        const view = new DataView(wav);
+        function writeStr(off, str) {
+          for (let i = 0; i < str.length; i++) view.setUint8(off + i, str.charCodeAt(i));
+        }
+        writeStr(0, 'RIFF');
+        view.setUint32(4, 36 + dataBytes, true);
+        writeStr(8, 'WAVE');
+        writeStr(12, 'fmt ');
+        view.setUint32(16, 16, true);
+        view.setUint16(20, 1, true);
+        view.setUint16(22, 1, true);
+        view.setUint32(24, sampleRate, true);
+        view.setUint32(28, sampleRate * 2, true);
+        view.setUint16(32, 2, true);
+        view.setUint16(34, 16, true);
+        writeStr(36, 'data');
+        view.setUint32(40, dataBytes, true);
+        new Uint8Array(wav, 44).set(pcmS16U8);
+        return new Blob([wav], { type: 'audio/wav' });
+      }
+
+      function flattenSegments(segments) {
+        const arrays = [];
+        for (let i = 0; i < segments.length; i++) {
+          const seg = segments[i];
+          for (let j = 0; j < seg.length; j++) arrays.push(seg[j]);
+        }
+        return arrays;
+      }
+
+      function blobToBase64(blob) {
+        return new Promise(function (resolve, reject) {
+          const r = new FileReader();
+          r.onloadend = function () {
+            const s = r.result;
+            const i = typeof s === 'string' ? s.indexOf(',') : -1;
+            resolve(i >= 0 ? s.slice(i + 1) : '');
+          };
+          r.onerror = reject;
+          r.readAsDataURL(blob);
+        });
+      }
+
+      function getDurationSecFromBytes(byteLen) {
+        return (byteLen / 2) / TARGET_SAMPLE_RATE;
+      }
+
+      function _pcmByteLenFromWavBase64(b64) {
+        try {
+          var bin = atob(b64);
+          if (bin.length < 44) return 0;
+          return bin.length - 44;
+        } catch (err) {
+          return 0;
+        }
+      }
+
+      function renderRawTurnClipsFromB64(containerEl, b64List, labelPrefix) {
+        if (!containerEl) return;
+        containerEl.innerHTML = '';
+        if (!b64List || !b64List.length) {
+          var empty = document.createElement('div');
+          empty.style.color = '#999';
+          empty.textContent = '暂无';
+          containerEl.appendChild(empty);
+          return;
+        }
+        for (var j = 0; j < b64List.length; j++) {
+          var wrap2 = document.createElement('div');
+          wrap2.style.marginTop = j ? '8px' : '0';
+          var cap2 = document.createElement('div');
+          cap2.style.fontSize = '12px';
+          cap2.style.color = '#666';
+          var pcmLen = _pcmByteLenFromWavBase64(b64List[j]);
+          cap2.textContent = labelPrefix + ' 第 ' + (j + 1) + ' 轮 · ' + getDurationSecFromBytes(pcmLen).toFixed(2) + 's';
+          var audio2 = document.createElement('audio');
+          audio2.controls = true;
+          audio2.style.width = '100%';
+          audio2.src = 'data:audio/wav;base64,' + b64List[j];
+          wrap2.appendChild(cap2);
+          wrap2.appendChild(audio2);
+          containerEl.appendChild(wrap2);
+        }
+      }
+
+      function revokeFullRawClipUrls() {
+        for (var k = 0; k < fullRawClipUrls.length; k++) {
+          try { URL.revokeObjectURL(fullRawClipUrls[k]); } catch (e) { /* ignore */ }
+        }
+        fullRawClipUrls = [];
+      }
+
+      function updateFullRawTurnClips() {
+        if (!fullRawTurnClipsEl) return;
+        revokeFullRawClipUrls();
+        fullRawTurnClipsEl.innerHTML = '';
+        if (!fullSegments.length) {
+          var fe = document.createElement('div');
+          fe.style.color = '#999';
+          fe.textContent = '暂无';
+          fullRawTurnClipsEl.appendChild(fe);
+          return;
+        }
+        for (var t = 0; t < fullSegments.length; t++) {
+          var pcm = concatUint8Arrays(fullSegments[t]);
+          var blob = buildWavBlobFromPcmS16(pcm, TARGET_SAMPLE_RATE);
+          var url = URL.createObjectURL(blob);
+          fullRawClipUrls.push(url);
+          var w = document.createElement('div');
+          w.style.marginTop = t ? '8px' : '0';
+          var c = document.createElement('div');
+          c.style.fontSize = '12px';
+          c.style.color = '#666';
+          c.textContent = '麦克风 第 ' + (t + 1) + ' 轮 · ' + getDurationSecFromBytes(pcm.length).toFixed(2) + 's';
+          var a = document.createElement('audio');
+          a.controls = true;
+          a.style.width = '100%';
+          a.src = url;
+          w.appendChild(c);
+          w.appendChild(a);
+          fullRawTurnClipsEl.appendChild(w);
+        }
+      }
+
+      function updateFullDebugAudioPreview() {
+        const fullFlat = flattenSegments(fullSegments);
+        const fullMerged = concatUint8Arrays(fullFlat);
+        if (fullPreviewUrl) URL.revokeObjectURL(fullPreviewUrl);
+        fullPreviewUrl = null;
+        if (fullMerged.length > 0) {
+          fullPreviewUrl = URL.createObjectURL(buildWavBlobFromPcmS16(fullMerged, TARGET_SAMPLE_RATE));
+          fullAudioPreviewEl.src = fullPreviewUrl;
+        } else {
+          fullAudioPreviewEl.removeAttribute('src');
+          fullAudioPreviewEl.load();
+        }
+        fullAudioMetaEl.textContent = '片段数: ' + fullSegments.length + ', 时长: ' + getDurationSecFromBytes(fullMerged.length).toFixed(2) + 's';
+        updateFullRawTurnClips();
+      }
+
+      function startTurnRecordingCache() {
+        currentFullChunks = [];
+        fullMicRecording = true;
+      }
+
+      function appendRecordingChunk(chunkU8) {
+        if (!fullMicRecording) return;
+        currentFullChunks.push(chunkU8.slice());
+      }
+
+      function finalizeTurnRecordingCache() {
+        fullMicRecording = false;
+        if (currentFullChunks.length > 0) fullSegments.push(currentFullChunks);
+        currentFullChunks = [];
+        updateFullDebugAudioPreview();
+      }
+
+      function resetRecordingDebugCache() {
+        currentFullChunks = [];
+        fullSegments = [];
+        fullMicRecording = false;
+        vadRawTurnB64s = [];
+        asrRawTurnB64s = [];
+        if (fullPreviewUrl) {
+          URL.revokeObjectURL(fullPreviewUrl);
+          fullPreviewUrl = null;
+        }
+        revokeFullRawClipUrls();
+        vadAudioPreviewEl.removeAttribute('src');
+        asrAudioPreviewEl.removeAttribute('src');
+        fullAudioPreviewEl.removeAttribute('src');
+        vadAudioPreviewEl.load();
+        asrAudioPreviewEl.load();
+        fullAudioPreviewEl.load();
+        vadAudioMetaEl.textContent = '片段数: 0, 时长: 0.00s';
+        asrAudioMetaEl.textContent = '片段数: 0, 时长: 0.00s';
+        fullAudioMetaEl.textContent = '片段数: 0, 时长: 0.00s';
+        vadRawTurnClipsEl.textContent = '暂无';
+        asrRawTurnClipsEl.textContent = '暂无';
+        fullRawTurnClipsEl.textContent = '暂无';
+      }
+
+      async function buildMonitorPublishPayload() {
+        const fullFlat = flattenSegments(fullSegments);
+        const fullMerged = concatUint8Arrays(fullFlat);
+        let fullMergedB64 = '';
+        if (fullMerged.length) {
+          fullMergedB64 = await blobToBase64(buildWavBlobFromPcmS16(fullMerged, TARGET_SAMPLE_RATE));
+        }
+        const fullTurns = [];
+        for (let i = 0; i < fullSegments.length; i++) {
+          const pcm = concatUint8Arrays(fullSegments[i]);
+          if (!pcm.length) continue;
+          fullTurns.push(await blobToBase64(buildWavBlobFromPcmS16(pcm, TARGET_SAMPLE_RATE)));
+        }
+        return {
+          type: 'monitor_publish',
+          transcript_html: transcriptEl.innerHTML,
+          log_html: logEl.innerHTML,
+          full_merged_wav_base64: fullMergedB64,
+          full_turn_wavs_base64: fullTurns,
+        };
+      }
+
       function setStatus(text) { statusEl.textContent = text; }
 
       function getTtsAudioContext() {
@@ -561,6 +839,8 @@
               view.setInt16(k * 2, s < 0 ? s * 0x8000 : s * 0x7FFF, true);
             }
             buffer.splice(0, Math.floor(outSamples * ratio));
+            const chunkU8 = new Uint8Array(s16);
+            appendRecordingChunk(chunkU8);
             if (ws && ws.readyState === WebSocket.OPEN) ws.send(s16);
           }
         };
@@ -607,7 +887,29 @@
                 ' vad_mode=' + (msg.vad_mode || '-')
               );
               btnSendText.disabled = false;
+              btnMonitorSync.disabled = false;
               startMicStreaming();
+            } else if (msg.type === 'monitor_publish_ok') {
+              log(
+                'Monitor sync OK · subscribers=' + (msg.monitor_subscribers != null ? msg.monitor_subscribers : '?')
+              );
+            } else if (msg.type === 'voice_input_started') {
+              startTurnRecordingCache();
+            } else if (msg.type === 'voice_input_complete_suggested') {
+              finalizeTurnRecordingCache();
+            } else if (msg.type === 'debug_audio_preview') {
+              const vadB64 = msg.vad_wav_base64 || '';
+              const asrB64 = msg.asr_wav_base64 || '';
+              if (vadB64) vadAudioPreviewEl.src = 'data:audio/wav;base64,' + vadB64;
+              else { vadAudioPreviewEl.removeAttribute('src'); vadAudioPreviewEl.load(); }
+              if (asrB64) asrAudioPreviewEl.src = 'data:audio/wav;base64,' + asrB64;
+              else { asrAudioPreviewEl.removeAttribute('src'); asrAudioPreviewEl.load(); }
+              vadAudioMetaEl.textContent = '片段数: ' + (msg.vad_segments || 0) + ', 时长: ' + ((msg.vad_duration_sec || 0).toFixed ? msg.vad_duration_sec.toFixed(2) : '0.00') + 's';
+              asrAudioMetaEl.textContent = '片段数: ' + (msg.asr_segments || 0) + ', 时长: ' + ((msg.asr_duration_sec || 0).toFixed ? msg.asr_duration_sec.toFixed(2) : '0.00') + 's';
+              if (msg.vad_last_turn_wav_base64) vadRawTurnB64s.push(msg.vad_last_turn_wav_base64);
+              if (msg.asr_last_turn_wav_base64) asrRawTurnB64s.push(msg.asr_last_turn_wav_base64);
+              renderRawTurnClipsFromB64(vadRawTurnClipsEl, vadRawTurnB64s, 'VAD 送入');
+              renderRawTurnClipsFromB64(asrRawTurnClipsEl, asrRawTurnB64s, 'Omni 上行');
             } else if (msg.type === 'vad_status') {
               var vp = msg.provider || '-';
               var en = msg.enabled ? 'on' : 'off';
@@ -678,10 +980,34 @@
         };
       }
 
+      btnMonitorSync.onclick = function () {
+        if (!ws || ws.readyState !== WebSocket.OPEN) {
+          log('Not connected.', true);
+          return;
+        }
+        monitorSyncHint.textContent = '打包中…';
+        btnMonitorSync.disabled = true;
+        buildMonitorPublishPayload()
+          .then(function (payload) {
+            ws.send(JSON.stringify(payload));
+            monitorSyncHint.textContent = '已发送';
+            log('Monitor sync sent');
+          })
+          .catch(function (e) {
+            log('Monitor sync failed: ' + (e && e.message ? e.message : e), true);
+            monitorSyncHint.textContent = '';
+          })
+          .then(function () {
+            btnMonitorSync.disabled = false;
+            setTimeout(function () { monitorSyncHint.textContent = ''; }, 2500);
+          });
+      };
+
       btnStart.onclick = function () {
         transcriptEl.innerHTML = '';
         asrPreviewEl.textContent = '';
         logEl.innerHTML = '';
+        resetRecordingDebugCache();
         stageLabel.textContent = 'introduction';
         vadStateEl.textContent = 'provider=smart_turn_v3 state=-';
         acquireInterviewMic().then(function (stream) {
@@ -707,6 +1033,7 @@
         btnStop.disabled = true;
         btnMute.disabled = true;
         btnSendText.disabled = true;
+        btnMonitorSync.disabled = true;
         setStatus('Stopped');
       };
 
