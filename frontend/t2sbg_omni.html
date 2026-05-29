@@ -171,14 +171,6 @@
   </div>
 
   <div class="section">
-    <strong>方式一：文本输入（简化）</strong>
-    <textarea id="userText" rows="3" style="width:100%; box-sizing:border-box;" placeholder="输入文本后发送（用于快速调试）"></textarea>
-    <div style="margin-top:8px;">
-      <button id="btnSendText" disabled>Send Text</button>
-    </div>
-  </div>
-
-  <div class="section">
     <strong>ASR 实时识别（Omni）</strong>
     <div id="asrPreview" class="transcript" style="min-height:48px; font-size:0.9rem; color:#666;"></div>
   </div>
@@ -225,6 +217,16 @@
   </div>
 
   <div id="log" class="transcript" style="max-height: 120px; overflow-y: auto;"></div>
+
+  <div class="section">
+    <strong>方式二：纯文本输入</strong>
+    <span style="font-size:12px; color:#888;">（备用，不常用）</span>
+    <p style="font-size:12px; color:#666;">直接输入证明人/候选人的回答，点击发送（用于快速调试）。</p>
+    <textarea id="userText" rows="3" style="width:100%; box-sizing:border-box;" placeholder="输入文本后发送（用于快速调试）"></textarea>
+    <div style="margin-top:8px;">
+      <button id="btnSendText" disabled>Send Text</button>
+    </div>
+  </div>
 
   <script src="/static/ttfs-app.js"></script>
   <script>
