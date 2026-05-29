@@ -19,6 +19,7 @@ import websockets
 from fastapi import WebSocket
 
 from backend.monitor_snapshot import build_monitor_snapshot, pcm16le_to_wav_bytes
+from backend.aec import create_aec_session, effective_barge_suppress_ms, aec_status_dict
 from backend.vad import (
     VadEvent,
     create_vad_backend,
@@ -59,14 +60,9 @@ def _build_dashscope_url(region: str) -> str:
     return DEFAULT_CN_URL
 
 
-def _tts_barge_suppress_ms() -> int:
-    """Same knob as t2sbg: debug.t2s_tts_barge_suppress_ms / T2S_TTS_BARGE_SUPPRESS_MS."""
-    try:
-        from backend.server import T2S_TTS_BARGE_SUPPRESS_MS
-
-        return int(T2S_TTS_BARGE_SUPPRESS_MS)
-    except Exception:
-        return 0
+def _tts_barge_suppress_ms(*, client_aec: bool = False) -> int:
+    """Same knob as t2sbg; shorter when hybrid AEC is active."""
+    return effective_barge_suppress_ms(client_aec=client_aec)
 
 
 def _safe_json_loads(text: str) -> dict[str, Any]:
@@ -111,10 +107,12 @@ class OmniRealtimeBridge:
         self._local_vad = None
         # First TTS PCM sent to browser (monotonic); 0 = not in a playback burst yet.
         self._tts_first_audio_mono: float = 0.0
+        self._aec_session = create_aec_session()
+        self._client_aec_enabled = False
 
     def _tts_barge_suppress_active(self) -> bool:
         """True during lead-in after first downstream TTS chunk (echo barge-in guard)."""
-        ms = _tts_barge_suppress_ms()
+        ms = _tts_barge_suppress_ms(client_aec=self._client_aec_enabled)
         if ms <= 0:
             return False
         if self._tts_first_audio_mono <= 0:
@@ -270,6 +268,8 @@ class OmniRealtimeBridge:
                     if delta:
                         try:
                             pcm = base64.b64decode(delta)
+                            if pcm:
+                                self._aec_session.feed_tts_reference_pcm(pcm)
                             if pcm and self._tts_first_audio_mono <= 0:
                                 self._tts_first_audio_mono = time.monotonic()
                             await self._send_client_audio(pcm)
@@ -306,7 +306,7 @@ class OmniRealtimeBridge:
                 elif t == "input_audio_buffer.speech_started" and not self._use_local_smart_turn:
                     await self._begin_turn_capture()
                     if self._tts_barge_suppress_active():
-                        suppress_ms = _tts_barge_suppress_ms()
+                        suppress_ms = _tts_barge_suppress_ms(client_aec=self._client_aec_enabled)
                         LOG.info(
                             "omni speech_started ignored (TTS lead-in %sms)",
                             suppress_ms,
@@ -355,7 +355,7 @@ class OmniRealtimeBridge:
         if ev.kind == "speech_start":
             await self._begin_turn_capture()
             if self._tts_barge_suppress_active():
-                suppress_ms = _tts_barge_suppress_ms()
+                suppress_ms = _tts_barge_suppress_ms(client_aec=self._client_aec_enabled)
                 LOG.info(
                     "omni VAD speech_start ignored (TTS lead-in %sms)",
                     suppress_ms,
@@ -478,7 +478,8 @@ class OmniRealtimeBridge:
         elif t == "response_cancel":
             await self._send_omni_event({"type": "response.cancel"})
         elif t == "config_audio":
-            # Omni side expects pcm/16k from browser. Keep ack for UI logs.
+            if obj.get("client_aec_enabled") is not None:
+                self._client_aec_enabled = bool(obj.get("client_aec_enabled"))
             await self._send_client_json(
                 {
                     "type": "audio_config_applied",
@@ -486,11 +487,16 @@ class OmniRealtimeBridge:
                     "vad_asr_target_sample_rate": 16000,
                     "resample_enabled": False,
                     "resampler": "none",
+                    **aec_status_dict(client_aec=self._client_aec_enabled),
                 }
             )
 
     async def handle_client_audio(self, pcm_s16le: bytes) -> None:
         # Browser sends raw PCM16 mono 16k chunks.
+        try:
+            pcm_s16le = self._aec_session.process_capture(pcm_s16le)
+        except Exception:
+            pass
         if self._turn_capture_active:
             self._omni_turn_buffer.extend(pcm_s16le)
             if self._local_vad is not None:

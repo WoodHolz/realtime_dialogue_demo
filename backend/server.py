@@ -49,6 +49,7 @@ from backend.asr_client import (
     asr_error_hint,
 )
 from backend.duplug_vad_local import duplug_local_config_path, duplug_local_enabled
+from backend.aec import create_aec_session, effective_barge_suppress_ms, aec_status_dict, server_aec_enabled
 from backend.vad import (
     SEMANTIC_VAD_SOURCES,
     VadEvent,
@@ -422,6 +423,26 @@ def _read_omni_voice_version_from_config() -> str:
     return _read_config_version("omni_voice_version")
 
 
+def _read_audio_config_from_json() -> dict:
+    """Public audio/AEC flags for browser clients."""
+    cfg_path = _repo_root() / "config.json"
+    try:
+        with cfg_path.open("r", encoding="utf-8") as f:
+            data = json.load(f)
+        audio = data.get("audio")
+        if isinstance(audio, dict):
+            return dict(audio)
+    except Exception:
+        pass
+    return {"client_aec_enabled": False, "server_aec_enabled": server_aec_enabled()}
+
+
+def _inject_page_placeholders(html: str, *, voice_version_key: str, version_placeholder: str) -> str:
+    raw = html.replace(version_placeholder, json.dumps(_read_config_version(voice_version_key)))
+    raw = raw.replace("__AUDIO_CONFIG__", json.dumps(_read_audio_config_from_json()))
+    return _inline_ttfs_script_into_t2sbg_html(raw)
+
+
 _T2SBG_TTFS_SCRIPT_MARKER = '<script src="/static/ttfs-app.js"></script>'
 
 
@@ -470,8 +491,11 @@ async def t2sbg_voice_page():
     if not path.exists():
         return HTMLResponse("<p>t2sbg.html not found</p>", status_code=404)
     raw = path.read_text(encoding="utf-8")
-    raw = raw.replace("'__T2SBG_VOICE_VERSION__'", json.dumps(_read_t2sbg_voice_version_from_config()))
-    raw = _inline_ttfs_script_into_t2sbg_html(raw)
+    raw = _inject_page_placeholders(
+        raw,
+        voice_version_key="t2sbg_voice_version",
+        version_placeholder="'__T2SBG_VOICE_VERSION__'",
+    )
     return HTMLResponse(raw, media_type="text/html; charset=utf-8")
 
 
@@ -482,8 +506,11 @@ async def t2sbg_omni_page():
     if not path.exists():
         return HTMLResponse("<p>t2sbg_omni.html not found</p>", status_code=404)
     raw = path.read_text(encoding="utf-8")
-    raw = raw.replace("'__OMNI_VOICE_VERSION__'", json.dumps(_read_omni_voice_version_from_config()))
-    raw = _inline_ttfs_script_into_t2sbg_html(raw)
+    raw = _inject_page_placeholders(
+        raw,
+        voice_version_key="omni_voice_version",
+        version_placeholder="'__OMNI_VOICE_VERSION__'",
+    )
     return HTMLResponse(raw, media_type="text/html; charset=utf-8")
 
 
@@ -512,6 +539,30 @@ async def ttfs_app_js():
     if not path.exists():
         return HTMLResponse("// ttfs-app.js not found\n", status_code=404, media_type="application/javascript")
     return FileResponse(path, media_type="application/javascript; charset=utf-8")
+
+
+@app.get("/static/aec-processor.js")
+async def aec_processor_js():
+    path = _frontend_dir() / "shared" / "aec-processor.js"
+    if not path.exists():
+        return HTMLResponse("// aec-processor.js not found\n", status_code=404, media_type="application/javascript")
+    return FileResponse(path, media_type="application/javascript; charset=utf-8")
+
+
+@app.get("/static/webrtcaec3-0.3.0.js")
+async def webrtcaec3_js():
+    path = _frontend_dir() / "shared" / "webrtcaec3-0.3.0.js"
+    if not path.exists():
+        return HTMLResponse("// webrtcaec3 not found\n", status_code=404, media_type="application/javascript")
+    return FileResponse(path, media_type="application/javascript; charset=utf-8")
+
+
+@app.get("/static/webrtcaec3-0.3.0.wasm")
+async def webrtcaec3_wasm():
+    path = _frontend_dir() / "shared" / "webrtcaec3-0.3.0.wasm"
+    if not path.exists():
+        return HTMLResponse(b"", status_code=404, media_type="application/wasm")
+    return FileResponse(path, media_type="application/wasm")
 
 
 @app.websocket("/ws/t2sbg-monitor")
@@ -688,6 +739,8 @@ async def websocket_endpoint(websocket: WebSocket):
     t2s_last_complete_ts: float = 0.0
     # 本轮 TTS：首帧 PCM 发给浏览器时的 monotonic 时间（0 表示尚未发过帧）
     t2s_tts_first_audio_mono: float = 0.0
+    t2s_aec_session = create_aec_session()
+    t2s_client_aec_enabled = False
     # 调试：可选音频落盘（默认关闭）
     t2s_debug_audio_dump_enabled = T2S_DEBUG_AUDIO_DUMP
     t2s_debug_audio_dir = Path(T2S_DEBUG_AUDIO_DIR)
@@ -980,11 +1033,14 @@ async def websocket_endpoint(websocket: WebSocket):
 
     def _t2s_tts_barge_suppress_active() -> bool:
         """首帧 TTS 发出后的保护窗内为 True：不触发 barge_in / 不把 VAD speech_start 当用户开说。"""
-        if mode != "t2s" or T2S_TTS_BARGE_SUPPRESS_MS <= 0:
+        if mode != "t2s":
+            return False
+        suppress_ms = effective_barge_suppress_ms(client_aec=t2s_client_aec_enabled)
+        if suppress_ms <= 0:
             return False
         if t2s_tts_first_audio_mono <= 0:
             return False
-        return (time.monotonic() - t2s_tts_first_audio_mono) * 1000.0 < float(T2S_TTS_BARGE_SUPPRESS_MS)
+        return (time.monotonic() - t2s_tts_first_audio_mono) * 1000.0 < float(suppress_ms)
 
     async def _apply_t2s_vad_event(ev: VadEvent) -> bool:
         """
@@ -1009,14 +1065,15 @@ async def websocket_endpoint(websocket: WebSocket):
             t2s_last_nonidle_ts = time.monotonic()
             if not t2s_speech_started:
                 if _t2s_tts_barge_suppress_active():
+                    suppress_ms = effective_barge_suppress_ms(client_aec=t2s_client_aec_enabled)
                     LOG.info(
                         "t2s VAD speech_start ignored (TTS lead-in %sms)",
-                        T2S_TTS_BARGE_SUPPRESS_MS,
+                        suppress_ms,
                     )
                     push_server_log(
                         "info",
                         "VAD speech_start ignored (TTS lead-in window)",
-                        ms=T2S_TTS_BARGE_SUPPRESS_MS,
+                        ms=suppress_ms,
                     )
                     return False
                 t2s_speech_started = True
@@ -1310,8 +1367,13 @@ async def websocket_endpoint(websocket: WebSocket):
 
     def on_tts_audio(data: bytes):
         nonlocal t2s_tts_first_audio_mono
-        if mode == "t2s" and data and t2s_tts_first_audio_mono <= 0:
-            t2s_tts_first_audio_mono = time.monotonic()
+        if mode == "t2s" and data:
+            try:
+                t2s_aec_session.feed_tts_reference_pcm(data)
+            except Exception:
+                pass
+            if t2s_tts_first_audio_mono <= 0:
+                t2s_tts_first_audio_mono = time.monotonic()
         if barge_in_flag:
             return
         try:
@@ -1418,11 +1480,12 @@ async def websocket_endpoint(websocket: WebSocket):
         nonlocal barge_in_flag
         nonlocal last_question_id
         if _t2s_tts_barge_suppress_active():
+            suppress_ms = effective_barge_suppress_ms(client_aec=t2s_client_aec_enabled)
             LOG.info("t2s barge_in suppressed (Doubao ASR_INFO during TTS lead-in)")
             push_server_log(
                 "info",
                 "barge_in suppressed (TTS lead-in window)",
-                ms=T2S_TTS_BARGE_SUPPRESS_MS,
+                ms=suppress_ms,
             )
             return
         barge_in_flag = True
@@ -1825,6 +1888,10 @@ async def websocket_endpoint(websocket: WebSocket):
                     data = _normalize_input_audio_to_16k(data)
                     if not data:
                         continue
+                    try:
+                        data = t2s_aec_session.process_capture(data)
+                    except Exception:
+                        pass
                 chunks = pcm_chunks_from_bytes(data)
                 for ch in chunks:
                     if mode == "t2s":
@@ -1896,6 +1963,8 @@ async def websocket_endpoint(websocket: WebSocket):
                     elif obj.get("type") == "config_audio":
                         if mode != "t2s":
                             continue
+                        if obj.get("client_aec_enabled") is not None:
+                            t2s_client_aec_enabled = bool(obj.get("client_aec_enabled"))
                         sr = _set_t2s_input_sample_rate(
                             obj.get("input_sample_rate", obj.get("sample_rate", VAD_ASR_TARGET_SAMPLE_RATE))
                         )
@@ -1906,6 +1975,7 @@ async def websocket_endpoint(websocket: WebSocket):
                                 "vad_asr_target_sample_rate": VAD_ASR_TARGET_SAMPLE_RATE,
                                 "resample_enabled": bool(sr != VAD_ASR_TARGET_SAMPLE_RATE),
                                 "resampler": "soxr" if soxr is not None else "linear_fallback",
+                                **aec_status_dict(client_aec=t2s_client_aec_enabled),
                             }
                         )
                         push_server_log(

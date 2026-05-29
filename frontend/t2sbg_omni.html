@@ -228,10 +228,12 @@
     </div>
   </div>
 
+  <script src="/static/aec-processor.js"></script>
   <script src="/static/ttfs-app.js"></script>
   <script>
     (function () {
       const OMNI_VOICE_VERSION = '__OMNI_VOICE_VERSION__';
+      const AUDIO_CONFIG = __AUDIO_CONFIG__;
       const pageVersionEl = document.getElementById('pageVersion');
       if (pageVersionEl) pageVersionEl.textContent = 't2sbg-omni v' + OMNI_VOICE_VERSION;
 
@@ -268,6 +270,7 @@
       let fullMicRecording = false;
 
       let ws = null;
+      let clientAec = null;
       let mediaStream = null;
       let audioContext = null;
       let sourceNode = null;
@@ -704,8 +707,9 @@
       }
 
       function openProcessedMic() {
+        var useClientAec = window.ClientAec && ClientAec.resolveEnabled(AUDIO_CONFIG);
         return navigator.mediaDevices.getUserMedia({
-          audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true, channelCount: 1 },
+          audio: { echoCancellation: !useClientAec, noiseSuppression: true, autoGainControl: true, channelCount: 1 },
           video: false,
         });
       }
@@ -759,6 +763,9 @@
 
       function playTTSChunk(pcmS16) {
         if (!pcmS16 || pcmS16.length === 0) return;
+        if (clientAec && clientAec.enabled) {
+          try { clientAec.feedRenderPcmS16(pcmS16, TTS_SAMPLE_RATE); } catch (aecErr) { /* ignore */ }
+        }
         const ctx = getTtsAudioContext();
         const pcmF32 = pcmS16ToFloat32(pcmS16);
         const buf = ctx.createBuffer(1, pcmF32.length, TTS_SAMPLE_RATE);
@@ -811,6 +818,17 @@
         return audioContext;
       }
 
+      function sendAudioConfig() {
+        if (!ws || ws.readyState !== WebSocket.OPEN) return;
+        ws.send(JSON.stringify({
+          type: 'config_audio',
+          input_sample_rate: TARGET_SAMPLE_RATE,
+          format: 'pcm_s16le',
+          channels: 1,
+          client_aec_enabled: !!(clientAec && clientAec.enabled),
+        }));
+      }
+
       function startMicStreaming() {
         if (micStreamingStarted) return;
         if (!mediaStream || !ws || ws.readyState !== WebSocket.OPEN) return;
@@ -829,18 +847,27 @@
           const input = e.inputBuffer.getChannelData(0);
           for (let i = 0; i < input.length; i++) buffer.push(input[i]);
           while (buffer.length >= requiredIn) {
-            const s16 = new ArrayBuffer(outSamples * 2);
-            const view = new DataView(s16);
+            const blockF32 = new Float32Array(outSamples);
             for (let k = 0; k < outSamples; k++) {
               const pos = k * ratio;
               const idx = Math.floor(pos);
               const frac = pos - idx;
               const s0 = buffer[idx] || 0;
               const s1 = buffer[idx + 1] || s0;
-              const s = Math.max(-1, Math.min(1, s0 + (s1 - s0) * frac));
-              view.setInt16(k * 2, s < 0 ? s * 0x8000 : s * 0x7FFF, true);
+              blockF32[k] = Math.max(-1, Math.min(1, s0 + (s1 - s0) * frac));
             }
             buffer.splice(0, Math.floor(outSamples * ratio));
+            var s16 = (clientAec && clientAec.enabled)
+              ? clientAec.processCaptureBlockToS16(blockF32)
+              : null;
+            if (!s16) {
+              s16 = new ArrayBuffer(outSamples * 2);
+              const view = new DataView(s16);
+              for (let k = 0; k < outSamples; k++) {
+                const s = blockF32[k];
+                view.setInt16(k * 2, s < 0 ? s * 0x8000 : s * 0x7FFF, true);
+              }
+            }
             const chunkU8 = new Uint8Array(s16);
             appendRecordingChunk(chunkU8);
             if (ws && ws.readyState === WebSocket.OPEN) ws.send(s16);
@@ -851,6 +878,7 @@
         processorNode.connect(muteGainNode);
         muteGainNode.connect(ctx.destination);
         micStreamingStarted = true;
+        sendAudioConfig();
       }
 
       function stopMicStreaming() {
@@ -1012,7 +1040,22 @@
         resetRecordingDebugCache();
         stageLabel.textContent = 'introduction';
         vadStateEl.textContent = 'provider=smart_turn_v3 state=-';
-        acquireInterviewMic().then(function (stream) {
+        var aecInit = (window.ClientAec && typeof ClientAec.init === 'function')
+          ? ClientAec.init({ audioConfig: AUDIO_CONFIG, sampleRate: TARGET_SAMPLE_RATE })
+          : Promise.resolve({ enabled: false, feedRenderPcmS16: function () {}, processCaptureBlockToS16: function (f) {
+              var buf = new ArrayBuffer(f.length * 2);
+              var view = new DataView(buf);
+              for (var i = 0; i < f.length; i++) {
+                var s = f[i];
+                view.setInt16(i * 2, s < 0 ? s * 0x8000 : s * 0x7fff, true);
+              }
+              return buf;
+            } });
+        aecInit.then(function (pipe) {
+          clientAec = pipe;
+          log('[aec] client ' + (pipe.enabled ? 'enabled (AEC3)' : 'passthrough'));
+          return acquireInterviewMic();
+        }).then(function (stream) {
           mediaStream = stream;
           connect();
           btnStart.disabled = true;
@@ -1030,6 +1073,10 @@
           mediaStream = null;
         }
         stopMicStreaming();
+        if (clientAec && typeof clientAec.destroy === 'function') {
+          try { clientAec.destroy(); } catch (e) { /* ignore */ }
+        }
+        clientAec = null;
         if (ws) { ws.close(); ws = null; }
         btnStart.disabled = false;
         btnStop.disabled = true;

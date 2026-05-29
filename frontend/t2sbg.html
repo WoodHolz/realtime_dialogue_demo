@@ -265,10 +265,12 @@
   </div>
 
   <!-- Served from /t2sbg-voice: server inlines ttfs-app.js here (no separate GET /static/…). -->
+  <script src="/static/aec-processor.js"></script>
   <script src="/static/ttfs-app.js"></script>
   <script>
     (function () {
       const T2SBG_VOICE_VERSION = '__T2SBG_VOICE_VERSION__';
+      const AUDIO_CONFIG = __AUDIO_CONFIG__;
       const pageVersionEl = document.getElementById('pageVersion');
       if (pageVersionEl) pageVersionEl.textContent = 't2sbg-voice v' + T2SBG_VOICE_VERSION;
       const statusEl = document.getElementById('status');
@@ -307,6 +309,7 @@
       });
 
       let ws = null;
+      let clientAec = null;
       let micAudioContext = null;
       let ttsAudioContext = null;
       let ttsQueue = [];
@@ -862,9 +865,10 @@
       }
 
       function openProcessedMic() {
+        var useClientAec = window.ClientAec && ClientAec.resolveEnabled(AUDIO_CONFIG);
         return navigator.mediaDevices.getUserMedia({
           audio: {
-            echoCancellation: true,
+            echoCancellation: !useClientAec,
             noiseSuppression: true,
             autoGainControl: true,
             channelCount: 1,
@@ -957,6 +961,9 @@
           updateLatencyDisplay();
           logStageLatency('501→首帧语音(TTS)', latencyTTSMs, '自 chat_text_query_sent');
           voiceE2eMark('TTS首帧调度(playTTSChunk)');
+        }
+        if (clientAec && clientAec.enabled) {
+          try { clientAec.feedRenderPcmS16(pcmS16, TTS_SAMPLE_RATE); } catch (aecErr) { /* ignore */ }
         }
         const ctx = getTtsAudioContext();
         const pcmF32 = pcmS16ToFloat32(pcmS16);
@@ -1286,6 +1293,7 @@
           input_sample_rate: sampleRate || TARGET_SAMPLE_RATE,
           format: 'pcm_s16le',
           channels: 1,
+          client_aec_enabled: !!(clientAec && clientAec.enabled),
         }));
       }
 
@@ -1306,18 +1314,27 @@
           const input = e.inputBuffer.getChannelData(0);
           for (let i = 0; i < input.length; i++) buffer.push(input[i]);
           while (buffer.length >= requiredIn) {
-            const s16 = new ArrayBuffer(outSamples * 2);
-            const v = new DataView(s16);
+            const blockF32 = new Float32Array(outSamples);
             for (let k = 0; k < outSamples; k++) {
               const pos = k * ratio;
               const idx = Math.floor(pos);
               const frac = pos - idx;
               const s0 = buffer[idx] || 0;
               const s1 = buffer[idx + 1] || s0;
-              const s = Math.max(-1, Math.min(1, s0 + (s1 - s0) * frac));
-              v.setInt16(k * 2, s < 0 ? s * 0x8000 : s * 0x7FFF, true);
+              blockF32[k] = Math.max(-1, Math.min(1, s0 + (s1 - s0) * frac));
             }
             buffer.splice(0, Math.floor(outSamples * ratio));
+            var s16 = (clientAec && clientAec.enabled)
+              ? clientAec.processCaptureBlockToS16(blockF32)
+              : null;
+            if (!s16) {
+              s16 = new ArrayBuffer(outSamples * 2);
+              const v = new DataView(s16);
+              for (let k = 0; k < outSamples; k++) {
+                const s = blockF32[k];
+                v.setInt16(k * 2, s < 0 ? s * 0x8000 : s * 0x7FFF, true);
+              }
+            }
             if (ws && ws.readyState === WebSocket.OPEN) {
               const chunkU8 = new Uint8Array(s16);
               appendRecordingChunk(chunkU8);
@@ -1489,7 +1506,9 @@
                   'Audio config applied: input_sr=' + (msg.input_sample_rate || '-') +
                   ' target_sr=' + (msg.vad_asr_target_sample_rate || '-') +
                   ' resample=' + (!!msg.resample_enabled) +
-                  ' via=' + (msg.resampler || '-')
+                  ' via=' + (msg.resampler || '-') +
+                  ' server_aec=' + (!!msg.server_aec_enabled) +
+                  ' barge_suppress_ms=' + (msg.t2s_tts_barge_suppress_ms != null ? msg.t2s_tts_barge_suppress_ms : '-')
                 );
               } else if (msg.type === 'voice_input_complete_suggested') {
                 if (tsVadFirstPcmAfterStarted) {
@@ -1696,7 +1715,22 @@
         resetAiStreamingState();
         flushTTSQueue();
         resetRecordingDebugCache();
-        acquireInterviewMic()
+        var aecInit = (window.ClientAec && typeof ClientAec.init === 'function')
+          ? ClientAec.init({ audioConfig: AUDIO_CONFIG, sampleRate: TARGET_SAMPLE_RATE })
+          : Promise.resolve({ enabled: false, feedRenderPcmS16: function () {}, processCaptureBlockToS16: function (f) {
+              var buf = new ArrayBuffer(f.length * 2);
+              var view = new DataView(buf);
+              for (var i = 0; i < f.length; i++) {
+                var s = f[i];
+                view.setInt16(i * 2, s < 0 ? s * 0x8000 : s * 0x7fff, true);
+              }
+              return buf;
+            } });
+        aecInit.then(function (pipe) {
+          clientAec = pipe;
+          log('[aec] client ' + (pipe.enabled ? 'enabled (AEC3)' : 'passthrough'));
+          return acquireInterviewMic();
+        })
           .then(function (stream) {
             mediaStream = stream;
             try {
@@ -1726,6 +1760,10 @@
         if (ws) { ws.close(); ws = null; }
         updateVadState('-', '-');
         hardStopTTSPlayback();
+        if (clientAec && typeof clientAec.destroy === 'function') {
+          try { clientAec.destroy(); } catch (e) { /* ignore */ }
+        }
+        clientAec = null;
         btnStart.disabled = false;
         btnStop.disabled = true;
         btnSendText.disabled = true;

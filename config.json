@@ -54,6 +54,13 @@
     "duplug_enabled": false,
     "duplug_url": ""
   },
+  "audio": {
+    "description": "Hybrid AEC: client webrtcaec3.js (primary) + server NLMS before VAD (secondary). Enable via ?aec=1 or flags below.",
+    "client_aec_enabled": true,
+    "server_aec_enabled": true,
+    "server_aec_delay_ms": 80,
+    "t2s_tts_barge_suppress_ms_with_aec": 500
+  },
   "debug": {
     "_comment": "t2s debug and VAD endpointing tuning (all timings in ms/sec as noted).",
     "t2s_audio_dump_enabled": false,
