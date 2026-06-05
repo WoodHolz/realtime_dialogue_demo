@@ -41,6 +41,7 @@ from backend.prompt_manager import PromptManager
 from backend.realtime_client import RealtimeVoiceClient
 from backend.followup_client import FollowupQuestionClient
 from backend.omni_bridge import OmniRealtimeBridge
+from backend.self_omni_bridge import SelfDeployedOmniBridge
 from backend.asr_client import (
     VolcAsrClient,
     VolcAsrStreamingSession,
@@ -549,10 +550,17 @@ async def websocket_t2sbg_monitor(websocket: WebSocket):
                 pass
 
 
+def _create_omni_bridge(websocket: WebSocket, initial_cfg: dict) -> OmniRealtimeBridge | SelfDeployedOmniBridge:
+    """Pick Qwen DashScope Omni or self-deployed Omni based on client config."""
+    backend = (initial_cfg.get("omni_backend") or "qwen").strip().lower()
+    if backend in {"self", "self_deployed", "custom"}:
+        return SelfDeployedOmniBridge(websocket)
+    return OmniRealtimeBridge(websocket)
+
+
 @app.websocket("/ws-omni")
 async def websocket_omni_endpoint(websocket: WebSocket):
     await websocket.accept()
-    bridge = OmniRealtimeBridge(websocket)
     try:
         # Keep first client frame compatible with existing frontend config style.
         initial_cfg: dict = {}
@@ -564,6 +572,7 @@ async def websocket_omni_endpoint(websocket: WebSocket):
         except Exception:
             initial_cfg = {}
 
+        bridge = _create_omni_bridge(websocket, initial_cfg)
         await bridge.start(initial_cfg)
 
         while True:

@@ -102,14 +102,32 @@
   <h1>芝麻背调证明人访谈（Omni 直连）</h1>
   <p class="page-version" id="pageVersion"></p>
   <p style="color:#666; font-size:0.9rem;">
-    链路：Browser 上行音频 → Backend Omni Bridge →（Smart Turn v3 + Qwen Omni ASR/对话）。判停由后端 Smart Turn v3 完成，再 commit 触发 Omni 回复。
+    链路：Browser 上行音频 → Backend Omni Bridge →（Smart Turn v3 + Omni 模型）。判停由后端 Smart Turn v3 完成；Qwen Omni 为流式 commit，自部署 Omni 为按轮整段 WAV 提交。
     TTFS 延迟面板已<strong>内联在本页</strong>：<strong>Start Session</strong> 会自动 <code>TTFS.startMic()</code>；Omni TTS 自动接入 Playback 测光。
   </p>
-  <div class="status" id="status">点击 Start 建立会话，然后直接说话。</div>
+  <div class="status" id="status">选择 Omni 后端后点击 Start 建立会话，然后直接说话。</div>
   <div class="status">
     <span>Mode:</span> <span id="modeLabel">omni</span>
+    <span style="margin-left:12px;">Backend:</span> <span id="backendLabel">qwen</span>
     <span style="margin-left:12px;">Stage:</span> <span id="stageLabel">introduction</span>
     <span style="margin-left:12px;">VAD:</span> <span id="vadState">provider=smart_turn_v3 state=-</span>
+  </div>
+
+  <div class="section" style="margin-top:12px;">
+    <strong>Omni 后端（开始对话前选择）</strong>
+    <div style="margin-top:8px; display:flex; flex-direction:column; gap:6px; font-size:0.9rem;">
+      <label style="cursor:pointer;">
+        <input type="radio" name="omniBackend" id="omniBackendQwen" value="qwen" checked />
+        Qwen Omni（DashScope 云端，流式实时）
+      </label>
+      <label style="cursor:pointer;">
+        <input type="radio" name="omniBackend" id="omniBackendSelf" value="self" />
+        自部署 Omni（按轮提交 WAV，模型仍在优化中）
+      </label>
+    </div>
+    <p id="selfOmniHint" style="font-size:12px; color:#888; margin:6px 0 0;">
+      自部署需配置 <code>SELF_OMNI_WS_URL</code> 或 <code>config.json → omni.self_deployed_ws_url</code>。
+    </p>
   </div>
 
   <div class="controls">
@@ -237,6 +255,9 @@
 
       const statusEl = document.getElementById('status');
       const stageLabel = document.getElementById('stageLabel');
+      const backendLabel = document.getElementById('backendLabel');
+      const omniBackendQwen = document.getElementById('omniBackendQwen');
+      const omniBackendSelf = document.getElementById('omniBackendSelf');
       const vadStateEl = document.getElementById('vadState');
       const transcriptEl = document.getElementById('transcript');
       const asrPreviewEl = document.getElementById('asrPreview');
@@ -861,16 +882,29 @@
         micStreamingStarted = false;
       }
 
+      function selectedOmniBackend() {
+        if (omniBackendSelf && omniBackendSelf.checked) return 'self';
+        return 'qwen';
+      }
+
+      function setOmniBackendControlsEnabled(enabled) {
+        if (omniBackendQwen) omniBackendQwen.disabled = !enabled;
+        if (omniBackendSelf) omniBackendSelf.disabled = !enabled;
+      }
+
       function connect() {
+        const backend = selectedOmniBackend();
+        if (backendLabel) backendLabel.textContent = backend;
         const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
         const url = protocol + '//' + location.host + '/ws-omni';
         ws = new WebSocket(url);
         ws.binaryType = 'arraybuffer';
-        setStatus('Connecting Omni...');
+        setStatus(backend === 'self' ? 'Connecting self-deployed Omni...' : 'Connecting Qwen Omni...');
 
         ws.onopen = function () {
           ws.send(JSON.stringify({
             mode: 'omni',
+            omni_backend: backend,
             stage: 'introduction',
             system_role: DEFAULT_SYSTEM_ROLE,
             speaking_style: DEFAULT_SPEAKING_STYLE
@@ -882,11 +916,19 @@
             let msg = {};
             try { msg = JSON.parse(ev.data); } catch (e) { return; }
             if (msg.type === 'ready') {
-              setStatus('Omni 已就绪，直接说话即可。');
+              const backend = msg.omni_backend || selectedOmniBackend();
+              if (backendLabel) backendLabel.textContent = backend;
+              setStatus(
+                backend === 'self'
+                  ? '自部署 Omni 已就绪，说完一轮后等待模型回复。'
+                  : 'Qwen Omni 已就绪，直接说话即可。'
+              );
               log(
-                'ready model=' + (msg.omni_model || '-') +
+                'ready backend=' + backend +
+                ' model=' + (msg.omni_model || '-') +
                 ' voice=' + (msg.omni_voice || '-') +
-                ' vad_mode=' + (msg.vad_mode || '-')
+                ' vad_mode=' + (msg.vad_mode || '-') +
+                (msg.self_omni_ws_url ? ' url=' + msg.self_omni_ws_url : '')
               );
               btnSendText.disabled = false;
               btnMonitorSync.disabled = false;
@@ -1012,8 +1054,11 @@
         resetRecordingDebugCache();
         stageLabel.textContent = 'introduction';
         vadStateEl.textContent = 'provider=smart_turn_v3 state=-';
+        const backend = selectedOmniBackend();
+        if (backendLabel) backendLabel.textContent = backend;
         acquireInterviewMic().then(function (stream) {
           mediaStream = stream;
+          setOmniBackendControlsEnabled(false);
           connect();
           btnStart.disabled = true;
           btnStop.disabled = false;
@@ -1031,6 +1076,7 @@
         }
         stopMicStreaming();
         if (ws) { ws.close(); ws = null; }
+        setOmniBackendControlsEnabled(true);
         btnStart.disabled = false;
         btnStop.disabled = true;
         btnMute.disabled = true;

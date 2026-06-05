@@ -11,6 +11,7 @@ import base64
 import json
 import logging
 import os
+import socket
 import time
 import uuid
 from typing import Any
@@ -220,12 +221,36 @@ class OmniRealtimeBridge:
         event["event_id"] = f"event_{int(time.time() * 1000)}"
         await self.omni_ws.send(json.dumps(event, ensure_ascii=False))
 
+    def _dashscope_ws_connect_kwargs(self) -> dict[str, Any]:
+        """DashScope WSS can hang on IPv6 in some networks; prefer IPv4 unless overridden."""
+        kwargs: dict[str, Any] = {}
+        family_override = (os.environ.get("OMNI_WS_FAMILY") or "inet4").strip().lower()
+        if family_override in {"inet4", "ipv4", "v4", "4"}:
+            kwargs["family"] = socket.AF_INET
+        elif family_override in {"inet6", "ipv6", "v6", "6"}:
+            kwargs["family"] = socket.AF_INET6
+        try:
+            kwargs["open_timeout"] = float(os.environ.get("OMNI_WS_OPEN_TIMEOUT", "20"))
+        except ValueError:
+            kwargs["open_timeout"] = 20.0
+        return kwargs
+
     async def _connect_omni(self) -> None:
         if not self.api_key:
             raise RuntimeError("DASHSCOPE_API_KEY is not configured")
         url = f"{_build_dashscope_url(self.region)}?model={self.model}"
         headers = {"Authorization": f"Bearer {self.api_key}"}
-        self.omni_ws = await websockets.connect(url, additional_headers=headers)
+        try:
+            self.omni_ws = await websockets.connect(
+                url,
+                additional_headers=headers,
+                **self._dashscope_ws_connect_kwargs(),
+            )
+        except TimeoutError as exc:
+            raise RuntimeError(
+                "DashScope Omni websocket handshake timed out "
+                "(check network/VPN; IPv6 to dashscope.aliyuncs.com may fail — default uses IPv4 via OMNI_WS_FAMILY=inet4)"
+            ) from exc
 
     async def _update_omni_session(self) -> None:
         # Local Smart Turn: manual commit/response.create; else DashScope server VAD.
@@ -446,6 +471,7 @@ class OmniRealtimeBridge:
             {
                 "type": "ready",
                 "mode": "omni",
+                "omni_backend": "qwen",
                 "omni_model": self.model,
                 "omni_voice": self.voice,
                 "region": self.region,
