@@ -2,6 +2,8 @@
 .venv/
 venv/
 __pycache__/
+third_party/hush/lib/
+third_party/hush/models/
 *.py[cod]
 *.egg-info/
 .pytest_cache/

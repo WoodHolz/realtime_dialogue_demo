@@ -39,9 +39,15 @@
     "asr_access_key": ""
   },
   "omni": {
-    "description": "Qwen Omni (/t2sbg-omni): follows vad.provider for local Smart Turn; override with OMNI_VAD=server. TTS lead-in uses debug.t2s_tts_barge_suppress_ms (same as t2sbg). Self-deployed Omni: set self_deployed_ws_url or SELF_OMNI_WS_URL.",
+    "description": "Qwen Omni (/t2sbg-omni): follows vad.provider for local Smart Turn; override with OMNI_VAD=server. TTS lead-in uses debug.t2s_tts_barge_suppress_ms (same as t2sbg). Self-deployed Omni: set self_deployed_ws_url or SELF_OMNI_WS_URL. Hush denoise: weya-ai/hush via libweya_nc (see third_party/hush).",
     "use_local_smart_turn": true,
-    "self_deployed_ws_url": "wss://wildness-junkie-frivolous.ngrok-free.dev"
+    "self_deployed_ws_url": "wss://wildness-junkie-frivolous.ngrok-free.dev",
+    "hush": {
+      "enabled": true,
+      "lib_path": null,
+      "model_path": null,
+      "atten_lim_db": 100.0
+    }
   },
   "vad": {
     "description": "VAD provider: smart_turn_v3 (default) or duplug. Used by t2sbg and t2sbg-omni. Env: VAD_PROVIDER, SMART_TURN_*.",
@@ -72,5 +78,5 @@
     "t2s_tts_barge_suppress_ms": 2000
   },
   "t2sbg_voice_version": "0.0.6",
-  "omni_voice_version": "0.0.11"
+  "omni_voice_version": "0.0.13"
 }

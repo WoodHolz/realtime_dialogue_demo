@@ -19,6 +19,8 @@ from typing import Any
 import websockets
 from fastapi import WebSocket
 
+from backend.hush import create_hush_session, hush_enabled, hush_status_payload
+from backend.hush.manager import hush_manager_error
 from backend.monitor_snapshot import build_monitor_snapshot, pcm16le_to_wav_bytes
 from backend.vad import (
     VadEvent,
@@ -110,6 +112,7 @@ class OmniRealtimeBridge:
         self.turn_detection_type = DEFAULT_TURN_DETECTION_TYPE
         self._use_local_smart_turn = False
         self._local_vad = None
+        self._hush = create_hush_session() if hush_enabled() else None
         # First TTS PCM sent to browser (monotonic); 0 = not in a playback burst yet.
         self._tts_first_audio_mono: float = 0.0
 
@@ -476,6 +479,10 @@ class OmniRealtimeBridge:
                 "omni_voice": self.voice,
                 "region": self.region,
                 "vad_mode": vad_mode,
+                "hush": hush_status_payload(
+                    ready=self._hush is not None,
+                    error=hush_manager_error(),
+                ),
             }
         )
 
@@ -515,17 +522,25 @@ class OmniRealtimeBridge:
                 }
             )
 
+    def _denoise_uplink_pcm(self, pcm_s16le: bytes) -> bytes:
+        if self._hush is None:
+            return pcm_s16le
+        return self._hush.process_pcm_s16le(pcm_s16le)
+
     async def handle_client_audio(self, pcm_s16le: bytes) -> None:
-        # Browser sends raw PCM16 mono 16k chunks.
+        # Browser sends raw PCM16 mono 16k chunks; optional Hush denoise before uplink.
+        uplink_pcm = self._denoise_uplink_pcm(pcm_s16le)
+        if not uplink_pcm:
+            return
         if self._turn_capture_active:
-            self._omni_turn_buffer.extend(pcm_s16le)
+            self._omni_turn_buffer.extend(uplink_pcm)
             if self._local_vad is not None:
-                self._vad_turn_buffer.extend(pcm_s16le)
-        audio_b64 = base64.b64encode(pcm_s16le).decode("ascii")
+                self._vad_turn_buffer.extend(uplink_pcm)
+        audio_b64 = base64.b64encode(uplink_pcm).decode("ascii")
         await self._send_omni_event({"type": "input_audio_buffer.append", "audio": audio_b64})
         if self._local_vad is not None:
             try:
-                events = await self._local_vad.feed_pcm_s16le_16k(pcm_s16le)
+                events = await self._local_vad.feed_pcm_s16le_16k(uplink_pcm)
                 for ev in events:
                     await self._on_local_vad_event(ev)
             except Exception as exc:
@@ -547,6 +562,12 @@ class OmniRealtimeBridge:
             except Exception:
                 pass
             self._local_vad = None
+        if self._hush is not None:
+            try:
+                self._hush.close()
+            except Exception:
+                pass
+            self._hush = None
         if self.omni_ws:
             try:
                 await self.omni_ws.close()

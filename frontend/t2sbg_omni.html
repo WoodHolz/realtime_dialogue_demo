@@ -102,7 +102,9 @@
   <h1>芝麻背调证明人访谈（Omni 直连）</h1>
   <p class="page-version" id="pageVersion"></p>
   <p style="color:#666; font-size:0.9rem;">
-    链路：Browser 上行音频 → Backend Omni Bridge →（Smart Turn v3 + Omni 模型）。判停由后端 Smart Turn v3 完成；Qwen Omni 为流式 commit，自部署 Omni 为按轮整段 WAV 提交。
+    链路：Browser 上行音频 → Backend Omni Bridge → <strong>Hush 降噪</strong>（weya-ai/hush，ONNX + libweya_nc）→ Smart Turn v3 判停 → Omni 模型。
+    上行 PCM 先经 Hush 实时去噪再送 VAD / ASR；若 Hush 未就绪则自动跳过降噪、其余链路不变。
+    判停由后端 Smart Turn v3 完成；Qwen Omni 为流式 commit，自部署 Omni 为按轮整段 WAV 提交。
     TTFS 延迟面板已<strong>内联在本页</strong>：<strong>Start Session</strong> 会自动 <code>TTFS.startMic()</code>；Omni TTS 自动接入 Playback 测光。
   </p>
   <div class="status" id="status">选择 Omni 后端后点击 Start 建立会话，然后直接说话。</div>
@@ -197,7 +199,7 @@
     <strong>录音调试预览（后端合并）</strong>
     <button type="button" id="btnMonitorSync" disabled style="margin-left:8px;">同步到监控页</button>
     <span id="monitorSyncHint" style="font-size:12px;color:#888;margin-left:8px;"></span>
-    <p style="font-size:12px; color:#666;">链路：Browser 上行音频 → Backend Omni Bridge →（Smart Turn v3 + Qwen Omni）。下方主播放器是<strong>跨轮合并</strong>后的 WAV；折叠里是<strong>每一轮单独</strong>的录音。</p>
+    <p style="font-size:12px; color:#666;">链路：Browser 上行音频 → Backend Omni Bridge → Hush 降噪 → Smart Turn v3 + Qwen Omni。下方主播放器是<strong>跨轮合并</strong>后的 WAV（VAD 分支为降噪后音频）；折叠里是<strong>每一轮单独</strong>的录音。</p>
     <div style="margin-top:8px;">
       <div style="margin-bottom:10px;">
         <div style="font-size:12px; color:#666; margin-bottom:4px;">给 VAD 的录音（merged）</div>

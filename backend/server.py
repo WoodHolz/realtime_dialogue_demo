@@ -59,6 +59,7 @@ from backend.vad import (
     vad_status_on_init_failure,
 )
 from backend.vad.duplug_backend import init_duplug_local_manager
+from backend.hush import init_hush_manager, shutdown_hush_manager
 
 LOG = logging.getLogger(__name__)
 
@@ -67,8 +68,10 @@ LOG = logging.getLogger(__name__)
 async def lifespan(app: FastAPI):
     if vad_provider() == "duplug" and duplug_local_enabled():
         init_duplug_local_manager(duplug_local_config_path())
+    init_hush_manager()
     _startup_t2sbg_monitor_notice()
     yield
+    shutdown_hush_manager()
     shutdown_duplug_local_manager()
 
 
