@@ -38,12 +38,58 @@ DEFAULT_MODEL = "qwen3-omni-flash-realtime"
 DEFAULT_VOICE = "Ethan"
 DEFAULT_TURN_DETECTION_TYPE = "server_vad"
 DEFAULT_SMOOTH_OUTPUT = True
+DEFAULT_TURN_DETECTION_THRESHOLD_FLASH = 0.1
+DEFAULT_TURN_DETECTION_SILENCE_MS_FLASH = 900
+DEFAULT_TURN_DETECTION_THRESHOLD_35 = 0.5
+DEFAULT_TURN_DETECTION_SILENCE_MS_35 = 800
 LOCAL_VAD_PROVIDER = "smart_turn_v3"
 
 
+def _normalize_model(model: str) -> str:
+    return (model or "").strip().lower()
+
+
+def _is_qwen35_omni_realtime(model: str) -> bool:
+    """Qwen3.5-Omni-Realtime series, e.g. qwen3.5-omni-flash-realtime / qwen3.5-omni-plus-realtime."""
+    m = _normalize_model(model)
+    return m.startswith("qwen3.5-omni-") and "realtime" in m
+
+
 def _supports_smooth_output(model: str) -> bool:
-    """smooth_output applies only to Qwen3-Omni-Flash-Realtime family models."""
-    return "qwen3-omni-flash-realtime" in (model or "").strip().lower()
+    """smooth_output applies only to Qwen3-Omni-Flash-Realtime."""
+    return "qwen3-omni-flash-realtime" in _normalize_model(model)
+
+
+def _supports_semantic_vad(model: str) -> bool:
+    return _is_qwen35_omni_realtime(model)
+
+
+def _default_turn_detection_threshold(model: str) -> float:
+    if _is_qwen35_omni_realtime(model):
+        return DEFAULT_TURN_DETECTION_THRESHOLD_35
+    return DEFAULT_TURN_DETECTION_THRESHOLD_FLASH
+
+
+def _default_turn_detection_silence_ms(model: str) -> int:
+    if _is_qwen35_omni_realtime(model):
+        return DEFAULT_TURN_DETECTION_SILENCE_MS_35
+    return DEFAULT_TURN_DETECTION_SILENCE_MS_FLASH
+
+
+def _parse_turn_detection_threshold(value: Any, model: str) -> float:
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return _default_turn_detection_threshold(model)
+    return max(-1.0, min(1.0, parsed))
+
+
+def _parse_turn_detection_silence_ms(value: Any, model: str) -> int:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return _default_turn_detection_silence_ms(model)
+    return max(200, min(6000, parsed))
 
 
 def _parse_smooth_output(value: Any) -> bool | None:
@@ -60,6 +106,17 @@ def _parse_smooth_output(value: Any) -> bool | None:
         if normalized in {"null", "auto", "none", "自动"}:
             return None
     return DEFAULT_SMOOTH_OUTPUT
+
+
+def _resolve_use_local_smart_turn(cfg: dict[str, Any], model: str) -> bool:
+    mode = (cfg.get("omni_vad_mode") or "").strip().lower()
+    if mode in {"local", "smart_turn_v3", "smart_turn"}:
+        return True
+    if mode in {"dashscope", "server", "server_vad", "semantic_vad", "alibaba", "ali"}:
+        return False
+    if _is_qwen35_omni_realtime(model):
+        return False
+    return _omni_use_local_smart_turn()
 
 
 def _omni_use_local_smart_turn() -> bool:
@@ -133,6 +190,8 @@ class OmniRealtimeBridge:
         self.instructions = "你是芝麻背调的专业背景调查访谈员，请保持专业、亲和、严谨。"
         self.smooth_output: bool | None = DEFAULT_SMOOTH_OUTPUT
         self.turn_detection_type = DEFAULT_TURN_DETECTION_TYPE
+        self.turn_detection_threshold = _default_turn_detection_threshold(self.model)
+        self.turn_detection_silence_duration_ms = _default_turn_detection_silence_ms(self.model)
         self._use_local_smart_turn = False
         self._local_vad = None
         self._hush = create_hush_session() if hush_enabled() else None
@@ -279,26 +338,29 @@ class OmniRealtimeBridge:
             ) from exc
 
     async def _update_omni_session(self) -> None:
-        # Local Smart Turn: manual commit/response.create; else DashScope server VAD.
-        turn_detection: dict[str, Any] | None
-        if self._use_local_smart_turn or self.turn_detection_type == "manual":
-            turn_detection = None
-        else:
-            turn_detection = {
-                "type": self.turn_detection_type,
-                "threshold": 0.1,
-                "prefix_padding_ms": 500,
-                "silence_duration_ms": 900,
-            }
+        # Qwen3.5 + local Smart Turn: omit turn_detection (DashScope default server_vad).
+        # Flash + local Smart Turn: turn_detection=null (manual commit).
         session: dict[str, Any] = {
             "modalities": ["text", "audio"],
             "voice": self.voice,
             "instructions": self.instructions,
             "input_audio_format": "pcm",
             "output_audio_format": "pcm",
-            "turn_detection": turn_detection,
             "input_audio_transcription": {"model": "gummy-realtime-v1"},
         }
+        if _is_qwen35_omni_realtime(self.model) and self._use_local_smart_turn:
+            pass
+        elif self._use_local_smart_turn or self.turn_detection_type == "manual":
+            session["turn_detection"] = None
+        else:
+            turn_detection: dict[str, Any] = {
+                "type": self.turn_detection_type,
+                "threshold": self.turn_detection_threshold,
+                "silence_duration_ms": self.turn_detection_silence_duration_ms,
+            }
+            if _supports_smooth_output(self.model):
+                turn_detection["prefix_padding_ms"] = 500
+            session["turn_detection"] = turn_detection
         if _supports_smooth_output(self.model):
             session["smooth_output"] = self.smooth_output
         await self._send_omni_event({"type": "session.update", "session": session})
@@ -460,8 +522,31 @@ class OmniRealtimeBridge:
         if "omni_smooth_output" in cfg:
             self.smooth_output = _parse_smooth_output(cfg.get("omni_smooth_output"))
 
-        self._use_local_smart_turn = _omni_use_local_smart_turn()
-        if self._use_local_smart_turn:
+        self.turn_detection_threshold = _parse_turn_detection_threshold(
+            cfg.get("omni_turn_detection_threshold"),
+            self.model,
+        )
+        self.turn_detection_silence_duration_ms = _parse_turn_detection_silence_ms(
+            cfg.get("omni_turn_detection_silence_duration_ms"),
+            self.model,
+        )
+
+        self._use_local_smart_turn = _resolve_use_local_smart_turn(cfg, self.model)
+        if _is_qwen35_omni_realtime(self.model):
+            if self._use_local_smart_turn:
+                self._local_vad = create_vad_backend()
+                if self._local_vad is None:
+                    LOG.warning("Omni Smart Turn v3 unavailable; falling back to semantic_vad")
+                    self._use_local_smart_turn = False
+                    self.turn_detection_type = "semantic_vad"
+            else:
+                td = (cfg.get("omni_turn_detection_type") or "semantic_vad").strip()
+                if td == "semantic_vad" and not _supports_semantic_vad(self.model):
+                    td = DEFAULT_TURN_DETECTION_TYPE
+                if td in {"server_vad", "semantic_vad"}:
+                    self.turn_detection_type = td
+                self._local_vad = None
+        elif self._use_local_smart_turn:
             self.turn_detection_type = "manual"
             self._local_vad = create_vad_backend()
             if self._local_vad is None:
@@ -470,8 +555,12 @@ class OmniRealtimeBridge:
                 self.turn_detection_type = DEFAULT_TURN_DETECTION_TYPE
         else:
             td = (cfg.get("omni_turn_detection_type") or self.turn_detection_type).strip()
+            if td == "semantic_vad" and not _supports_semantic_vad(self.model):
+                LOG.warning("semantic_vad requested but unsupported for model=%s; using server_vad", self.model)
+                td = DEFAULT_TURN_DETECTION_TYPE
             if td in {"server_vad", "semantic_vad", "manual"}:
                 self.turn_detection_type = td
+            self._local_vad = None
 
         await self._connect_omni()
         await self._update_omni_session()
@@ -505,6 +594,16 @@ class OmniRealtimeBridge:
                 "omni_model": self.model,
                 "omni_voice": self.voice,
                 "omni_smooth_output": self.smooth_output if _supports_smooth_output(self.model) else None,
+                "omni_vad_mode": "smart_turn_v3" if self._use_local_smart_turn else "dashscope",
+                "omni_turn_detection": (
+                    None
+                    if self._use_local_smart_turn
+                    else {
+                        "type": self.turn_detection_type,
+                        "threshold": self.turn_detection_threshold,
+                        "silence_duration_ms": self.turn_detection_silence_duration_ms,
+                    }
+                ),
                 "region": self.region,
                 "vad_mode": vad_mode,
                 "hush": hush_status_payload(

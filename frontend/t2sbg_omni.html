@@ -119,8 +119,16 @@
     <strong>Omni 后端（开始对话前选择）</strong>
     <div style="margin-top:8px; display:flex; flex-direction:column; gap:6px; font-size:0.9rem;">
       <label style="cursor:pointer;">
-        <input type="radio" name="omniBackend" id="omniBackendQwen" value="qwen" checked />
-        Qwen Omni（DashScope 云端，流式实时）
+        <input type="radio" name="omniBackend" id="omniBackendFlash" value="qwen3-omni-flash-realtime" checked />
+        Qwen3-Omni-Flash-Realtime（DashScope 云端，流式实时）
+      </label>
+      <label style="cursor:pointer;">
+        <input type="radio" name="omniBackend" id="omniBackend35Flash" value="qwen3.5-omni-flash-realtime" />
+        Qwen3.5-Omni-Flash-Realtime（DashScope 云端，支持 semantic_vad）
+      </label>
+      <label style="cursor:pointer;">
+        <input type="radio" name="omniBackend" id="omniBackend35Plus" value="qwen3.5-omni-plus-realtime" />
+        Qwen3.5-Omni-Plus-Realtime（DashScope 云端，支持 semantic_vad）
       </label>
       <label style="cursor:pointer;">
         <input type="radio" name="omniBackend" id="omniBackendSelf" value="self" />
@@ -130,6 +138,46 @@
     <p id="selfOmniHint" style="font-size:12px; color:#888; margin:6px 0 0;">
       自部署需配置 <code>SELF_OMNI_WS_URL</code> 或 <code>config.json → omni.self_deployed_ws_url</code>。
     </p>
+  </div>
+
+  <div class="section" id="vadConfigSection" style="margin-top:12px; display:none;">
+    <strong>判停 / VAD（Qwen3.5-Omni-Realtime 系列）</strong>
+    <p style="font-size:12px; color:#888; margin:6px 0 0;">
+      默认使用阿里 <code>semantic_vad</code>；选本地 Smart Turn v3 时，<code>session.update</code> 不传 <code>turn_detection</code>（由 DashScope 使用默认 VAD）。
+    </p>
+    <div style="margin-top:8px; display:flex; flex-direction:column; gap:6px; font-size:0.9rem;">
+      <label style="cursor:pointer;">
+        <input type="radio" name="omniVadMode" id="omniVadModeDashscope" value="dashscope" checked />
+        阿里 DashScope VAD（turn_detection，默认 semantic_vad）
+      </label>
+      <label style="cursor:pointer;">
+        <input type="radio" name="omniVadMode" id="omniVadModeLocal" value="local" />
+        本地 Smart Turn v3（我们部署，不传 turn_detection）
+      </label>
+    </div>
+    <div id="dashscopeVadOptions" style="margin-top:10px; padding:10px; border:1px solid #eee; border-radius:6px; background:#fafafa;">
+      <div style="margin-bottom:8px;">
+        <label for="turnDetectionType" style="font-size:0.85rem;">VAD 类型</label>
+        <select id="turnDetectionType" style="display:block; width:100%; margin-top:4px; padding:6px; box-sizing:border-box;">
+          <option value="server_vad">server_vad — 声学特征判停</option>
+          <option value="semantic_vad" selected>semantic_vad — 语义有效性判停（默认）</option>
+        </select>
+      </div>
+      <div style="margin-bottom:8px;">
+        <label for="turnThreshold" style="font-size:0.85rem;">
+          threshold（灵敏度） <span id="turnThresholdVal">0.5</span>
+        </label>
+        <input type="range" id="turnThreshold" min="-1" max="1" step="0.1" value="0.5" style="width:100%;" />
+        <div style="font-size:11px; color:#888;">范围 [-1.0, 1.0]，越低越灵敏，默认 0.5。</div>
+      </div>
+      <div>
+        <label for="turnSilenceMs" style="font-size:0.85rem;">
+          silence_duration_ms <span id="turnSilenceVal">800</span>
+        </label>
+        <input type="range" id="turnSilenceMs" min="200" max="6000" step="50" value="800" style="width:100%;" />
+        <div style="font-size:11px; color:#888;">范围 [200, 6000]，语音结束后静音多久触发回复，默认 800ms。</div>
+      </div>
+    </div>
   </div>
 
   <div class="section" id="smoothOutputSection" style="margin-top:12px;">
@@ -279,9 +327,18 @@
       const statusEl = document.getElementById('status');
       const stageLabel = document.getElementById('stageLabel');
       const backendLabel = document.getElementById('backendLabel');
-      const omniBackendQwen = document.getElementById('omniBackendQwen');
+      const omniBackendFlash = document.getElementById('omniBackendFlash');
+      const omniBackend35Flash = document.getElementById('omniBackend35Flash');
+      const omniBackend35Plus = document.getElementById('omniBackend35Plus');
       const omniBackendSelf = document.getElementById('omniBackendSelf');
       const smoothOutputSection = document.getElementById('smoothOutputSection');
+      const vadConfigSection = document.getElementById('vadConfigSection');
+      const dashscopeVadOptions = document.getElementById('dashscopeVadOptions');
+      const turnDetectionTypeEl = document.getElementById('turnDetectionType');
+      const turnThresholdEl = document.getElementById('turnThreshold');
+      const turnThresholdValEl = document.getElementById('turnThresholdVal');
+      const turnSilenceMsEl = document.getElementById('turnSilenceMs');
+      const turnSilenceValEl = document.getElementById('turnSilenceVal');
       const vadStateEl = document.getElementById('vadState');
       const transcriptEl = document.getElementById('transcript');
       const asrPreviewEl = document.getElementById('asrPreview');
@@ -906,9 +963,31 @@
         micStreamingStarted = false;
       }
 
-      function selectedOmniBackend() {
-        if (omniBackendSelf && omniBackendSelf.checked) return 'self';
-        return 'qwen';
+      function selectedOmniModel() {
+        const checked = document.querySelector('input[name="omniBackend"]:checked');
+        return checked ? checked.value : 'qwen3-omni-flash-realtime';
+      }
+
+      function isSelfDeployedOmni() {
+        return selectedOmniModel() === 'self';
+      }
+
+      function isFlashRealtimeModel() {
+        return selectedOmniModel() === 'qwen3-omni-flash-realtime';
+      }
+
+      function isQwen35RealtimeModel() {
+        const model = selectedOmniModel();
+        return model.indexOf('qwen3.5-omni-') === 0 && model.indexOf('realtime') !== -1;
+      }
+
+      function isQwenDashScopeModel() {
+        return isFlashRealtimeModel() || isQwen35RealtimeModel();
+      }
+
+      function selectedOmniVadMode() {
+        const checked = document.querySelector('input[name="omniVadMode"]:checked');
+        return checked ? checked.value : 'local';
       }
 
       function selectedSmoothOutput() {
@@ -931,33 +1010,83 @@
         });
       }
 
-      function updateSmoothOutputSectionVisibility() {
-        const isQwen = selectedOmniBackend() === 'qwen';
-        if (smoothOutputSection) {
-          smoothOutputSection.style.opacity = isQwen ? '1' : '0.45';
+      function setVadConfigControlsEnabled(enabled) {
+        document.querySelectorAll('input[name="omniVadMode"]').forEach(function (el) {
+          el.disabled = !enabled;
+        });
+        if (turnDetectionTypeEl) turnDetectionTypeEl.disabled = !enabled;
+        if (turnThresholdEl) turnThresholdEl.disabled = !enabled;
+        if (turnSilenceMsEl) turnSilenceMsEl.disabled = !enabled;
+      }
+
+      function updateDashscopeVadOptionsVisibility() {
+        const showDashscopeOptions = isQwen35RealtimeModel() && selectedOmniVadMode() === 'dashscope';
+        if (dashscopeVadOptions) {
+          dashscopeVadOptions.style.display = showDashscopeOptions ? 'block' : 'none';
         }
-        setSmoothOutputControlsEnabled(isQwen && (!ws || ws.readyState !== WebSocket.OPEN));
+      }
+
+      function updateModelOptionSections() {
+        const sessionOpen = ws && ws.readyState === WebSocket.OPEN;
+        const showSmoothOutput = isFlashRealtimeModel();
+        const showVadConfig = isQwen35RealtimeModel();
+
+        if (smoothOutputSection) {
+          smoothOutputSection.style.display = showSmoothOutput ? 'block' : 'none';
+        }
+        if (vadConfigSection) {
+          vadConfigSection.style.display = showVadConfig ? 'block' : 'none';
+        }
+
+        setSmoothOutputControlsEnabled(showSmoothOutput && !sessionOpen);
+        setVadConfigControlsEnabled(showVadConfig && !sessionOpen);
+        updateDashscopeVadOptionsVisibility();
+
+        if (backendLabel) {
+          if (isSelfDeployedOmni()) backendLabel.textContent = 'self';
+          else backendLabel.textContent = selectedOmniModel();
+        }
       }
 
       function setOmniBackendControlsEnabled(enabled) {
-        if (omniBackendQwen) omniBackendQwen.disabled = !enabled;
+        if (omniBackendFlash) omniBackendFlash.disabled = !enabled;
+        if (omniBackend35Flash) omniBackend35Flash.disabled = !enabled;
+        if (omniBackend35Plus) omniBackend35Plus.disabled = !enabled;
         if (omniBackendSelf) omniBackendSelf.disabled = !enabled;
-        updateSmoothOutputSectionVisibility();
+        updateModelOptionSections();
       }
 
       document.querySelectorAll('input[name="omniBackend"]').forEach(function (el) {
-        el.addEventListener('change', updateSmoothOutputSectionVisibility);
+        el.addEventListener('change', updateModelOptionSections);
       });
-      updateSmoothOutputSectionVisibility();
+      document.querySelectorAll('input[name="omniVadMode"]').forEach(function (el) {
+        el.addEventListener('change', updateModelOptionSections);
+      });
+      if (turnThresholdEl && turnThresholdValEl) {
+        turnThresholdEl.addEventListener('input', function () {
+          turnThresholdValEl.textContent = Number(turnThresholdEl.value).toFixed(1);
+        });
+      }
+      if (turnSilenceMsEl && turnSilenceValEl) {
+        turnSilenceMsEl.addEventListener('input', function () {
+          turnSilenceValEl.textContent = String(turnSilenceMsEl.value);
+        });
+      }
+      updateModelOptionSections();
 
       function connect() {
-        const backend = selectedOmniBackend();
-        if (backendLabel) backendLabel.textContent = backend;
+        const model = selectedOmniModel();
+        const backend = isSelfDeployedOmni() ? 'self' : 'qwen';
+        if (backendLabel) backendLabel.textContent = isSelfDeployedOmni() ? 'self' : model;
         const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
         const url = protocol + '//' + location.host + '/ws-omni';
         ws = new WebSocket(url);
         ws.binaryType = 'arraybuffer';
-        setStatus(backend === 'self' ? 'Connecting self-deployed Omni...' : 'Connecting Qwen Omni...');
+        setStatus(
+          backend === 'self'
+            ? 'Connecting self-deployed Omni...'
+            : 'Connecting ' + model + '...'
+        );
 
         ws.onopen = function () {
           const startCfg = {
@@ -967,8 +1096,22 @@
             system_role: DEFAULT_SYSTEM_ROLE,
             speaking_style: DEFAULT_SPEAKING_STYLE
           };
-          if (backend === 'qwen') {
+          if (isQwenDashScopeModel()) {
+            startCfg.omni_model = model;
+          }
+          if (isFlashRealtimeModel()) {
             startCfg.omni_smooth_output = selectedSmoothOutput();
+          }
+          if (isQwen35RealtimeModel()) {
+            const vadMode = selectedOmniVadMode();
+            startCfg.omni_vad_mode = vadMode;
+            if (vadMode === 'dashscope') {
+              startCfg.omni_turn_detection_type = turnDetectionTypeEl ? turnDetectionTypeEl.value : 'semantic_vad';
+              startCfg.omni_turn_detection_threshold = turnThresholdEl ? Number(turnThresholdEl.value) : 0.5;
+              startCfg.omni_turn_detection_silence_duration_ms = turnSilenceMsEl
+                ? Number(turnSilenceMsEl.value)
+                : 800;
+            }
           }
           ws.send(JSON.stringify(startCfg));
         };
@@ -978,23 +1121,34 @@
             let msg = {};
             try { msg = JSON.parse(ev.data); } catch (e) { return; }
             if (msg.type === 'ready') {
-              const backend = msg.omni_backend || selectedOmniBackend();
-              if (backendLabel) backendLabel.textContent = backend;
+              const backend = msg.omni_backend || (isSelfDeployedOmni() ? 'self' : 'qwen');
+              const model = msg.omni_model || selectedOmniModel();
+              if (backendLabel) backendLabel.textContent = backend === 'self' ? 'self' : model;
               setStatus(
                 backend === 'self'
                   ? '自部署 Omni 已就绪，说完一轮后等待模型回复。'
-                  : 'Qwen Omni 已就绪，直接说话即可。'
+                  : model + ' 已就绪，直接说话即可。'
               );
+              let turnDetectionLog = '';
+              if (msg.omni_turn_detection) {
+                turnDetectionLog =
+                  ' turn_detection=' + msg.omni_turn_detection.type +
+                  ' threshold=' + msg.omni_turn_detection.threshold +
+                  ' silence_ms=' + msg.omni_turn_detection.silence_duration_ms;
+              }
               log(
                 'ready backend=' + backend +
-                ' model=' + (msg.omni_model || '-') +
+                ' model=' + model +
                 ' voice=' + (msg.omni_voice || '-') +
                 (msg.omni_smooth_output !== undefined
                   ? ' smooth_output=' + smoothOutputLabel(msg.omni_smooth_output)
                   : '') +
+                ' omni_vad_mode=' + (msg.omni_vad_mode || '-') +
+                turnDetectionLog +
                 ' vad_mode=' + (msg.vad_mode || '-') +
                 (msg.self_omni_ws_url ? ' url=' + msg.self_omni_ws_url : '')
               );
+              updateModelOptionSections();
               btnSendText.disabled = false;
               btnMonitorSync.disabled = false;
               startMicStreaming();
@@ -1119,8 +1273,9 @@
         resetRecordingDebugCache();
         stageLabel.textContent = 'introduction';
         vadStateEl.textContent = 'provider=smart_turn_v3 state=-';
-        const backend = selectedOmniBackend();
-        if (backendLabel) backendLabel.textContent = backend;
+        if (backendLabel) {
+          backendLabel.textContent = isSelfDeployedOmni() ? 'self' : selectedOmniModel();
+        }
         acquireInterviewMic().then(function (stream) {
           mediaStream = stream;
           setOmniBackendControlsEnabled(false);
