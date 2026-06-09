@@ -28,6 +28,7 @@ from backend.vad import (
     vad_provider,
     vad_status_on_init_failure,
 )
+from config.prompt_templates import DEFAULT_SYSTEM_ROLE
 
 LOG = logging.getLogger(__name__)
 
@@ -188,10 +189,7 @@ class OmniRealtimeBridge:
         self.region = "cn"
         self.model = os.environ.get("OMNI_MODEL", DEFAULT_MODEL).strip() or DEFAULT_MODEL
         self.voice = DEFAULT_VOICE
-        self.instructions = (
-            "你是芝麻背调的专业背景调查访谈员，请保持专业、亲和、严谨。"
-            + OMNI_INSTRUCTIONS_TONE_HINT
-        )
+        self.instructions = DEFAULT_SYSTEM_ROLE
         self.smooth_output: bool | None = DEFAULT_SMOOTH_OUTPUT
         self.turn_detection_type = DEFAULT_TURN_DETECTION_TYPE
         self.turn_detection_threshold = _default_turn_detection_threshold(self.model)
@@ -343,7 +341,7 @@ class OmniRealtimeBridge:
 
     def _build_omni_instructions(self) -> str:
         base = (self.instructions or "").strip()
-        if "语气平缓" in base or OMNI_INSTRUCTIONS_TONE_HINT in base:
+        if "语气平缓" in base or "情绪平缓" in base or OMNI_INSTRUCTIONS_TONE_HINT in base:
             return base
         tone_section = f"【语气要求】{OMNI_INSTRUCTIONS_TONE_HINT}"
         return f"{base}\n\n{tone_section}" if base else tone_section
