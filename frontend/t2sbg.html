@@ -107,6 +107,7 @@
   <p style="color:#666; font-size:0.9rem;">
     支持直接以文本形式发起对话，或使用麦克风说话（豆包 ASR 识别后发送给语音对话模型）。
     服务端使用 <code>input_mod: "text"</code>，自动保证流式链路完整性。
+    语音上行链路：Browser → Backend → <strong>Hush 降噪</strong>（weya-ai/hush）→ Smart Turn v3 判停 → 豆包 ASR；Hush 未就绪时自动跳过。
     TTFS 延迟面板已<strong>内联在本页</strong>：点 <strong>Start Session</strong> 时会自动请求 TTFS 麦克风（也可手动点 Mic）；AI TTS 自动接入 Playback 测光。停止会话会 <code>TTFS.stop()</code>。
   </p>
   <div class="status" id="status">点击 Start 建立会话，然后输入文本或语音。</div>
@@ -174,7 +175,7 @@
 
   <div class="section">
     <strong>方式一：语音输入（豆包 ASR 流式识别）</strong>
-        <p style="font-size:12px; color:#666;">麦克风流式输入 → 豆包 ASR 流式输出（实时显示识别结果）→ 说完后自动发送。</p>
+        <p style="font-size:12px; color:#666;">麦克风流式输入 → Hush 降噪 → 豆包 ASR 流式输出（实时显示识别结果）→ 说完后自动发送。</p>
     <div style="margin-top:8px;">
       <button id="btnVoiceStart" disabled>开始录音</button>
       <button id="btnVoiceStop" disabled>结束并发送</button>
@@ -198,7 +199,7 @@
     <strong>录音调试预览（后端合并）</strong>
     <button type="button" id="btnMonitorSync" disabled style="margin-left:8px;">同步到监控页</button>
     <span id="monitorSyncHint" style="font-size:12px;color:#888;margin-left:8px;"></span>
-    <p style="font-size:12px; color:#666;">链路：Browser 上行音频 → Backend →（Smart Turn v3 + ASR）。下方主播放器是<strong>跨轮合并</strong>后的 WAV；折叠里是<strong>每一轮单独</strong>的录音。</p>
+    <p style="font-size:12px; color:#666;">链路：Browser 上行音频 → Backend → Hush 降噪 → Smart Turn v3 + ASR。下方主播放器是<strong>跨轮合并</strong>后的 WAV（VAD 分支为降噪后音频）；折叠里是<strong>每一轮单独</strong>的录音。</p>
     <div style="margin-top:8px;">
       <div style="margin-bottom:10px;">
         <div style="font-size:12px; color:#666; margin-bottom:4px;">给 VAD 的录音（merged）</div>
@@ -1422,6 +1423,13 @@
               } else if (msg.type === 'ready') {
                 setStatus('Ready. 输入文本或使用语音。');
                 log('Session ' + msg.session_id + ' mode=' + (msg.mode || 't2s'));
+                if (msg.hush) {
+                  log(
+                    'Hush: enabled=' + !!msg.hush.enabled +
+                    ' ready=' + !!msg.hush.ready +
+                    (msg.hush.error ? ' error=' + msg.hush.error : '')
+                  );
+                }
                 btnSendText.disabled = false;
                 btnVoiceStart.disabled = false;
                 btnMonitorSync.disabled = false;

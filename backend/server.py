@@ -59,7 +59,14 @@ from backend.vad import (
     vad_status_on_init_failure,
 )
 from backend.vad.duplug_backend import init_duplug_local_manager
-from backend.hush import init_hush_manager, shutdown_hush_manager
+from backend.hush import (
+    create_hush_session,
+    hush_enabled,
+    hush_status_payload,
+    init_hush_manager,
+    shutdown_hush_manager,
+)
+from backend.hush.manager import hush_manager_error
 
 LOG = logging.getLogger(__name__)
 
@@ -715,6 +722,12 @@ async def websocket_endpoint(websocket: WebSocket):
     t2s_asr_keepalive_task: asyncio.Task | None = None
     _t2s_asr_silence_chunk: bytes = bytes(ASR_CHUNK_BYTES)
     t2s_input_sample_rate = VAD_ASR_TARGET_SAMPLE_RATE
+    t2s_hush = None
+
+    def _denoise_t2s_uplink_pcm(pcm_s16le: bytes) -> bytes:
+        if t2s_hush is None:
+            return pcm_s16le
+        return t2s_hush.process_pcm_s16le(pcm_s16le)
 
     def _set_t2s_input_sample_rate(raw_value: object) -> int:
         """Update browser upstream sample rate, defaulting to 16k on invalid input."""
@@ -1733,6 +1746,13 @@ async def websocket_endpoint(websocket: WebSocket):
             else:
                 mode = "e2e"
 
+            if mode == "t2s" and hush_enabled():
+                t2s_hush = create_hush_session()
+                if t2s_hush is not None:
+                    LOG.info("t2s Hush denoiser session ready")
+                elif hush_manager_error():
+                    LOG.warning("t2s Hush denoiser unavailable: %s", hush_manager_error())
+
             stage = cfg.get("stage", "introduction")
             prompt_manager.set_stage(stage)
             # Independent demo toggle for "auto 501 from ASR" behavior.
@@ -1816,6 +1836,12 @@ async def websocket_endpoint(websocket: WebSocket):
                     and external_followup_enabled
                     and followup_client.enabled
                 ),
+                "hush": hush_status_payload(
+                    ready=t2s_hush is not None,
+                    error=hush_manager_error() if mode == "t2s" and hush_enabled() and t2s_hush is None else "",
+                )
+                if mode == "t2s"
+                else hush_status_payload(ready=False, error=""),
             }
         )
 
@@ -1835,6 +1861,9 @@ async def websocket_endpoint(websocket: WebSocket):
                     continue
                 if mode == "t2s":
                     data = _normalize_input_audio_to_16k(data)
+                    if not data:
+                        continue
+                    data = _denoise_t2s_uplink_pcm(data)
                     if not data:
                         continue
                 chunks = pcm_chunks_from_bytes(data)
@@ -2137,6 +2166,12 @@ async def websocket_endpoint(websocket: WebSocket):
                 await t2s_vad.close_session()
             except Exception:
                 pass
+        if t2s_hush is not None:
+            try:
+                t2s_hush.close()
+            except Exception:
+                pass
+            t2s_hush = None
         _close_t2s_debug_files()
         if client:
             await client.disconnect()
