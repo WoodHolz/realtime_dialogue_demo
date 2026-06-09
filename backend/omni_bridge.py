@@ -43,6 +43,7 @@ DEFAULT_TURN_DETECTION_SILENCE_MS_FLASH = 900
 DEFAULT_TURN_DETECTION_THRESHOLD_35 = 0.5
 DEFAULT_TURN_DETECTION_SILENCE_MS_35 = 800
 LOCAL_VAD_PROVIDER = "smart_turn_v3"
+OMNI_INSTRUCTIONS_TONE_HINT = "情绪语气平缓，像电话访谈一样自然对话。"
 
 
 def _normalize_model(model: str) -> str:
@@ -187,7 +188,10 @@ class OmniRealtimeBridge:
         self.region = "cn"
         self.model = os.environ.get("OMNI_MODEL", DEFAULT_MODEL).strip() or DEFAULT_MODEL
         self.voice = DEFAULT_VOICE
-        self.instructions = "你是芝麻背调的专业背景调查访谈员，请保持专业、亲和、严谨。"
+        self.instructions = (
+            "你是芝麻背调的专业背景调查访谈员，请保持专业、亲和、严谨。"
+            + OMNI_INSTRUCTIONS_TONE_HINT
+        )
         self.smooth_output: bool | None = DEFAULT_SMOOTH_OUTPUT
         self.turn_detection_type = DEFAULT_TURN_DETECTION_TYPE
         self.turn_detection_threshold = _default_turn_detection_threshold(self.model)
@@ -337,13 +341,20 @@ class OmniRealtimeBridge:
                 "(check network/VPN; IPv6 to dashscope.aliyuncs.com may fail — default uses IPv4 via OMNI_WS_FAMILY=inet4)"
             ) from exc
 
+    def _build_omni_instructions(self) -> str:
+        base = (self.instructions or "").strip()
+        if "语气平缓" in base or OMNI_INSTRUCTIONS_TONE_HINT in base:
+            return base
+        tone_section = f"【语气要求】{OMNI_INSTRUCTIONS_TONE_HINT}"
+        return f"{base}\n\n{tone_section}" if base else tone_section
+
     async def _update_omni_session(self) -> None:
         # Qwen3.5 + local Smart Turn: omit turn_detection (DashScope default server_vad).
         # Flash + local Smart Turn: turn_detection=null (manual commit).
         session: dict[str, Any] = {
             "modalities": ["text", "audio"],
             "voice": self.voice,
-            "instructions": self.instructions,
+            "instructions": self._build_omni_instructions(),
             "input_audio_format": "pcm",
             "output_audio_format": "pcm",
             "input_audio_transcription": {"model": "gummy-realtime-v1"},

@@ -79,5 +79,5 @@
     "t2s_tts_barge_suppress_ms": 2000
   },
   "t2sbg_voice_version": "0.0.8",
-  "omni_voice_version": "0.0.18"
+  "omni_voice_version": "0.0.15"
 }
