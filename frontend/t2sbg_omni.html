@@ -132,6 +132,27 @@
     </p>
   </div>
 
+  <div class="section" id="smoothOutputSection" style="margin-top:12px;">
+    <strong>回复风格（smooth_output）</strong>
+    <p style="font-size:12px; color:#888; margin:6px 0 0;">
+      仅对 <strong>Qwen3-Omni-Flash-Realtime</strong> 生效。书面化风格下难以朗读的内容可能效果不好。
+    </p>
+    <div style="margin-top:8px; display:flex; flex-direction:column; gap:6px; font-size:0.9rem;">
+      <label style="cursor:pointer;">
+        <input type="radio" name="smoothOutput" id="smoothOutputTrue" value="true" checked />
+        口语化（默认）
+      </label>
+      <label style="cursor:pointer;">
+        <input type="radio" name="smoothOutput" id="smoothOutputFalse" value="false" />
+        书面化、正式
+      </label>
+      <label style="cursor:pointer;">
+        <input type="radio" name="smoothOutput" id="smoothOutputAuto" value="null" />
+        模型自动选择
+      </label>
+    </div>
+  </div>
+
   <div class="controls">
     <button id="btnStart">Start Session</button>
     <button id="btnStop" disabled>Stop</button>
@@ -260,6 +281,7 @@
       const backendLabel = document.getElementById('backendLabel');
       const omniBackendQwen = document.getElementById('omniBackendQwen');
       const omniBackendSelf = document.getElementById('omniBackendSelf');
+      const smoothOutputSection = document.getElementById('smoothOutputSection');
       const vadStateEl = document.getElementById('vadState');
       const transcriptEl = document.getElementById('transcript');
       const asrPreviewEl = document.getElementById('asrPreview');
@@ -889,10 +911,44 @@
         return 'qwen';
       }
 
+      function selectedSmoothOutput() {
+        const checked = document.querySelector('input[name="smoothOutput"]:checked');
+        if (!checked) return true;
+        if (checked.value === 'null') return null;
+        return checked.value === 'true';
+      }
+
+      function smoothOutputLabel(value) {
+        if (value === true) return '口语化';
+        if (value === false) return '书面化';
+        if (value === null) return '自动';
+        return String(value);
+      }
+
+      function setSmoothOutputControlsEnabled(enabled) {
+        document.querySelectorAll('input[name="smoothOutput"]').forEach(function (el) {
+          el.disabled = !enabled;
+        });
+      }
+
+      function updateSmoothOutputSectionVisibility() {
+        const isQwen = selectedOmniBackend() === 'qwen';
+        if (smoothOutputSection) {
+          smoothOutputSection.style.opacity = isQwen ? '1' : '0.45';
+        }
+        setSmoothOutputControlsEnabled(isQwen && (!ws || ws.readyState !== WebSocket.OPEN));
+      }
+
       function setOmniBackendControlsEnabled(enabled) {
         if (omniBackendQwen) omniBackendQwen.disabled = !enabled;
         if (omniBackendSelf) omniBackendSelf.disabled = !enabled;
+        updateSmoothOutputSectionVisibility();
       }
+
+      document.querySelectorAll('input[name="omniBackend"]').forEach(function (el) {
+        el.addEventListener('change', updateSmoothOutputSectionVisibility);
+      });
+      updateSmoothOutputSectionVisibility();
 
       function connect() {
         const backend = selectedOmniBackend();
@@ -904,13 +960,17 @@
         setStatus(backend === 'self' ? 'Connecting self-deployed Omni...' : 'Connecting Qwen Omni...');
 
         ws.onopen = function () {
-          ws.send(JSON.stringify({
+          const startCfg = {
             mode: 'omni',
             omni_backend: backend,
             stage: 'introduction',
             system_role: DEFAULT_SYSTEM_ROLE,
             speaking_style: DEFAULT_SPEAKING_STYLE
-          }));
+          };
+          if (backend === 'qwen') {
+            startCfg.omni_smooth_output = selectedSmoothOutput();
+          }
+          ws.send(JSON.stringify(startCfg));
         };
 
         ws.onmessage = function (ev) {
@@ -929,6 +989,9 @@
                 'ready backend=' + backend +
                 ' model=' + (msg.omni_model || '-') +
                 ' voice=' + (msg.omni_voice || '-') +
+                (msg.omni_smooth_output !== undefined
+                  ? ' smooth_output=' + smoothOutputLabel(msg.omni_smooth_output)
+                  : '') +
                 ' vad_mode=' + (msg.vad_mode || '-') +
                 (msg.self_omni_ws_url ? ' url=' + msg.self_omni_ws_url : '')
               );

@@ -39,8 +39,9 @@
     "asr_access_key": ""
   },
   "omni": {
-    "description": "Qwen Omni (/t2sbg-omni) 与 t2sbg (/ws mode=t2s) 共用 Hush 上行降噪；follows vad.provider for local Smart Turn; override with OMNI_VAD=server. TTS lead-in uses debug.t2s_tts_barge_suppress_ms (same as t2sbg). Self-deployed Omni: set self_deployed_ws_url or SELF_OMNI_WS_URL. Hush: weya-ai/hush via libweya_nc (see third_party/hush).",
+    "description": "Qwen Omni (/t2sbg-omni) 与 t2sbg (/ws mode=t2s) 共用 Hush 上行降噪；follows vad.provider for local Smart Turn; override with OMNI_VAD=server. TTS lead-in uses debug.t2s_tts_barge_suppress_ms (same as t2sbg). Self-deployed Omni: set self_deployed_ws_url or SELF_OMNI_WS_URL. Hush: weya-ai/hush via libweya_nc (see third_party/hush). smooth_output (Qwen3-Omni-Flash-Realtime only): true=口语化, false=书面化, null=自动; configurable on /t2sbg-omni page.",
     "use_local_smart_turn": true,
+    "smooth_output": true,
     "self_deployed_ws_url": "wss://wildness-junkie-frivolous.ngrok-free.dev",
     "hush": {
       "enabled": true,
@@ -78,5 +79,5 @@
     "t2s_tts_barge_suppress_ms": 2000
   },
   "t2sbg_voice_version": "0.0.8",
-  "omni_voice_version": "0.0.13"
+  "omni_voice_version": "0.0.14"
 }

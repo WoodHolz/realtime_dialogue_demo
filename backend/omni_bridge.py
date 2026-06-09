@@ -37,7 +37,29 @@ DEFAULT_INTL_URL = "wss://dashscope-intl.aliyuncs.com/api-ws/v1/realtime"
 DEFAULT_MODEL = "qwen3-omni-flash-realtime"
 DEFAULT_VOICE = "Ethan"
 DEFAULT_TURN_DETECTION_TYPE = "server_vad"
+DEFAULT_SMOOTH_OUTPUT = True
 LOCAL_VAD_PROVIDER = "smart_turn_v3"
+
+
+def _supports_smooth_output(model: str) -> bool:
+    """smooth_output applies only to Qwen3-Omni-Flash-Realtime family models."""
+    return "qwen3-omni-flash-realtime" in (model or "").strip().lower()
+
+
+def _parse_smooth_output(value: Any) -> bool | None:
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"true", "1", "yes", "colloquial", "口语", "口语化"}:
+            return True
+        if normalized in {"false", "0", "no", "formal", "书面", "书面化"}:
+            return False
+        if normalized in {"null", "auto", "none", "自动"}:
+            return None
+    return DEFAULT_SMOOTH_OUTPUT
 
 
 def _omni_use_local_smart_turn() -> bool:
@@ -109,6 +131,7 @@ class OmniRealtimeBridge:
         self.model = os.environ.get("OMNI_MODEL", DEFAULT_MODEL).strip() or DEFAULT_MODEL
         self.voice = DEFAULT_VOICE
         self.instructions = "你是芝麻背调的专业背景调查访谈员，请保持专业、亲和、严谨。"
+        self.smooth_output: bool | None = DEFAULT_SMOOTH_OUTPUT
         self.turn_detection_type = DEFAULT_TURN_DETECTION_TYPE
         self._use_local_smart_turn = False
         self._local_vad = None
@@ -267,7 +290,7 @@ class OmniRealtimeBridge:
                 "prefix_padding_ms": 500,
                 "silence_duration_ms": 900,
             }
-        session = {
+        session: dict[str, Any] = {
             "modalities": ["text", "audio"],
             "voice": self.voice,
             "instructions": self.instructions,
@@ -276,6 +299,8 @@ class OmniRealtimeBridge:
             "turn_detection": turn_detection,
             "input_audio_transcription": {"model": "gummy-realtime-v1"},
         }
+        if _supports_smooth_output(self.model):
+            session["smooth_output"] = self.smooth_output
         await self._send_omni_event({"type": "session.update", "session": session})
 
     async def _omni_receive_loop(self) -> None:
@@ -432,6 +457,8 @@ class OmniRealtimeBridge:
         self.model = (cfg.get("omni_model") or self.model or DEFAULT_MODEL).strip()
         self.voice = (cfg.get("omni_voice") or self.voice or DEFAULT_VOICE).strip()
         self.instructions = (cfg.get("system_role") or self.instructions or "").strip() or self.instructions
+        if "omni_smooth_output" in cfg:
+            self.smooth_output = _parse_smooth_output(cfg.get("omni_smooth_output"))
 
         self._use_local_smart_turn = _omni_use_local_smart_turn()
         if self._use_local_smart_turn:
@@ -477,6 +504,7 @@ class OmniRealtimeBridge:
                 "omni_backend": "qwen",
                 "omni_model": self.model,
                 "omni_voice": self.voice,
+                "omni_smooth_output": self.smooth_output if _supports_smooth_output(self.model) else None,
                 "region": self.region,
                 "vad_mode": vad_mode,
                 "hush": hush_status_payload(
