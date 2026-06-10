@@ -1757,7 +1757,8 @@ async def websocket_endpoint(websocket: WebSocket):
             prompt_manager.set_stage(stage)
             # Independent demo toggle for "auto 501 from ASR" behavior.
             auto_501_from_asr_enabled = bool(cfg.get("auto_501_from_asr_enabled", True))
-            external_followup_enabled = bool(cfg.get("external_followup_enabled", True))
+            # t2sbg：追问链路暂时关闭；其他 mode 默认开启，可由客户端显式覆盖。
+            external_followup_enabled = bool(cfg.get("external_followup_enabled", mode != "t2s"))
             if cfg.get("system_role"):
                 prompt_manager.set_custom_prompt(
                     system_role=cfg.get("system_role"),
