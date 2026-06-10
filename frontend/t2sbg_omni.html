@@ -211,17 +211,17 @@
       </div>
       <div style="margin-bottom:8px;">
         <label for="turnThreshold" style="font-size:0.85rem;">
-          threshold（灵敏度） <span id="turnThresholdVal">0.5</span>
+          threshold（灵敏度） <span id="turnThresholdVal">0.7</span>
         </label>
-        <input type="range" id="turnThreshold" min="-1" max="1" step="0.1" value="0.5" style="width:100%;" />
-        <div style="font-size:11px; color:#888;">范围 [-1.0, 1.0]，越低越灵敏，默认 0.5。</div>
+        <input type="range" id="turnThreshold" min="-1" max="1" step="0.1" value="0.7" style="width:100%;" />
+        <div style="font-size:11px; color:#888;">范围 [-1.0, 1.0]，越低越灵敏，Qwen3.5 semantic_vad 默认 0.7。</div>
       </div>
       <div>
         <label for="turnSilenceMs" style="font-size:0.85rem;">
-          silence_duration_ms <span id="turnSilenceVal">800</span>
+          silence_duration_ms <span id="turnSilenceVal">1100</span>
         </label>
-        <input type="range" id="turnSilenceMs" min="200" max="6000" step="50" value="800" style="width:100%;" />
-        <div style="font-size:11px; color:#888;">范围 [200, 6000]，语音结束后静音多久触发回复，默认 800ms。</div>
+        <input type="range" id="turnSilenceMs" min="200" max="6000" step="50" value="1100" style="width:100%;" />
+        <div style="font-size:11px; color:#888;">范围 [200, 6000]，语音结束后静音多久触发回复，Qwen3.5 semantic_vad 默认 1100ms。</div>
       </div>
     </div>
   </div>
@@ -1168,10 +1168,10 @@
             startCfg.omni_vad_mode = vadMode;
             if (vadMode === 'dashscope') {
               startCfg.omni_turn_detection_type = turnDetectionTypeEl ? turnDetectionTypeEl.value : 'semantic_vad';
-              startCfg.omni_turn_detection_threshold = turnThresholdEl ? Number(turnThresholdEl.value) : 0.5;
+              startCfg.omni_turn_detection_threshold = turnThresholdEl ? Number(turnThresholdEl.value) : 0.7;
               startCfg.omni_turn_detection_silence_duration_ms = turnSilenceMsEl
                 ? Number(turnSilenceMsEl.value)
-                : 800;
+                : 1100;
             }
           }
           ws.send(JSON.stringify(startCfg));
