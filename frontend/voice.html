@@ -499,7 +499,7 @@
             external_followup_enabled: true,
           };
           ws.send(JSON.stringify(cfg));
-          setStatus('Waiting for session...');
+          setStatus('正在建立会话…');
         };
 
         ws.onmessage = function (ev) {
@@ -511,6 +511,11 @@
                 log('Session ' + msg.session_id);
                 latencyLabel.textContent = '-';
                 resetAiStreamingState();
+                if (mediaStream && !processorNode) {
+                  const nodes = startMic(mediaStream);
+                  audioContext = nodes.ctx;
+                  processorNode = nodes.processor;
+                }
               } else if (msg.type === 'start_session_config') {
                 log('StartSession config: mode=' + msg.mode + ' input_mod=' + msg.input_mod);
               } else if (msg.type === 'asr') {
@@ -594,6 +599,9 @@
         transcriptEl.innerHTML = '';
         logEl.innerHTML = '';
         resetAiStreamingState();
+        btnStart.disabled = true;
+        btnStop.disabled = false;
+        setStatus('正在连接服务器…');
         connect();
         navigator.mediaDevices.getUserMedia({
           audio: {
@@ -605,15 +613,10 @@
         })
           .then(function (stream) {
             mediaStream = stream;
-            const nodes = startMic(stream);
-            audioContext = nodes.ctx;
-            processorNode = nodes.processor;
-            btnStart.disabled = true;
-            btnStop.disabled = false;
           })
           .catch(function (e) {
             log('Microphone error: ' + e.message, true);
-            setStatus('Mic error');
+            setStatus('Mic error — waiting for session without microphone');
           });
       };
 

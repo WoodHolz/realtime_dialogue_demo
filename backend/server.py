@@ -1729,6 +1729,136 @@ async def websocket_endpoint(websocket: WebSocket):
             except Exception:
                 pass
 
+    async def _t2s_start_voice_input() -> bool:
+        """Initialize VAD + streaming ASR; notify client via voice_input_started when ready."""
+        nonlocal t2s_asr_streaming, t2s_asr_stream_buffer, t2s_pcm_buffer, t2s_voice_active
+        nonlocal t2s_speech_started, t2s_eou_fired, t2s_speech_started_ts, t2s_last_nonidle_ts
+        nonlocal t2s_turn_id, t2s_vad_idle_streak, t2s_asr_gate_open
+        nonlocal t2s_pre_roll_chunks, t2s_asr_capture_buffer, t2s_vad_turn_buffer, t2s_vad
+        nonlocal t2s_asr_last_real_send_monotonic, t2s_asr_last_keepalive_monotonic, t2s_asr_keepalive_task
+
+        if not client or mode != "t2s":
+            send_json({"type": "error", "message": "voice_input_start only valid in t2s mode"})
+            return False
+        if t2s_asr_streaming:
+            send_json({"type": "error", "message": "voice session already started"})
+            return False
+
+        t2s_asr_stream_buffer.clear()
+        t2s_pcm_buffer.clear()
+        t2s_voice_active = True
+        t2s_speech_started = False
+        t2s_eou_fired = False
+        t2s_speech_started_ts = 0.0
+        t2s_last_nonidle_ts = 0.0
+        _cancel_t2s_speak_grace()
+        t2s_turn_id += 1
+        t2s_vad_idle_streak = 0
+        t2s_asr_gate_open = False
+        t2s_pre_roll_chunks.clear()
+        t2s_asr_capture_buffer.clear()
+        t2s_vad_turn_buffer.clear()
+        _close_t2s_debug_files()
+        _open_t2s_debug_files_for_turn()
+        t2s_vad = create_vad_backend()
+        if t2s_vad is not None:
+            try:
+                vad_status = await t2s_vad.start_session(uuid.uuid4().hex)
+                send_json({"type": "vad_status", **vad_status})
+            except Exception as e:
+                LOG.warning("VAD start_session failed: %s", e)
+                push_server_log("warning", f"VAD start_session failed: {e}")
+                provider = getattr(t2s_vad, "provider", vad_provider())
+                await t2s_vad.close_session()
+                t2s_vad = None
+                t2s_voice_active = False
+                send_json(
+                    {
+                        "type": "vad_status",
+                        **vad_status_on_init_failure(provider, str(e)),
+                    }
+                )
+                send_json({"type": "voice_input_failed", "reason": "vad_init", "message": str(e)})
+                return False
+        else:
+            t2s_voice_active = False
+            send_json(
+                {
+                    "type": "vad_status",
+                    **vad_status_on_init_failure(
+                        vad_provider(),
+                        "VAD backend unavailable (check provider / dependencies)",
+                    ),
+                }
+            )
+            send_json(
+                {
+                    "type": "voice_input_failed",
+                    "reason": "vad_unavailable",
+                    "message": "VAD backend unavailable",
+                }
+            )
+            return False
+
+        async def _on_asr_partial(text: str, is_interim: bool) -> None:
+            send_json({"type": "asr", "text": text, "is_interim": is_interim})
+
+        async def _on_asr_server_error(code: int | None) -> None:
+            hint = asr_error_hint(code) if code is not None else ""
+            msg = (
+                f"ASR server error code={code}"
+                if code is not None
+                else "ASR server error (no code in frame)"
+            )
+            if hint:
+                msg += f" — {hint.strip()}"
+            push_server_log("warning", msg, asr_error_code=code)
+
+        async def _on_asr_notify(level: str, message: str) -> None:
+            push_server_log(level, message)
+
+        rid = os.environ.get("ASR_RESOURCE_ID", DEFAULT_ASR_RESOURCE_ID)
+        session = VolcAsrStreamingSession(
+            ASR_APP_ID,
+            ASR_ACCESS_KEY,
+            resource_id=rid,
+            language="zh-CN",
+            on_partial=_on_asr_partial,
+            on_server_error=_on_asr_server_error,
+            on_notify=_on_asr_notify,
+        )
+        try:
+            await session.start()
+        except Exception as e:
+            LOG.warning("ASR streaming start failed: %s", e)
+            push_server_log(
+                "error",
+                f"ASR streaming start failed: {e}",
+            )
+            t2s_voice_active = False
+            if t2s_vad is not None:
+                try:
+                    await t2s_vad.close_session()
+                except Exception:
+                    pass
+                t2s_vad = None
+            err_msg = (
+                f"ASR 连接失败 (403): {e}. 排查：1) 火山控制台-豆包语音-语音识别大模型 已开通 "
+                "2) 若 ASR 与语音对话用不同应用，在 config.json 添加 asr_app_id、asr_access_key "
+                "3) 尝试 ASR_AUTH_STYLE=voice 或 ASR_RESOURCE_ID=volc.bigasr.sauc.concurrent"
+            )
+            send_json({"type": "error", "message": err_msg})
+            send_json({"type": "voice_input_failed", "reason": "asr_init", "message": str(e)})
+            return False
+
+        _cancel_t2s_asr_keepalive()
+        t2s_asr_last_real_send_monotonic = 0.0
+        t2s_asr_last_keepalive_monotonic = 0.0
+        t2s_asr_streaming = session
+        t2s_asr_keepalive_task = asyncio.create_task(_t2s_asr_keepalive_loop(session))
+        send_json({"type": "voice_input_started"})
+        return True
+
     try:
         raw = await websocket.receive_text()
         try:
@@ -1828,6 +1958,7 @@ async def websocket_endpoint(websocket: WebSocket):
                 "type": "ready",
                 "session_id": session_id,
                 "mode": mode,
+                "recording_ready": mode != "t2s",
                 "followup": followup_client.describe_for_client(),
                 "auto_501_from_asr_enabled": auto_501_from_asr_enabled,
                 "external_followup_enabled": external_followup_enabled,
@@ -1845,6 +1976,15 @@ async def websocket_endpoint(websocket: WebSocket):
                 else hush_status_payload(ready=False, error=""),
             }
         )
+        if mode == "t2s":
+            send_json(
+                {
+                    "type": "session_preparing",
+                    "stage": "vad_asr",
+                    "message": "正在启动 VAD 与语音识别…",
+                }
+            )
+            await _t2s_start_voice_input()
 
         while True:
             try:
@@ -1994,100 +2134,8 @@ async def websocket_endpoint(websocket: WebSocket):
                             _append_history("证明人", content.strip())
                         send_json({"type": "chat_text_query_sent"})
                     elif obj.get("type") == "voice_input_start":
-                        # t2s 流式：开启麦克风流式输入 → ASR 流式输出
-                        if not client or mode != "t2s":
-                            send_json({"type": "error", "message": "voice_input_start only valid in t2s mode"})
-                            continue
-                        if t2s_asr_streaming:
-                            send_json({"type": "error", "message": "voice session already started"})
-                            continue
-                        t2s_asr_stream_buffer.clear()
-                        t2s_pcm_buffer.clear()
-                        t2s_voice_active = True
-                        t2s_speech_started = False
-                        t2s_eou_fired = False
-                        t2s_speech_started_ts = 0.0
-                        t2s_last_nonidle_ts = 0.0
-                        _cancel_t2s_speak_grace()
-                        t2s_turn_id += 1
-                        t2s_vad_idle_streak = 0
-                        t2s_asr_gate_open = False
-                        t2s_pre_roll_chunks.clear()
-                        t2s_asr_capture_buffer.clear()
-                        t2s_vad_turn_buffer.clear()
-                        _close_t2s_debug_files()
-                        _open_t2s_debug_files_for_turn()
-                        t2s_vad = create_vad_backend()
-                        if t2s_vad is not None:
-                            try:
-                                vad_status = await t2s_vad.start_session(uuid.uuid4().hex)
-                                send_json({"type": "vad_status", **vad_status})
-                            except Exception as e:
-                                LOG.warning("VAD start_session failed: %s", e)
-                                push_server_log("warning", f"VAD start_session failed: {e}")
-                                provider = getattr(t2s_vad, "provider", vad_provider())
-                                await t2s_vad.close_session()
-                                t2s_vad = None
-                                send_json(
-                                    {
-                                        "type": "vad_status",
-                                        **vad_status_on_init_failure(provider, str(e)),
-                                    }
-                                )
-                        else:
-                            send_json(
-                                {
-                                    "type": "vad_status",
-                                    **vad_status_on_init_failure(
-                                        vad_provider(),
-                                        "VAD backend unavailable (check provider / dependencies)",
-                                    ),
-                                }
-                            )
-
-                        async def _on_asr_partial(text: str, is_interim: bool) -> None:
-                            send_json({"type": "asr", "text": text, "is_interim": is_interim})
-
-                        async def _on_asr_server_error(code: int | None) -> None:
-                            hint = asr_error_hint(code) if code is not None else ""
-                            msg = (
-                                f"ASR server error code={code}"
-                                if code is not None
-                                else "ASR server error (no code in frame)"
-                            )
-                            if hint:
-                                msg += f" — {hint.strip()}"
-                            push_server_log("warning", msg, asr_error_code=code)
-
-                        async def _on_asr_notify(level: str, message: str) -> None:
-                            push_server_log(level, message)
-
-                        rid = os.environ.get("ASR_RESOURCE_ID", DEFAULT_ASR_RESOURCE_ID)
-                        session = VolcAsrStreamingSession(
-                            ASR_APP_ID,
-                            ASR_ACCESS_KEY,
-                            resource_id=rid,
-                            language="zh-CN",
-                            on_partial=_on_asr_partial,
-                            on_server_error=_on_asr_server_error,
-                            on_notify=_on_asr_notify,
-                        )
-                        try:
-                            await session.start()
-                        except Exception as e:
-                            LOG.warning("ASR streaming start failed: %s", e)
-                            push_server_log(
-                                "error",
-                                f"ASR streaming start failed: {e}",
-                            )
-                            send_json({"type": "error", "message": f"ASR 连接失败 (403): {e}. 排查：1) 火山控制台-豆包语音-语音识别大模型 已开通 2) 若 ASR 与语音对话用不同应用，在 config.json 添加 asr_app_id、asr_access_key 3) 尝试 ASR_AUTH_STYLE=voice 或 ASR_RESOURCE_ID=volc.bigasr.sauc.concurrent"})
-                            continue
-                        _cancel_t2s_asr_keepalive()
-                        t2s_asr_last_real_send_monotonic = 0.0
-                        t2s_asr_last_keepalive_monotonic = 0.0
-                        t2s_asr_streaming = session
-                        t2s_asr_keepalive_task = asyncio.create_task(_t2s_asr_keepalive_loop(session))
-                        send_json({"type": "voice_input_started"})
+                        # t2s 流式：开启麦克风流式输入 → ASR 流式输出（后续轮次由客户端触发）
+                        await _t2s_start_voice_input()
                     elif obj.get("type") == "voice_input_complete":
                         # t2s 模式：用户语音结束，用豆包 ASR 转写后发送给语音对话模型。
                         if not client or mode != "t2s":

@@ -8,6 +8,53 @@
     body { font-family: system-ui, sans-serif; max-width: 720px; margin: 1rem auto; padding: 0 1rem; }
     h1 { font-size: 1.25rem; }
     .status { color: #666; margin: 0.5rem 0; }
+    .session-status {
+      margin: 0.75rem 0 1rem;
+      padding: 0.85rem 1rem;
+      border-radius: 10px;
+      font-size: 1rem;
+      line-height: 1.45;
+      border: 2px solid transparent;
+      transition: background 0.2s, border-color 0.2s, color 0.2s;
+    }
+    .session-status.is-idle {
+      color: #555;
+      background: #f3f4f6;
+      border-color: #e5e7eb;
+    }
+    .session-status.is-waiting {
+      color: #92400e;
+      background: #fef3c7;
+      border-color: #fbbf24;
+      font-weight: 600;
+    }
+    .session-status.is-ready {
+      color: #065f46;
+      background: #ecfdf5;
+      border-color: #10b981;
+      font-size: 1.15rem;
+      font-weight: 700;
+      box-shadow: 0 0 0 4px rgba(16, 185, 129, 0.15);
+    }
+    .session-status.is-recording {
+      color: #9f1239;
+      background: #ffe4e6;
+      border-color: #fb7185;
+      font-size: 1.15rem;
+      font-weight: 700;
+      animation: status-recording-pulse 1.4s ease-in-out infinite;
+    }
+    .session-status.is-error {
+      color: #991b1b;
+      background: #fef2f2;
+      border-color: #f87171;
+      font-weight: 600;
+    }
+    @keyframes status-recording-pulse {
+      0%, 100% { box-shadow: 0 0 0 0 rgba(251, 113, 133, 0.35); }
+      50% { box-shadow: 0 0 0 8px rgba(251, 113, 133, 0); }
+    }
+    .meta-line { color: #888; font-size: 0.85rem; margin: 0 0 0.5rem; }
     .transcript { white-space: pre-wrap; min-height: 120px; padding: 0.5rem; border: 1px solid #ccc; border-radius: 6px; margin: 0.5rem 0; background: #fafafa; }
     .controls { margin: 1rem 0; }
     button { padding: 0.5rem 1rem; margin-right: 0.5rem; cursor: pointer; }
@@ -107,13 +154,12 @@
     判停由后端 Smart Turn v3 完成；Qwen Omni 为流式 commit，自部署 Omni 为按轮整段 WAV 提交。
     TTFS 延迟面板已<strong>内联在本页</strong>：<strong>Start Session</strong> 会自动 <code>TTFS.startMic()</code>；Omni TTS 自动接入 Playback 测光。
   </p>
-  <div class="status" id="status">选择 Omni 后端后点击 Start 建立会话，然后直接说话。</div>
-  <div class="status">
+  <div class="session-status is-idle" id="status" role="status" aria-live="polite">选择 Omni 后端后点击 Start 建立会话，然后直接说话。</div>
+  <p class="meta-line">
     <span>Mode:</span> <span id="modeLabel">omni</span>
     <span style="margin-left:12px;">Backend:</span> <span id="backendLabel">qwen</span>
-    <span style="margin-left:12px;">Stage:</span> <span id="stageLabel">introduction</span>
     <span style="margin-left:12px;">VAD:</span> <span id="vadState">provider=smart_turn_v3 state=-</span>
-  </div>
+  </p>
 
   <div class="section" style="margin-top:12px;">
     <strong>Omni 后端（开始对话前选择）</strong>
@@ -325,7 +371,6 @@
       if (pageVersionEl) pageVersionEl.textContent = 't2sbg-omni v' + OMNI_VOICE_VERSION;
 
       const statusEl = document.getElementById('status');
-      const stageLabel = document.getElementById('stageLabel');
       const backendLabel = document.getElementById('backendLabel');
       const omniBackendFlash = document.getElementById('omniBackendFlash');
       const omniBackend35Flash = document.getElementById('omniBackend35Flash');
@@ -789,7 +834,19 @@
         };
       }
 
-      function setStatus(text) { statusEl.textContent = text; }
+      function setStatus(text, kind) {
+        statusEl.textContent = text;
+        statusEl.className = 'session-status';
+        var resolved = kind;
+        if (!resolved) {
+          if (/失败|Error|error/i.test(text)) resolved = 'error';
+          else if (/录音中|请开始说话|已就绪/.test(text)) resolved = 'ready';
+          else if (/正在|Connecting|Waiting|请稍候/.test(text)) resolved = 'waiting';
+          else if (/Stopped|Disconnected|点击 Start|选择 Omni/.test(text)) resolved = 'idle';
+          else resolved = 'idle';
+        }
+        statusEl.classList.add('is-' + resolved);
+      }
 
       function getTtsAudioContext() {
         if (!ttsAudioContext) ttsAudioContext = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: TTS_SAMPLE_RATE });
@@ -1088,15 +1145,15 @@
         ws.binaryType = 'arraybuffer';
         setStatus(
           backend === 'self'
-            ? 'Connecting self-deployed Omni...'
-            : 'Connecting ' + model + '...'
+            ? '正在连接自部署 Omni…'
+            : '正在连接 ' + model + '…',
+          'waiting'
         );
 
         ws.onopen = function () {
           const startCfg = {
             mode: 'omni',
             omni_backend: backend,
-            stage: 'introduction',
             system_role: DEFAULT_SYSTEM_ROLE,
             speaking_style: DEFAULT_SPEAKING_STYLE
           };
@@ -1130,8 +1187,9 @@
               if (backendLabel) backendLabel.textContent = backend === 'self' ? 'self' : model;
               setStatus(
                 backend === 'self'
-                  ? '自部署 Omni 已就绪，说完一轮后等待模型回复。'
-                  : model + ' 已就绪，直接说话即可。'
+                  ? '录音中 — 请说话，说完后等待模型回复'
+                  : '录音中 — 请说话，说完后等待 ' + model + ' 回复',
+                'recording'
               );
               let turnDetectionLog = '';
               if (msg.omni_turn_detection) {
@@ -1237,12 +1295,12 @@
         };
 
         ws.onclose = function () {
-          setStatus('Disconnected');
+          setStatus('Disconnected', 'idle');
           btnSendText.disabled = true;
           log('WebSocket closed');
         };
         ws.onerror = function () {
-          setStatus('WebSocket error');
+          setStatus('WebSocket error', 'error');
           log('WebSocket error', true);
         };
       }
@@ -1275,20 +1333,25 @@
         asrPreviewEl.textContent = '';
         logEl.innerHTML = '';
         resetRecordingDebugCache();
-        stageLabel.textContent = 'introduction';
         vadStateEl.textContent = 'provider=smart_turn_v3 state=-';
         if (backendLabel) {
           backendLabel.textContent = isSelfDeployedOmni() ? 'self' : selectedOmniModel();
         }
+        btnStart.disabled = true;
+        btnStop.disabled = false;
+        btnMute.disabled = false;
+        setStatus('正在获取麦克风权限…', 'waiting');
         acquireInterviewMic().then(function (stream) {
           mediaStream = stream;
           setOmniBackendControlsEnabled(false);
+          setStatus('正在连接服务器并启动 VAD…', 'waiting');
           connect();
-          btnStart.disabled = true;
-          btnStop.disabled = false;
-          btnMute.disabled = false;
         }).catch(function (e) {
           log('麦克风权限失败: ' + (e && e.message ? e.message : e), true);
+          btnStart.disabled = false;
+          btnStop.disabled = true;
+          btnMute.disabled = true;
+          setStatus('麦克风权限失败', 'error');
         });
       };
 
@@ -1306,7 +1369,7 @@
         btnMute.disabled = true;
         btnSendText.disabled = true;
         btnMonitorSync.disabled = true;
-        setStatus('Stopped');
+        setStatus('已停止，点击 Start 重新开始', 'idle');
       };
 
       btnMute.onclick = function () {
