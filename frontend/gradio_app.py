@@ -79,7 +79,7 @@ def ui_backcheck():
     with gr.Blocks(title="芝麻背调访谈", theme=gr.themes.Soft()) as demo:
         gr.Markdown("# 芝麻背调证明人访谈")
         gr.Markdown(
-            "以专业、亲和、严谨的方式，与证明人进行 5–7 分钟电话/视频访谈，"
+            "以专业、亲和、严谨的方式，与证明人进行 5到7分钟电话/视频访谈，"
             "核实候选人在上一家公司的履历与工作表现。"
         )
 
