@@ -32,6 +32,8 @@ from typing import Any
 import sounddevice as sd
 import websockets
 
+from config.prompt_templates import DEFAULT_SPEAKING_STYLE, DEFAULT_SYSTEM_ROLE
+
 WS_URL = "wss://openspeech.bytedance.com/api/v3/realtime/dialogue"
 RESOURCE_ID = "volc.speech.dialog"
 APP_KEY = "PlgvMymc7f3tQnJ6"
@@ -216,7 +218,7 @@ async def run_t2s(app_id: str, access_key: str, speaker: str, system_role: str) 
             "dialog": {
                 "bot_name": "背调访谈员",
                 "system_role": system_role,
-                "speaking_style": "说话专业、亲和、严谨",
+                "speaking_style": DEFAULT_SPEAKING_STYLE,
                 "dialog_id": "",
                 "extra": {
                     "model": "1.2.1.1",
@@ -305,7 +307,7 @@ def parse_args() -> argparse.Namespace:
     )
     p.add_argument(
         "--system-role",
-        default="你是芝麻背调的专业背景调查访谈员，回答简洁、专业、亲和。",
+        default=DEFAULT_SYSTEM_ROLE,
         help="dialog.system_role",
     )
     return p.parse_args()

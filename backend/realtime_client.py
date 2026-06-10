@@ -38,6 +38,7 @@ from backend.protocol import (
     encode_client_json_event,
     new_session_id,
 )
+from config.prompt_templates import DEFAULT_SPEAKING_STYLE, DEFAULT_SYSTEM_ROLE
 
 LOG = logging.getLogger(__name__)
 
@@ -68,8 +69,8 @@ DEFAULT_START_SESSION_PAYLOAD = {
     },
     "dialog": {
         "bot_name": "背调访谈员",
-        "system_role": "",
-        "speaking_style": "",
+        "system_role": DEFAULT_SYSTEM_ROLE,
+        "speaking_style": DEFAULT_SPEAKING_STYLE,
         "dialog_id": "",
         "extra": {
             # Model version: O2.0 canonical version id.
@@ -179,8 +180,8 @@ class RealtimeVoiceClient:
         dialog = {
             **base["dialog"],
             "bot_name": bot_name,
-            "system_role": system_role,
-            "speaking_style": speaking_style or base["dialog"]["speaking_style"],
+            "system_role": system_role or DEFAULT_SYSTEM_ROLE,
+            "speaking_style": speaking_style or DEFAULT_SPEAKING_STYLE,
             "dialog_id": dialog_id,
             "extra": dialog_extra,
         }

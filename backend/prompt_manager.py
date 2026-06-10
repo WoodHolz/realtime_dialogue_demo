@@ -7,7 +7,6 @@ from __future__ import annotations
 from config.prompt_templates import (
     DEFAULT_SYSTEM_ROLE,
     DEFAULT_SPEAKING_STYLE,
-    get_system_prompt,
     wrap_asr_for_semi,
     STAGE_PROMPTS,
 )
@@ -32,14 +31,12 @@ class PromptManager:
     def get_system_role(self) -> str:
         if self._custom_role is not None:
             return self._custom_role
-        role, _ = get_system_prompt(self._stage)
-        return role
+        return DEFAULT_SYSTEM_ROLE
 
     def get_speaking_style(self) -> str:
         if self._custom_style is not None:
             return self._custom_style
-        _, style = get_system_prompt(self._stage)
-        return style
+        return DEFAULT_SPEAKING_STYLE
 
     def set_custom_prompt(self, system_role: str | None = None, speaking_style: str | None = None) -> None:
         self._custom_role = system_role
