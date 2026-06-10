@@ -1,0 +1,1384 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>芝麻背调访谈 Demo</title>
+  <style>
+    body.demo-mode { font-family: ui-sans-serif, system-ui, "Segoe UI", Roboto, "PingFang SC", sans-serif; max-width: 920px; margin: 0 auto; padding: 1rem 1.25rem 2rem; background: #0f1218; color: #e8ecf4; }
+    h1 { font-size: 1.25rem; }
+    .status { color: #666; margin: 0.5rem 0; }
+    .session-status {
+      margin: 0.75rem 0 1rem;
+      padding: 0.85rem 1rem;
+      border-radius: 10px;
+      font-size: 1rem;
+      line-height: 1.45;
+      border: 2px solid transparent;
+      transition: background 0.2s, border-color 0.2s, color 0.2s;
+    }
+    .session-status.is-idle {
+      color: #555;
+      background: #f3f4f6;
+      border-color: #e5e7eb;
+    }
+    .session-status.is-waiting {
+      color: #92400e;
+      background: #fef3c7;
+      border-color: #fbbf24;
+      font-weight: 600;
+    }
+    .session-status.is-ready {
+      color: #065f46;
+      background: #ecfdf5;
+      border-color: #10b981;
+      font-size: 1.15rem;
+      font-weight: 700;
+      box-shadow: 0 0 0 4px rgba(16, 185, 129, 0.15);
+    }
+    .session-status.is-recording {
+      color: #9f1239;
+      background: #ffe4e6;
+      border-color: #fb7185;
+      font-size: 1.15rem;
+      font-weight: 700;
+      animation: status-recording-pulse 1.4s ease-in-out infinite;
+    }
+    .session-status.is-error {
+      color: #991b1b;
+      background: #fef2f2;
+      border-color: #f87171;
+      font-weight: 600;
+    }
+    @keyframes status-recording-pulse {
+      0%, 100% { box-shadow: 0 0 0 0 rgba(251, 113, 133, 0.35); }
+      50% { box-shadow: 0 0 0 8px rgba(251, 113, 133, 0); }
+    }
+    .meta-line { color: #888; font-size: 0.85rem; margin: 0 0 0.5rem; }
+    .transcript { white-space: pre-wrap; min-height: 120px; padding: 0.5rem; border: 1px solid #ccc; border-radius: 6px; margin: 0.5rem 0; background: #fafafa; }
+    .controls { margin: 1rem 0; }
+    button { padding: 0.5rem 1rem; margin-right: 0.5rem; cursor: pointer; }
+    button:disabled { opacity: 0.6; cursor: not-allowed; }
+    .error { color: #c00; }
+    .section { margin-top: 1rem; padding-top: 1rem; border-top: 1px solid #eee; }
+    details.debug-raw-clips { margin-top: 8px; font-size: 12px; }
+    details.debug-raw-clips summary { cursor: pointer; color: #555; user-select: none; }
+    details.debug-raw-clips .raw-clips-body { margin-top: 6px; padding-left: 8px; border-left: 2px solid #eee; }
+    .ttfs-hint { font-size: 12px; color: #666; margin: 6px 0 8px; }
+    .ttfs-inline-root {
+      --ttfs-bg: #0f1218;
+      --ttfs-panel: #171b24;
+      --ttfs-text: #e8ecf4;
+      --ttfs-muted: #8b93a7;
+      --ttfs-grid: #2a3142;
+      --ttfs-accent: #fbbf24;
+      --ttfs-danger: #f87171;
+      border: 1px solid #ddd;
+      border-radius: 10px;
+      overflow: hidden;
+      background: var(--ttfs-bg);
+      color: var(--ttfs-text);
+      font-family: ui-sans-serif, system-ui, "Segoe UI", Roboto, "PingFang SC", sans-serif;
+      font-size: 13px;
+      line-height: 1.35;
+      max-width: 720px;
+    }
+    .ttfs-inline-root * { box-sizing: border-box; }
+    .ttfs-inline-root .embed-root { padding: 8px; display: flex; flex-direction: column; gap: 8px; max-width: 100%; }
+    .ttfs-inline-root .controls {
+      display: flex; flex-wrap: wrap; gap: 6px; align-items: center;
+      background: var(--ttfs-panel); padding: 8px; border-radius: 8px; border: 1px solid var(--ttfs-grid);
+    }
+    .ttfs-inline-root button {
+      border: none; border-radius: 6px; padding: 0.4rem 0.65rem; font-weight: 600; cursor: pointer; font-size: 0.78rem;
+    }
+    .ttfs-inline-root button.primary { background: linear-gradient(180deg, #22d3ee 0%, #06b6d4 100%); color: #041016; }
+    .ttfs-inline-root button.secondary { background: #3730a3; color: #eef; }
+    .ttfs-inline-root button.ghost { background: #252b38; color: var(--ttfs-text); border: 1px solid var(--ttfs-grid); }
+    .ttfs-inline-root button:disabled { opacity: 0.45; cursor: not-allowed; }
+    .ttfs-inline-root label.chk-inline {
+      display: flex; align-items: center; gap: 0.35rem; font-size: 0.72rem; color: var(--ttfs-muted); cursor: pointer; user-select: none;
+    }
+    .ttfs-inline-root label.chk-inline input { accent-color: #5eead4; width: 0.95rem; height: 0.95rem; }
+    .ttfs-inline-root .metrics {
+      display: flex; flex-wrap: wrap; gap: 8px; align-items: center;
+      background: var(--ttfs-panel); padding: 8px; border-radius: 8px; border: 1px solid var(--ttfs-grid);
+    }
+    .ttfs-inline-root .big { font-size: 1.35rem; font-weight: 750; font-variant-numeric: tabular-nums; color: var(--ttfs-accent); }
+    .ttfs-inline-root .ttfs-hint-inline { font-size: 0.72rem; color: var(--ttfs-muted); }
+    .ttfs-inline-root .knobs { display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: center; }
+    .ttfs-inline-root .knobs label { font-size: 0.62rem; color: var(--ttfs-muted); display: flex; flex-direction: column; gap: 2px; }
+    .ttfs-inline-root .knobs input[type="range"] { width: 100px; }
+    .ttfs-inline-root .main { display: flex; flex-wrap: wrap; gap: 8px; align-items: flex-start; }
+    .ttfs-inline-root #ttfs-panel-media.panel-media {
+      display: flex; gap: 8px; align-items: flex-end; padding: 8px;
+      background: var(--ttfs-panel); border: 1px solid var(--ttfs-grid); border-radius: 8px;
+    }
+    .ttfs-inline-root .strip-wrap { display: flex; flex-direction: column; align-items: center; gap: 4px; }
+    .ttfs-inline-root .strip-label { font-size: 0.58rem; letter-spacing: 0.1em; text-transform: uppercase; color: var(--ttfs-muted); }
+    .ttfs-inline-root canvas.waveformCanvas {
+      display: block; width: 88px; height: 160px; border-radius: 6px; background: #0a0c10; border: 1px solid #1c2230;
+    }
+    .ttfs-inline-root .timeline-wrap {
+      flex: 1 1 200px; min-width: 180px; background: var(--ttfs-panel); border: 1px solid var(--ttfs-grid); border-radius: 8px; padding: 8px;
+    }
+    .ttfs-inline-root .timeline-wrap h2 {
+      margin: 0 0 6px; font-size: 0.62rem; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: var(--ttfs-muted);
+    }
+    .ttfs-inline-root canvas#ttfs-timeline {
+      display: block; width: 100%; height: 140px; border-radius: 6px; background: #0a0c10; border: 1px solid #1c2230;
+    }
+    .ttfs-inline-root #ttfs-log { font-family: ui-monospace, monospace; font-size: 0.68rem; color: var(--ttfs-muted); min-height: 1rem; margin: 0; }
+    .ttfs-inline-root #ttfs-log.err { color: var(--ttfs-danger); }
+    body.demo-mode h1 { color: #f1f5f9; font-size: 1.15rem; font-weight: 650; }
+    body.demo-mode p, body.demo-mode .meta-line, body.demo-mode .ttfs-hint { color: #8b93a7 !important; }
+    body.demo-mode .session-status.is-idle { color: #8b93a7; background: #171b24; border-color: #2a3142; }
+    body.demo-mode .session-status.is-waiting { color: #fbbf24; background: #2a2208; border-color: #ca8a04; }
+    body.demo-mode .session-status.is-ready { color: #5eead4; background: #0d2826; border-color: #14b8a6; box-shadow: 0 0 0 4px rgba(20,184,166,0.12); }
+    body.demo-mode .session-status.is-recording { color: #fda4af; background: #2a1018; border-color: #fb7185; }
+    body.demo-mode .session-status.is-error { color: #fca5a5; background: #2a1010; border-color: #f87171; }
+    body.demo-mode .transcript { background: #171b24; border: 1px solid #2a3142; color: #e8ecf4; border-radius: 10px; }
+    body.demo-mode button:not(.ttfs-inline-root button) { border: none; border-radius: 8px; padding: 0.55rem 1.1rem; font-weight: 600; background: linear-gradient(180deg, #22d3ee 0%, #06b6d4 100%); color: #041016; }
+    body.demo-mode button:disabled:not(.ttfs-inline-root button) { opacity: 0.45; cursor: not-allowed; }
+    body.demo-mode .section { border-top-color: #2a3142; }
+    body.demo-mode .section strong { color: #cbd5e1; }
+    body.demo-mode #log { font-family: ui-monospace, monospace; font-size: 0.78rem; color: #8b93a7; }
+    body.demo-mode .demo-hide { display: none !important; }
+    body.demo-mode .ttfs-inline-root { border-color: #2a3142; }
+    .engine-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 10px; margin-top: 10px; }
+    .engine-card { display: block; cursor: pointer; border-radius: 10px; border: 2px solid #2a3142; background: #171b24; padding: 0.85rem; transition: border-color 0.15s, box-shadow 0.15s; }
+    .engine-card:hover { border-color: #3d4a63; }
+    .engine-card input { position: absolute; opacity: 0; pointer-events: none; }
+    .engine-card:has(input:checked) { border-color: #22d3ee; box-shadow: 0 0 0 3px rgba(34,211,238,0.12); }
+    .engine-card .card-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 0.3rem; }
+    .engine-card .title { font-size: 0.95rem; font-weight: 700; color: #f1f5f9; }
+    .engine-card .version {
+      flex-shrink: 0;
+      padding: 0.2rem 0.5rem;
+      font-size: 0.68rem;
+      font-weight: 600;
+      font-variant-numeric: tabular-nums;
+      letter-spacing: 0.02em;
+      color: #5eead4;
+      background: #0d2826;
+      border: 1px solid #2a3142;
+      border-radius: 6px;
+    }
+    .engine-card .desc { font-size: 0.78rem; line-height: 1.4; color: #8b93a7; }
+    .engine-card .tag { display: inline-block; margin-top: 0.45rem; padding: 0.12rem 0.45rem; border-radius: 5px; font-size: 0.65rem; font-weight: 600; background: rgba(34,211,238,0.12); color: #22d3ee; }
+    .engine-card.is-locked { opacity: 0.55; pointer-events: none; }
+  </style>
+</head>
+<body class="demo-mode">
+  <h1>芝麻背调证明人访谈 · Demo</h1>
+  <p style="font-size:0.9rem;">
+    开始对话前选择推理引擎。链路均经 <strong>Hush 降噪</strong> → Smart Turn v3 / semantic_vad 判停。
+    TTFS 延迟面板内联在本页，<strong>Start Session</strong> 自动启动麦克风。
+  </p>
+  <div class="session-status is-idle" id="status" role="status" aria-live="polite">选择推理引擎后点击 Start 建立会话，然后直接说话。</div>
+  <p class="meta-line">
+    <span>Engine:</span> <span id="engineLabel">火山 T2SBG</span>
+    <span style="margin-left:12px;">VAD:</span> <span id="vadState">provider=- state=-</span>
+  </p>
+
+  <div class="section" id="enginePickerSection">
+    <strong>推理引擎（开始对话前选择）</strong>
+    <div class="engine-grid">
+      <label class="engine-card" id="engineCardVolcano">
+        <input type="radio" name="engine" id="engineVolcano" value="volcano" checked />
+        <div class="card-head">
+          <div class="title">火山 T2SBG</div>
+          <span class="version" id="volcanoVersion">v__T2SBG_VOICE_VERSION__</span>
+        </div>
+        <div class="desc">豆包 ASR → 火山实时语音 TTS。端到端可控 T2S 链路。</div>
+        <span class="tag">Doubao / Volcengine</span>
+      </label>
+      <label class="engine-card" id="engineCardOmni35">
+        <input type="radio" name="engine" id="engineOmni35" value="omni35" />
+        <div class="card-head">
+          <div class="title">Qwen Omni 3.5</div>
+          <span class="version" id="omniVersion">v__OMNI_VOICE_VERSION__</span>
+        </div>
+        <div class="desc">Qwen3.5-Omni-Flash-Realtime 直连，DashScope semantic_vad。</div>
+        <span class="tag">DashScope Omni 3.5</span>
+      </label>
+    </div>
+  </div>
+
+  <div class="controls">
+    <button id="btnStart">Start Session</button>
+    <button id="btnStop" disabled>Stop</button>
+    <button id="btnMute" disabled>Mute Mic</button>
+  </div>
+
+  <div class="section">
+    <strong>TTFS 麦克风 / 延迟面板（本页内联）</strong>
+    <p class="ttfs-hint">
+      <strong>Start Session</strong> 会自动调用 <code>TTFS.startMic()</code> 并 <code>cloneMicForConsumer()</code> 供上行 Omni。端到端延迟 = 麦克风声学结束（Hang ms）→ 扬声器下一次起声；Stop 会 <code>TTFS.stop()</code>。
+    </p>
+    <div class="ttfs-inline-root">
+      <div class="embed-root">
+        <div class="controls">
+          <button type="button" class="primary" id="ttfs-btn-mic">Mic</button>
+          <button type="button" class="secondary" id="ttfs-btn-share">Playback</button>
+          <button type="button" class="ghost" id="ttfs-btn-stop">Stop</button>
+          <label class="chk-inline">
+            <input type="checkbox" id="ttfs-chk-voice" checked /> DSP
+          </label>
+          <span class="ttfs-hint-inline" id="ttfs-state-lab">idle</span>
+        </div>
+        <div class="metrics">
+          <div>
+            <div class="ttfs-hint-inline">端到端延迟</div>
+            <div class="big" id="ttfs-lat-ms">—</div>
+            <div class="ttfs-hint-inline" style="margin-top:4px;max-width:14rem;line-height:1.3;font-size:0.65rem;">
+              麦克风声学结束 → 扬声器下一次起声
+            </div>
+          </div>
+          <div class="knobs">
+            <label>Mic <span id="ttfs-lab-mic-t"></span><input type="range" id="ttfs-rng-mic" min="0.002" max="0.08" step="0.001" value="0.018" /></label>
+            <label>Pb <span id="ttfs-lab-pb-t"></span><input type="range" id="ttfs-rng-pb" min="0.002" max="0.12" step="0.001" value="0.012" /></label>
+            <label>Hang ms <span id="ttfs-lab-hang"></span><input type="range" id="ttfs-rng-hang" min="80" max="900" step="10" value="320" /></label>
+          </div>
+        </div>
+        <div class="main">
+          <div id="ttfs-panel-media" class="panel-media">
+            <div class="strip-wrap">
+              <span class="strip-label">Mic</span>
+              <canvas id="ttfs-waveform-mic" class="waveformCanvas" width="117" height="218"></canvas>
+            </div>
+            <div class="strip-wrap">
+              <span class="strip-label">PB</span>
+              <canvas id="ttfs-waveform-pb" class="waveformCanvas" width="117" height="218"></canvas>
+            </div>
+          </div>
+          <div class="timeline-wrap">
+            <h2>Timeline</h2>
+            <canvas id="ttfs-timeline" width="640" height="200"></canvas>
+          </div>
+        </div>
+        <p id="ttfs-log"></p>
+      </div>
+      <video id="ttfs-keep-alive" autoplay muted playsinline style="position:absolute;width:1px;height:1px;opacity:0;pointer-events:none"></video>
+    </div>
+  </div>
+
+  <div class="section">
+    <strong>ASR 实时识别（Omni）</strong>
+    <div id="asrPreview" class="transcript" style="min-height:48px; font-size:0.9rem; color:#666;"></div>
+  </div>
+
+  <div class="section demo-hide">
+    <strong>录音调试预览（后端合并）</strong>
+    <button type="button" id="btnMonitorSync" disabled style="margin-left:8px;">同步到监控页</button>
+    <span id="monitorSyncHint" style="font-size:12px;color:#888;margin-left:8px;"></span>
+    <p style="font-size:12px; color:#666;">链路：Browser 上行音频 → Backend Omni Bridge → Hush 降噪 → Smart Turn v3 + Qwen Omni。下方主播放器是<strong>跨轮合并</strong>后的 WAV（VAD 分支为降噪后音频）；折叠里是<strong>每一轮单独</strong>的录音。</p>
+    <div style="margin-top:8px;">
+      <div style="margin-bottom:10px;">
+        <div style="font-size:12px; color:#666; margin-bottom:4px;">给 VAD 的录音（merged）</div>
+        <audio id="vadAudioPreview" controls style="width:100%;"></audio>
+        <div id="vadAudioMeta" style="font-size:12px; color:#666; margin-top:4px;">片段数: 0, 时长: 0.00s</div>
+        <details class="debug-raw-clips">
+          <summary>未合并原始录音（按轮）</summary>
+          <div class="raw-clips-body" id="vadRawTurnClips">暂无</div>
+        </details>
+      </div>
+      <div>
+        <div style="font-size:12px; color:#666; margin-bottom:4px;">给 Omni 上行的录音（merged）</div>
+        <audio id="asrAudioPreview" controls style="width:100%;"></audio>
+        <div id="asrAudioMeta" style="font-size:12px; color:#666; margin-top:4px;">片段数: 0, 时长: 0.00s</div>
+        <details class="debug-raw-clips">
+          <summary>未合并原始录音（按轮）</summary>
+          <div class="raw-clips-body" id="asrRawTurnClips">暂无</div>
+        </details>
+      </div>
+      <div style="margin-top:10px;">
+        <div style="font-size:12px; color:#666; margin-bottom:4px;">完整麦克风录音通道（trigger-start 到 turn-end，merged）</div>
+        <audio id="fullAudioPreview" controls style="width:100%;"></audio>
+        <div id="fullAudioMeta" style="font-size:12px; color:#666; margin-top:4px;">片段数: 0, 时长: 0.00s</div>
+        <details class="debug-raw-clips">
+          <summary>未合并原始录音（按轮，前端采集分片拼成单轮 WAV）</summary>
+          <div class="raw-clips-body" id="fullRawTurnClips">暂无</div>
+        </details>
+      </div>
+    </div>
+  </div>
+
+  <div class="section">
+    <strong>AI 面试官回复（文本 + 语音）</strong>
+    <div class="transcript" id="transcript"></div>
+  </div>
+
+  <div id="log" class="transcript" style="max-height: 120px; overflow-y: auto;"></div>
+
+  <div class="section demo-hide">
+    <strong>方式二：纯文本输入</strong>
+    <span style="font-size:12px; color:#888;">（备用，不常用）</span>
+    <p style="font-size:12px; color:#666;">直接输入证明人/候选人的回答，点击发送（用于快速调试）。</p>
+    <textarea id="userText" rows="3" style="width:100%; box-sizing:border-box;" placeholder="输入文本后发送（用于快速调试）"></textarea>
+    <div style="margin-top:8px;">
+      <button id="btnSendText" disabled>Send Text</button>
+    </div>
+  </div>
+
+  <script src="/static/ttfs-app.js"></script>
+  <script>
+    (function () {
+      const statusEl = document.getElementById('status');
+      const engineLabel = document.getElementById('engineLabel');
+      const engineCardVolcano = document.getElementById('engineCardVolcano');
+      const engineCardOmni35 = document.getElementById('engineCardOmni35');
+      const vadStateEl = document.getElementById('vadState');
+      const transcriptEl = document.getElementById('transcript');
+      const asrPreviewEl = document.getElementById('asrPreview');
+      const logEl = document.getElementById('log');
+      const btnStart = document.getElementById('btnStart');
+      const btnStop = document.getElementById('btnStop');
+      const btnMute = document.getElementById('btnMute');
+      const btnSendText = document.getElementById('btnSendText');
+      const btnMonitorSync = document.getElementById('btnMonitorSync');
+      const monitorSyncHint = document.getElementById('monitorSyncHint');
+      const vadAudioPreviewEl = document.getElementById('vadAudioPreview');
+      const asrAudioPreviewEl = document.getElementById('asrAudioPreview');
+      const fullAudioPreviewEl = document.getElementById('fullAudioPreview');
+      const vadAudioMetaEl = document.getElementById('vadAudioMeta');
+      const asrAudioMetaEl = document.getElementById('asrAudioMeta');
+      const fullAudioMetaEl = document.getElementById('fullAudioMeta');
+      const vadRawTurnClipsEl = document.getElementById('vadRawTurnClips');
+      const asrRawTurnClipsEl = document.getElementById('asrRawTurnClips');
+      const fullRawTurnClipsEl = document.getElementById('fullRawTurnClips');
+      const userTextEl = document.getElementById('userText');
+
+      const TARGET_SAMPLE_RATE = 16000;
+      let currentFullChunks = [];
+      let fullSegments = [];
+      let vadRawTurnB64s = [];
+      let asrRawTurnB64s = [];
+      let fullPreviewUrl = null;
+      let fullRawClipUrls = [];
+      let fullMicRecording = false;
+
+      let ws = null;
+      let mediaStream = null;
+      let audioContext = null;
+      let sourceNode = null;
+      let processorNode = null;
+      let muteGainNode = null;
+      let micMuted = false;
+      let micStreamingStarted = false;
+
+      // Volcano T2SBG path state
+      const AUTO_CONTINUOUS_VOICE = true;
+      const MIC_SCRIPT_BUFFER_SIZE = 2048;
+      let voiceCapturing = false;
+      let vadAwaitingFirstPcm = false;
+      let tsVadVoiceInputStartSent = 0;
+      let tsVadFirstPcmAfterStarted = 0;
+      let tsVoiceInputStartedAt = 0;
+      let vadFirstStateLogged = false;
+
+      let ttsAudioContext = null;
+      const TTS_SAMPLE_RATE = 24000;
+      let currentAiTextNode = null;
+      let ttsNextPlayTime = 0;
+      let ttsSuppressedByBargeIn = false;
+      const ttsScheduledSources = new Set();
+
+      window.addEventListener('ttfs-mic-ready', function () {
+        log('TTFS 麦克风已就绪');
+      });
+      window.addEventListener('ttfs-mic-stopped', function () {
+        if (!micStreamingStarted && !voiceCapturing && (!ws || ws.readyState !== WebSocket.OPEN)) {
+          log('TTFS 麦克风已停止');
+        }
+      });
+
+      const ENGINE_LABELS = {
+        volcano: '火山 T2SBG',
+        omni35: 'Qwen Omni 3.5',
+      };
+      const OMNI35_MODEL = 'qwen3.5-omni-flash-realtime';
+
+      function selectedEngine() {
+        const el = document.querySelector('input[name="engine"]:checked');
+        return el ? el.value : 'volcano';
+      }
+
+      function isVolcanoEngine() {
+        return selectedEngine() === 'volcano';
+      }
+
+      function isOmniEngine() {
+        return selectedEngine() === 'omni35';
+      }
+
+      function updateEngineLabel() {
+        if (engineLabel) engineLabel.textContent = ENGINE_LABELS[selectedEngine()] || selectedEngine();
+      }
+
+      function setEnginePickerEnabled(enabled) {
+        document.querySelectorAll('input[name="engine"]').forEach(function (el) {
+          el.disabled = !enabled;
+        });
+        if (engineCardVolcano) engineCardVolcano.classList.toggle('is-locked', !enabled);
+        if (engineCardOmni35) engineCardOmni35.classList.toggle('is-locked', !enabled);
+      }
+
+      document.querySelectorAll('input[name="engine"]').forEach(function (el) {
+        el.addEventListener('change', updateEngineLabel);
+      });
+      updateEngineLabel();
+
+      const DEFAULT_SYSTEM_ROLE = `【角色设定】
+你是「芝麻背调」的专业背景调查访谈员，正在电话核实候选人背景信息。语气专业、亲和、严谨，情绪平缓，像真实电话访谈一样自然对话。
+
+【固定背景信息（本次访谈锚点，勿自行虚构或更改）】
+- 候选人：阿强
+- 主体公司：深圳图灵完备IO网络科技有限公司（简称「图灵完备IO」）
+- 候选人登记直属上级：阿珍（产品总监）
+- 行业：互联网 / 企业级 SaaS
+- 供职方式：全职正式员工
+
+【标准核实答案（用于交叉验证，勿主动泄露给对方）】
+- 主体公司：深圳图灵完备IO网络科技有限公司
+- 入职：2022年6月13日
+- 离职：2025年11月28日（最后工作日同日，交接已完成）
+- 职位：离职前为高级产品经理
+- 离职原因：主动离职，个人职业发展
+- 违规违纪：无；无劳动争议、无仲裁
+- 竞业协议：有，离职后生效，期限6个月
+- 保密协议：有，入职时签署
+- 是否涉及管理：否，不带下属，高级 IC 岗
+- 直属上级：阿珍，产品总监
+- 年薪（税前）：约25万/年（月薪+13薪+绩效）
+- 是否愿意返聘：愿意
+- 证明人参考（若对方即为阿珍）：阿珍，产品总监，阿强直属上级，共事约3年5个月，日常接触频繁
+
+【全局对话规则】
+1. 单问原则：除开场白外，每次回复只提一个问题，等对方回答后再问下一题；禁止同一轮连问多个问题。
+2. 顺序推进：按下方「核实问题清单」顺序提问，前一项未得到明确回答前不跳题。
+3. 模糊必追：时间、金额、主动/被动离职、有/无协议等关键项，回答含糊时必须追问到可记录程度。
+4. 中立求证：不暗示标准答案，不用引导性措辞；信息不一致时用「我们了解到的是……，想跟您确认一下？」
+5. 可选跳过：薪酬为敏感题，对方拒绝则礼貌跳过，不强迫。
+6. 只核实、不深评：本访谈仅完成核实清单，不展开工作表现深度评价（除非对方主动补充且与当前问题相关）。
+
+【开场白（可一次性说完，算一轮）】
+「您好，请问是深圳图灵完备IO网络科技有限公司吗？我们是芝麻背调，专业做员工背景调查的第三方公司。候选人阿强提供了您作为证明人，想跟您做信息核实，大概需要5到7分钟，请问您现在方便吗？」
+
+【核实问题清单】
+
+=== Q1 · 确定主体公司 ===
+目的：确认阿强任职主体公司全称无误。
+问法（每次只选一句）：
+- 「候选人阿强提供的主体公司是深圳图灵完备IO网络科技有限公司，请问您确认他是在这家公司任职的吗？」
+细节要求：
+- 必须得到明确确认或否定；简称需追问是否指上述全称。
+- 若提到分公司、关联主体、外包，追问是否与深圳图灵完备IO网络科技有限公司签劳动合同。
+- 本题不问入职时间或职位。
+
+=== Q2 · 入职与离职时间 ===
+目的：向我们已掌握的入职/离职日期向证明人核实，而非让对方从零回忆。
+问法（分两问，不可合并）：
+2a 入职：「我们这边了解到阿强的入职时间是2022年6月13日，想跟您核实一下，这个日期准确吗？」
+   - 若对方说不准或只能确认到月：「那您这边记录的入职时间大概是哪年哪月哪日？」
+2b 离职：「我们了解到阿强的离职时间是2025年11月28日，想跟您确认一下，这个时间准确吗？」
+   - 若对方说不准：「那您这边了解的最后工作日或离职日期大概是哪天？」
+   - 若对方称仍在职：「我们这边了解到他已经离职，想跟您确认一下，他目前是否还在职？」
+细节要求：
+- 优先采用「告知已知信息 + 请对方核实」；仅在对方否认、无法确认或明显不一致时，再开放追问。
+- 入职、离职必须分两轮提问。
+- 可单独追加一问（不与上题合并）：「离职时工作交接都完成了吧？」
+
+=== Q3 · 职位 ===
+目的：核实离职前职位。
+问法：
+- 「我们了解到阿强离职前的职位是高级产品经理，想跟您核实一下，准确吗？」
+- 若对方说不准或职位不一致：「那他在公司离职前担任的具体职位是什么呢？」
+细节要求：
+- 要完整职位名称，不接受「做产品的」等模糊表述。
+- 优先核实模式；仅在核实被拒时再开放追问。
+- 本题不问是否管理岗。
+
+=== Q4 · 离职原因（重点：是否主动离职）===
+目的：区分主动/被动/协商离职。
+问法：
+- 「关于阿强的离职原因，人事系统或您了解的情况是怎么记录的？」
+- 若仍模糊：「这次离职是阿强本人主动提出的，还是公司这边发起的呢？」
+细节要求：
+- 必须明确：主动离职 / 被动离职 / 协商离职。
+- 若为被动或协商，下一问再追具体原因及是否有赔偿或纠纷。
+- 不与返聘意愿同问。
+
+=== Q5 · 违规违纪 ===
+目的：排查违规违纪、劳动争议。
+问法：
+- 「阿强在职期间，是否存在违规违纪的情况？」
+或 softer：「他工作期间应该不存在违规违纪、劳动争议或仲裁的情况吧？」
+细节要求：
+- 需明确有/无；若有，后续单独追问性质与时间。
+- 无则简短确认即可。
+
+=== Q6 · 竞业协议 ===
+目的：确认竞业限制签署及效力。
+问法（分两问）：
+6a：「阿强在职或离职时，有没有签署竞业禁止协议？」
+6b（若签署）：「这份竞业协议离职之后是否会生效？大概限制多长时间？」
+细节要求：
+- 先问有没有，再问是否生效及期限；不与保密协议合并。
+
+=== Q7 · 保密协议 ===
+目的：确认保密/NDA 签署（与竞业分开）。
+问法：
+- 「阿强在职期间是否签署过保密协议？」
+- 若混淆竞业：「我问的是保密协议，就是关于商业秘密不能外泄的那份，他签过吗？」
+细节要求：
+- 明确有/无即可，一般不必追问条款细节。
+
+=== Q8 · 是否涉及管理 ===
+目的：判断是否带团队、有无管理职责。
+问法：
+- 「阿强这个岗位有没有管理职责？比如是否需要带团队？」
+- 若无：「那就是不带人、纯个人贡献岗位，是吗？」
+- 若有（下一问）：「大概带多少名下属？」
+细节要求：
+- 区分：无管理 / 虚线协调 / 实线带人。
+- 不评价绩效好坏。
+
+=== Q9 · 直属上级 ===
+目的：核实汇报关系。
+问法：
+- 「阿强离职前最后一任直属上级是哪一位？担任什么职位？」
+- 若只给姓名：「方便说一下他/她担任什么职位吗？」
+细节要求：
+- 需姓名+职位（可分两问）。
+- 不要首句暗示「是不是阿珍」，用开放问法；若对方提到阿珍，记录并核对职位。
+
+=== Q10 · 薪酬（可选）===
+目的：向我们已掌握的薪酬区间向证明人核实。
+问法：
+- 「我们这边了解到阿强税前年薪大约在25万左右，想跟您核实一下，这个区间大致准确吗？」
+- 若对方说不准：「如果不方便说精确数字，大概年薪在什么区间方便参考一下吗？」
+细节要求：
+- 优先采用核实模式；对方拒绝则说「没关系，这项我们先不记录」，礼貌跳过。
+- 若只有月薪，下一问再确认是否含年终。
+- 不要求工资条或银行流水；不与返聘同问。
+
+=== Q11 · 是否愿意返聘 ===
+目的：了解再雇佣意愿。
+问法：
+- 「如果将来有合适机会，公司这边是否愿意再次聘用阿强？」
+或：「如果有再次共事的机会，您个人是否愿意再次与他一起工作？」
+细节要求：
+- 回答「不愿意」时不追问原因，记录即可。
+
+=== Q12 · 证明人信息 + 共事时长 ===
+目的：核实对话人身份及与阿强的接触基础。
+问法（至少分两问，不可合并）：
+12a：「方便了解一下您怎么称呼？在公司担任什么职位？您和阿强是什么工作关系？」
+12b：「我们了解到您与阿强共事大约3年5个月，想跟您核实一下，这个时间大致准确吗？」
+   - 若对方说不准：「那您和阿强大概共事多长时间？」
+   - 可选第三问：「日常接触频率高吗？」
+细节要求：
+- 姓名、职位、关系、共事时长分项记录。
+- 共事时长需可量化（如「3年5个月」或起止年月）。
+
+【建议提问顺序】
+开场 → Q1 → Q2a → Q2b → Q3 → Q4 → Q5 → Q6a → Q6b（如需）→ Q7 → Q8 → Q9 → Q10（可选）→ Q11 → Q12a → Q12b → 结束语
+
+【结束语】
+「主要跟您了解的就是这些，抱歉打扰您了，非常感谢您的配合，祝您生活愉快，再见！」
+
+【输出要求】
+1. 每次回复只输出一个问句（开场白与结束语除外）。
+2. 清单中带「/」或多项的，每次只选其中一句提问。
+3. 按顺序推进，不跳过基础核实。
+4. 关键结论尽量保留证明人原话；矛盾信息标注待验证。
+5. 不要自行编造候选人或公司信息；仅使用上方【固定背景信息】中的锚点。`;
+
+      const DEFAULT_SPEAKING_STYLE = `说话专业、亲和、严谨，情绪语气平缓，像电话访谈一样自然对话。`;
+
+      function log(msg, isError) {
+        const p = document.createElement('div');
+        if (isError) p.className = 'error';
+        p.textContent = new Date().toISOString().slice(11, 19) + ' ' + msg;
+        logEl.appendChild(p);
+        logEl.scrollTop = logEl.scrollHeight;
+      }
+
+      function concatUint8Arrays(arrays) {
+        let total = 0;
+        for (let i = 0; i < arrays.length; i++) total += arrays[i].length;
+        const merged = new Uint8Array(total);
+        let offset = 0;
+        for (let j = 0; j < arrays.length; j++) {
+          merged.set(arrays[j], offset);
+          offset += arrays[j].length;
+        }
+        return merged;
+      }
+
+      function buildWavBlobFromPcmS16(pcmS16U8, sampleRate) {
+        const dataBytes = pcmS16U8.length;
+        const wav = new ArrayBuffer(44 + dataBytes);
+        const view = new DataView(wav);
+        function writeStr(off, str) {
+          for (let i = 0; i < str.length; i++) view.setUint8(off + i, str.charCodeAt(i));
+        }
+        writeStr(0, 'RIFF');
+        view.setUint32(4, 36 + dataBytes, true);
+        writeStr(8, 'WAVE');
+        writeStr(12, 'fmt ');
+        view.setUint32(16, 16, true);
+        view.setUint16(20, 1, true);
+        view.setUint16(22, 1, true);
+        view.setUint32(24, sampleRate, true);
+        view.setUint32(28, sampleRate * 2, true);
+        view.setUint16(32, 2, true);
+        view.setUint16(34, 16, true);
+        writeStr(36, 'data');
+        view.setUint32(40, dataBytes, true);
+        new Uint8Array(wav, 44).set(pcmS16U8);
+        return new Blob([wav], { type: 'audio/wav' });
+      }
+
+      function flattenSegments(segments) {
+        const arrays = [];
+        for (let i = 0; i < segments.length; i++) {
+          const seg = segments[i];
+          for (let j = 0; j < seg.length; j++) arrays.push(seg[j]);
+        }
+        return arrays;
+      }
+
+      function blobToBase64(blob) {
+        return new Promise(function (resolve, reject) {
+          const r = new FileReader();
+          r.onloadend = function () {
+            const s = r.result;
+            const i = typeof s === 'string' ? s.indexOf(',') : -1;
+            resolve(i >= 0 ? s.slice(i + 1) : '');
+          };
+          r.onerror = reject;
+          r.readAsDataURL(blob);
+        });
+      }
+
+      function getDurationSecFromBytes(byteLen) {
+        return (byteLen / 2) / TARGET_SAMPLE_RATE;
+      }
+
+      function _pcmByteLenFromWavBase64(b64) {
+        try {
+          var bin = atob(b64);
+          if (bin.length < 44) return 0;
+          return bin.length - 44;
+        } catch (err) {
+          return 0;
+        }
+      }
+
+      function renderRawTurnClipsFromB64(containerEl, b64List, labelPrefix) {
+        if (!containerEl) return;
+        containerEl.innerHTML = '';
+        if (!b64List || !b64List.length) {
+          var empty = document.createElement('div');
+          empty.style.color = '#999';
+          empty.textContent = '暂无';
+          containerEl.appendChild(empty);
+          return;
+        }
+        for (var j = 0; j < b64List.length; j++) {
+          var wrap2 = document.createElement('div');
+          wrap2.style.marginTop = j ? '8px' : '0';
+          var cap2 = document.createElement('div');
+          cap2.style.fontSize = '12px';
+          cap2.style.color = '#666';
+          var pcmLen = _pcmByteLenFromWavBase64(b64List[j]);
+          cap2.textContent = labelPrefix + ' 第 ' + (j + 1) + ' 轮 · ' + getDurationSecFromBytes(pcmLen).toFixed(2) + 's';
+          var audio2 = document.createElement('audio');
+          audio2.controls = true;
+          audio2.style.width = '100%';
+          audio2.src = 'data:audio/wav;base64,' + b64List[j];
+          wrap2.appendChild(cap2);
+          wrap2.appendChild(audio2);
+          containerEl.appendChild(wrap2);
+        }
+      }
+
+      function revokeFullRawClipUrls() {
+        for (var k = 0; k < fullRawClipUrls.length; k++) {
+          try { URL.revokeObjectURL(fullRawClipUrls[k]); } catch (e) { /* ignore */ }
+        }
+        fullRawClipUrls = [];
+      }
+
+      function updateFullRawTurnClips() {
+        if (!fullRawTurnClipsEl) return;
+        revokeFullRawClipUrls();
+        fullRawTurnClipsEl.innerHTML = '';
+        if (!fullSegments.length) {
+          var fe = document.createElement('div');
+          fe.style.color = '#999';
+          fe.textContent = '暂无';
+          fullRawTurnClipsEl.appendChild(fe);
+          return;
+        }
+        for (var t = 0; t < fullSegments.length; t++) {
+          var pcm = concatUint8Arrays(fullSegments[t]);
+          var blob = buildWavBlobFromPcmS16(pcm, TARGET_SAMPLE_RATE);
+          var url = URL.createObjectURL(blob);
+          fullRawClipUrls.push(url);
+          var w = document.createElement('div');
+          w.style.marginTop = t ? '8px' : '0';
+          var c = document.createElement('div');
+          c.style.fontSize = '12px';
+          c.style.color = '#666';
+          c.textContent = '麦克风 第 ' + (t + 1) + ' 轮 · ' + getDurationSecFromBytes(pcm.length).toFixed(2) + 's';
+          var a = document.createElement('audio');
+          a.controls = true;
+          a.style.width = '100%';
+          a.src = url;
+          w.appendChild(c);
+          w.appendChild(a);
+          fullRawTurnClipsEl.appendChild(w);
+        }
+      }
+
+      function updateFullDebugAudioPreview() {
+        const fullFlat = flattenSegments(fullSegments);
+        const fullMerged = concatUint8Arrays(fullFlat);
+        if (fullPreviewUrl) URL.revokeObjectURL(fullPreviewUrl);
+        fullPreviewUrl = null;
+        if (fullMerged.length > 0) {
+          fullPreviewUrl = URL.createObjectURL(buildWavBlobFromPcmS16(fullMerged, TARGET_SAMPLE_RATE));
+          fullAudioPreviewEl.src = fullPreviewUrl;
+        } else {
+          fullAudioPreviewEl.removeAttribute('src');
+          fullAudioPreviewEl.load();
+        }
+        fullAudioMetaEl.textContent = '片段数: ' + fullSegments.length + ', 时长: ' + getDurationSecFromBytes(fullMerged.length).toFixed(2) + 's';
+        updateFullRawTurnClips();
+      }
+
+      function startTurnRecordingCache() {
+        currentFullChunks = [];
+        fullMicRecording = true;
+      }
+
+      function appendRecordingChunk(chunkU8) {
+        if (!fullMicRecording) return;
+        currentFullChunks.push(chunkU8.slice());
+      }
+
+      function finalizeTurnRecordingCache() {
+        fullMicRecording = false;
+        if (currentFullChunks.length > 0) fullSegments.push(currentFullChunks);
+        currentFullChunks = [];
+        updateFullDebugAudioPreview();
+      }
+
+      function resetRecordingDebugCache() {
+        currentFullChunks = [];
+        fullSegments = [];
+        fullMicRecording = false;
+        vadRawTurnB64s = [];
+        asrRawTurnB64s = [];
+        if (fullPreviewUrl) {
+          URL.revokeObjectURL(fullPreviewUrl);
+          fullPreviewUrl = null;
+        }
+        revokeFullRawClipUrls();
+        vadAudioPreviewEl.removeAttribute('src');
+        asrAudioPreviewEl.removeAttribute('src');
+        fullAudioPreviewEl.removeAttribute('src');
+        vadAudioPreviewEl.load();
+        asrAudioPreviewEl.load();
+        fullAudioPreviewEl.load();
+        vadAudioMetaEl.textContent = '片段数: 0, 时长: 0.00s';
+        asrAudioMetaEl.textContent = '片段数: 0, 时长: 0.00s';
+        fullAudioMetaEl.textContent = '片段数: 0, 时长: 0.00s';
+        vadRawTurnClipsEl.textContent = '暂无';
+        asrRawTurnClipsEl.textContent = '暂无';
+        fullRawTurnClipsEl.textContent = '暂无';
+      }
+
+      async function buildMonitorPublishPayload() {
+        const fullFlat = flattenSegments(fullSegments);
+        const fullMerged = concatUint8Arrays(fullFlat);
+        let fullMergedB64 = '';
+        if (fullMerged.length) {
+          fullMergedB64 = await blobToBase64(buildWavBlobFromPcmS16(fullMerged, TARGET_SAMPLE_RATE));
+        }
+        const fullTurns = [];
+        for (let i = 0; i < fullSegments.length; i++) {
+          const pcm = concatUint8Arrays(fullSegments[i]);
+          if (!pcm.length) continue;
+          fullTurns.push(await blobToBase64(buildWavBlobFromPcmS16(pcm, TARGET_SAMPLE_RATE)));
+        }
+        return {
+          type: 'monitor_publish',
+          transcript_html: transcriptEl.innerHTML,
+          log_html: logEl.innerHTML,
+          full_merged_wav_base64: fullMergedB64,
+          full_turn_wavs_base64: fullTurns,
+        };
+      }
+
+      function setStatus(text, kind) {
+        statusEl.textContent = text;
+        statusEl.className = 'session-status';
+        var resolved = kind;
+        if (!resolved) {
+          if (/失败|Error|error/i.test(text)) resolved = 'error';
+          else if (/录音中|请开始说话|已就绪/.test(text)) resolved = 'ready';
+          else if (/正在|Connecting|Waiting|请稍候/.test(text)) resolved = 'waiting';
+          else if (/Stopped|Disconnected|点击 Start|选择 Omni/.test(text)) resolved = 'idle';
+          else resolved = 'idle';
+        }
+        statusEl.classList.add('is-' + resolved);
+      }
+
+      function getTtsAudioContext() {
+        if (!ttsAudioContext) ttsAudioContext = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: TTS_SAMPLE_RATE });
+        if (ttsAudioContext.state === 'suspended') ttsAudioContext.resume().catch(function () {});
+        return ttsAudioContext;
+      }
+
+      function ensureTtsPlaybackTapDest(ctx) {
+        if (!ctx._ttfsPlaybackTapDest) {
+          ctx._ttfsPlaybackTapDest = ctx.createMediaStreamDestination();
+          try {
+            if (window.TTFS && typeof TTFS.attachPlaybackMediaStream === 'function') {
+              TTFS.attachPlaybackMediaStream(ctx._ttfsPlaybackTapDest.stream);
+            }
+          } catch (err) { /* ignore */ }
+        }
+        return ctx._ttfsPlaybackTapDest;
+      }
+
+      function openProcessedMic() {
+        return navigator.mediaDevices.getUserMedia({
+          audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true, channelCount: 1 },
+          video: false,
+        });
+      }
+
+      function tryTtfsCloneMic() {
+        try {
+          const T = window.TTFS;
+          if (!T || typeof T.cloneMicForConsumer !== 'function') return null;
+          const s = T.cloneMicForConsumer();
+          if (s && s.getAudioTracks && s.getAudioTracks().length) return s;
+          return null;
+        } catch (err) {
+          return null;
+        }
+      }
+
+      function acquireInterviewMic() {
+        function pickStream() {
+          const cloned = tryTtfsCloneMic();
+          if (cloned) {
+            log('[mic] TTFS cloneMicForConsumer()');
+            return Promise.resolve(cloned);
+          }
+          log('[mic] TTFS 无克隆流 — 回退 getUserMedia');
+          return openProcessedMic();
+        }
+        if (window.TTFS && typeof TTFS.startMic === 'function') {
+          return TTFS.startMic()
+            .then(pickStream)
+            .catch(function (err) {
+              log('TTFS.startMic 失败，回退 getUserMedia: ' + (err && err.message ? err.message : err), true);
+              return openProcessedMic();
+            });
+        }
+        return pickStream();
+      }
+
+      function stopTtfsEmbedCapture() {
+        try {
+          if (window.TTFS && typeof TTFS.stop === 'function') TTFS.stop();
+        } catch (e) { /* ignore */ }
+      }
+
+      function pcmS16ToFloat32(pcmS16) {
+        const inLen = pcmS16.length / 2;
+        const inView = new DataView(pcmS16.buffer, pcmS16.byteOffset, pcmS16.byteLength);
+        const out = new Float32Array(inLen);
+        for (let i = 0; i < inLen; i++) out[i] = inView.getInt16(i * 2, true) / 32768;
+        return out;
+      }
+
+      function playTTSChunk(pcmS16) {
+        if (!pcmS16 || pcmS16.length === 0) return;
+        const ctx = getTtsAudioContext();
+        const pcmF32 = pcmS16ToFloat32(pcmS16);
+        const buf = ctx.createBuffer(1, pcmF32.length, TTS_SAMPLE_RATE);
+        buf.copyToChannel(pcmF32, 0);
+        const src = ctx.createBufferSource();
+        src.buffer = buf;
+        src.connect(ensureTtsPlaybackTapDest(ctx));
+        src.connect(ctx.destination);
+        ttsScheduledSources.add(src);
+        src.onended = function () {
+          ttsScheduledSources.delete(src);
+        };
+        const guardSec = 0.02;
+        const now = ctx.currentTime;
+        if (ttsNextPlayTime < now + guardSec) {
+          ttsNextPlayTime = now + guardSec;
+        }
+        src.start(ttsNextPlayTime);
+        ttsNextPlayTime += buf.duration;
+      }
+
+      function flushTTSPlayback() {
+        ttsScheduledSources.forEach(function (src) {
+          try { src.stop(); } catch (e) {}
+        });
+        ttsScheduledSources.clear();
+        if (ttsAudioContext) {
+          const now = ttsAudioContext.currentTime;
+          ttsNextPlayTime = now;
+        } else {
+          ttsNextPlayTime = 0;
+        }
+      }
+
+      function ensureAiLine() {
+        if (currentAiTextNode) return currentAiTextNode;
+        transcriptEl.appendChild(document.createElement('br'));
+        const p = document.createElement('span');
+        p.textContent = 'AI: ';
+        transcriptEl.appendChild(p);
+        currentAiTextNode = document.createTextNode('');
+        transcriptEl.appendChild(currentAiTextNode);
+        transcriptEl.appendChild(document.createElement('br'));
+        return currentAiTextNode;
+      }
+
+      function getMicAudioContext() {
+        if (!audioContext) audioContext = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
+        if (audioContext.state === 'suspended') audioContext.resume().catch(function () {});
+        return audioContext;
+      }
+
+      function startMicStreaming() {
+        if (micStreamingStarted) return;
+        if (!mediaStream || !ws || ws.readyState !== WebSocket.OPEN) return;
+        const ctx = getMicAudioContext();
+        sourceNode = ctx.createMediaStreamSource(mediaStream);
+        processorNode = ctx.createScriptProcessor(2048, 1, 1);
+        muteGainNode = ctx.createGain();
+        muteGainNode.gain.value = 0;
+        const ratio = ctx.sampleRate / 16000;
+        const outSamples = 320;
+        const requiredIn = Math.ceil((outSamples - 1) * ratio) + 1;
+        let buffer = [];
+
+        processorNode.onaudioprocess = function (e) {
+          if (micMuted) return;
+          const input = e.inputBuffer.getChannelData(0);
+          for (let i = 0; i < input.length; i++) buffer.push(input[i]);
+          while (buffer.length >= requiredIn) {
+            const s16 = new ArrayBuffer(outSamples * 2);
+            const view = new DataView(s16);
+            for (let k = 0; k < outSamples; k++) {
+              const pos = k * ratio;
+              const idx = Math.floor(pos);
+              const frac = pos - idx;
+              const s0 = buffer[idx] || 0;
+              const s1 = buffer[idx + 1] || s0;
+              const s = Math.max(-1, Math.min(1, s0 + (s1 - s0) * frac));
+              view.setInt16(k * 2, s < 0 ? s * 0x8000 : s * 0x7FFF, true);
+            }
+            buffer.splice(0, Math.floor(outSamples * ratio));
+            const chunkU8 = new Uint8Array(s16);
+            appendRecordingChunk(chunkU8);
+            if (ws && ws.readyState === WebSocket.OPEN) ws.send(s16);
+          }
+        };
+
+        sourceNode.connect(processorNode);
+        processorNode.connect(muteGainNode);
+        muteGainNode.connect(ctx.destination);
+        micStreamingStarted = true;
+      }
+
+      function sendAudioConfig(sampleRate) {
+        if (!ws || ws.readyState !== WebSocket.OPEN) return;
+        ws.send(JSON.stringify({
+          type: 'config_audio',
+          input_sample_rate: sampleRate || TARGET_SAMPLE_RATE,
+          format: 'pcm_s16le',
+          channels: 1,
+        }));
+      }
+
+      function startVolcanoAudioProcessor() {
+        if (!mediaStream) return;
+        const ctx = getMicAudioContext();
+        sourceNode = ctx.createMediaStreamSource(mediaStream);
+        const rate = ctx.sampleRate;
+        let buffer = [];
+        const outSamples = 320;
+        const ratio = rate / TARGET_SAMPLE_RATE;
+        const requiredIn = Math.ceil((outSamples - 1) * ratio) + 1;
+        processorNode = ctx.createScriptProcessor(MIC_SCRIPT_BUFFER_SIZE, 1, 1);
+        processorNode.onaudioprocess = function (e) {
+          if (micMuted || !voiceCapturing) return;
+          const input = e.inputBuffer.getChannelData(0);
+          for (let i = 0; i < input.length; i++) buffer.push(input[i]);
+          while (buffer.length >= requiredIn) {
+            const s16 = new ArrayBuffer(outSamples * 2);
+            const view = new DataView(s16);
+            for (let k = 0; k < outSamples; k++) {
+              const pos = k * ratio;
+              const idx = Math.floor(pos);
+              const frac = pos - idx;
+              const s0 = buffer[idx] || 0;
+              const s1 = buffer[idx + 1] || s0;
+              const s = Math.max(-1, Math.min(1, s0 + (s1 - s0) * frac));
+              view.setInt16(k * 2, s < 0 ? s * 0x8000 : s * 0x7FFF, true);
+            }
+            buffer.splice(0, Math.floor(outSamples * ratio));
+            if (ws && ws.readyState === WebSocket.OPEN) {
+              const chunkU8 = new Uint8Array(s16);
+              appendRecordingChunk(chunkU8);
+              if (vadAwaitingFirstPcm) {
+                tsVadFirstPcmAfterStarted = Date.now();
+                vadAwaitingFirstPcm = false;
+              }
+              ws.send(s16);
+            }
+          }
+        };
+        muteGainNode = ctx.createGain();
+        muteGainNode.gain.value = 0;
+        sourceNode.connect(processorNode);
+        processorNode.connect(muteGainNode);
+        muteGainNode.connect(ctx.destination);
+      }
+
+      function stopVolcanoVoiceCapture() {
+        if (processorNode) { try { processorNode.disconnect(); } catch (e) {} processorNode = null; }
+        if (muteGainNode) { try { muteGainNode.disconnect(); } catch (e) {} muteGainNode = null; }
+        if (sourceNode) { try { sourceNode.disconnect(); } catch (e) {} sourceNode = null; }
+        if (audioContext) { try { audioContext.close(); } catch (e) {} audioContext = null; }
+        finalizeTurnRecordingCache();
+        voiceCapturing = false;
+        micStreamingStarted = false;
+      }
+
+      function requestVolcanoVoiceStart(source) {
+        if (!AUTO_CONTINUOUS_VOICE || !mediaStream || !ws || ws.readyState !== WebSocket.OPEN || voiceCapturing) return;
+        tsVadVoiceInputStartSent = Date.now();
+        vadAwaitingFirstPcm = false;
+        tsVadFirstPcmAfterStarted = 0;
+        tsVoiceInputStartedAt = 0;
+        vadFirstStateLogged = false;
+        ws.send(JSON.stringify({ type: 'voice_input_start' }));
+        setStatus('正在准备录音通道…', 'waiting');
+        log('Volcano voice start [source=' + source + ']');
+      }
+
+      function stopMicStreaming() {
+        if (isVolcanoEngine()) {
+          stopVolcanoVoiceCapture();
+          return;
+        }
+        if (processorNode) { try { processorNode.disconnect(); } catch (e) {} processorNode = null; }
+        if (muteGainNode) { try { muteGainNode.disconnect(); } catch (e) {} muteGainNode = null; }
+        if (sourceNode) { try { sourceNode.disconnect(); } catch (e) {} sourceNode = null; }
+        if (audioContext) { try { audioContext.close(); } catch (e) {} audioContext = null; }
+        micStreamingStarted = false;
+      }
+
+      function appendUserTranscript(text) {
+        if (!(text || '').trim()) return;
+        transcriptEl.appendChild(document.createElement('br'));
+        const userSpan = document.createElement('span');
+        userSpan.textContent = '证明人: ' + text;
+        userSpan.style.color = '#8b93a7';
+        transcriptEl.appendChild(userSpan);
+        transcriptEl.appendChild(document.createElement('br'));
+        transcriptEl.scrollTop = transcriptEl.scrollHeight;
+        currentAiTextNode = null;
+      }
+
+      function handleSharedMessage(msg) {
+        if (msg.type === 'monitor_publish_ok') {
+          log('Monitor sync OK · subscribers=' + (msg.monitor_subscribers != null ? msg.monitor_subscribers : '?'));
+          return true;
+        }
+        if (msg.type === 'debug_audio_preview') return true;
+        if (msg.type === 'vad_status') {
+          log('VAD status: provider=' + (msg.provider || '-') + ' enabled=' + (!!msg.enabled));
+          if (!msg.enabled && msg.error) log('VAD error: ' + msg.error, true);
+          return true;
+        }
+        if (msg.type === 'asr') {
+          asrPreviewEl.textContent = msg.text || '';
+          asrPreviewEl.style.opacity = msg.is_interim ? '0.7' : '1';
+          if (!msg.is_interim) appendUserTranscript(msg.text || '');
+          return true;
+        }
+        if (msg.type === 'chat') {
+          const node = ensureAiLine();
+          node.textContent += (msg.content || '');
+          transcriptEl.scrollTop = transcriptEl.scrollHeight;
+          return true;
+        }
+        if (msg.type === 'chat_end') {
+          currentAiTextNode = null;
+          if (ttsAudioContext) {
+            const now = ttsAudioContext.currentTime;
+            if (ttsNextPlayTime < now) ttsNextPlayTime = now;
+          } else {
+            ttsNextPlayTime = 0;
+          }
+          return true;
+        }
+        if (msg.type === 'tts_start') {
+          ttsSuppressedByBargeIn = false;
+          return true;
+        }
+        if (msg.type === 'tts_end') {
+          if (ttsAudioContext) {
+            const now = ttsAudioContext.currentTime;
+            if (ttsNextPlayTime < now) ttsNextPlayTime = now;
+          }
+          return true;
+        }
+        if (msg.type === 'barge_in') {
+          ttsSuppressedByBargeIn = true;
+          flushTTSPlayback();
+          log('Barge-in: stop current TTS playback');
+          return true;
+        }
+        if (msg.type === 'vad_state') {
+          vadStateEl.textContent = 'provider=' + (msg.provider || '-') + ' state=' + (msg.state || '-');
+          return true;
+        }
+        if (msg.type === 'error') {
+          log(msg.message || 'unknown error', true);
+          return true;
+        }
+        if (msg.type === 'server_log') {
+          log((msg.message || '').trim());
+          return true;
+        }
+        return false;
+      }
+
+      function handleVolcanoMessage(msg) {
+        if (handleSharedMessage(msg)) {
+          if (msg.type === 'tts_start' && AUTO_CONTINUOUS_VOICE) {
+            setTimeout(function () { requestVolcanoVoiceStart('tts_start_barge_listen'); }, 20);
+          } else if (msg.type === 'tts_end' && AUTO_CONTINUOUS_VOICE) {
+            setTimeout(function () { requestVolcanoVoiceStart('tts_end'); }, 50);
+          }
+          return;
+        }
+        if (msg.type === 'ready') {
+          log('Session ' + (msg.session_id || '-') + ' mode=' + (msg.mode || 't2s'));
+          btnSendText.disabled = false;
+          btnMonitorSync.disabled = false;
+          if (msg.recording_ready) {
+            setStatus('已就绪，请开始说话。', 'ready');
+            requestVolcanoVoiceStart('ready');
+          } else {
+            setStatus('会话已建立，正在启动 VAD 与语音识别…', 'waiting');
+          }
+        } else if (msg.type === 'session_preparing') {
+          setStatus(msg.message || '正在初始化语音通道…', 'waiting');
+        } else if (msg.type === 'voice_input_started') {
+          startTurnRecordingCache();
+          asrPreviewEl.textContent = '';
+          setStatus('录音中 — 请说话，说完后自动发送', 'recording');
+          voiceCapturing = true;
+          vadAwaitingFirstPcm = true;
+          sendAudioConfig(TARGET_SAMPLE_RATE);
+          startVolcanoAudioProcessor();
+        } else if (msg.type === 'voice_input_failed') {
+          voiceCapturing = false;
+          setStatus('语音通道启动失败：' + (msg.message || msg.reason || 'unknown'), 'error');
+        } else if (msg.type === 'voice_input_complete_suggested') {
+          stopVolcanoVoiceCapture();
+          log('Server VAD completed [source=' + (msg.source || '-') + ']');
+        } else if (msg.type === 'voice_turn_finished') {
+          if (AUTO_CONTINUOUS_VOICE && !msg.asr_text_sent) {
+            setTimeout(function () { requestVolcanoVoiceStart('asr_empty'); }, 50);
+          }
+        } else if (msg.type === 'local_asr_text') {
+          asrPreviewEl.textContent = msg.text || '';
+          appendUserTranscript(msg.text || '');
+        }
+      }
+
+      function handleOmniMessage(msg) {
+        if (msg.type === 'voice_input_started') {
+          startTurnRecordingCache();
+          return;
+        }
+        if (msg.type === 'voice_input_complete_suggested') {
+          finalizeTurnRecordingCache();
+          return;
+        }
+        if (handleSharedMessage(msg)) return;
+        if (msg.type === 'ready') {
+          const model = msg.omni_model || OMNI35_MODEL;
+          setStatus('录音中 — 请说话，说完后等待 ' + model + ' 回复', 'recording');
+          log('ready model=' + model);
+          btnSendText.disabled = false;
+          btnMonitorSync.disabled = false;
+          startMicStreaming();
+        }
+      }
+
+      function connect() {
+        const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+        const volcano = isVolcanoEngine();
+        const url = protocol + '//' + location.host + (volcano ? '/ws' : '/ws-omni');
+        ws = new WebSocket(url);
+        ws.binaryType = 'arraybuffer';
+        setStatus(volcano ? '正在连接火山 T2SBG…' : '正在连接 Qwen Omni 3.5…', 'waiting');
+
+        ws.onopen = function () {
+          if (volcano) {
+            ws.send(JSON.stringify({
+              mode: 't2s',
+              system_role: DEFAULT_SYSTEM_ROLE,
+              speaking_style: DEFAULT_SPEAKING_STYLE,
+              external_followup_enabled: false,
+            }));
+          } else {
+            ws.send(JSON.stringify({
+              mode: 'omni',
+              omni_backend: 'qwen',
+              omni_model: OMNI35_MODEL,
+              omni_vad_mode: 'dashscope',
+              omni_turn_detection_type: 'semantic_vad',
+              omni_turn_detection_threshold: 0.7,
+              omni_turn_detection_silence_duration_ms: 1100,
+              system_role: DEFAULT_SYSTEM_ROLE,
+              speaking_style: DEFAULT_SPEAKING_STYLE,
+            }));
+          }
+        };
+
+        ws.onmessage = function (ev) {
+          if (typeof ev.data === 'string') {
+            let msg = {};
+            try { msg = JSON.parse(ev.data); } catch (e) { return; }
+            if (volcano) handleVolcanoMessage(msg);
+            else handleOmniMessage(msg);
+          } else {
+            if (ttsSuppressedByBargeIn) return;
+            playTTSChunk(new Uint8Array(ev.data));
+          }
+        };
+
+        ws.onclose = function () {
+          setStatus('已停止，点击 Start 重新开始', 'idle');
+          btnSendText.disabled = true;
+          btnMonitorSync.disabled = true;
+          log('WebSocket closed');
+        };
+        ws.onerror = function () {
+          setStatus('WebSocket error', 'error');
+          log('WebSocket error', true);
+        };
+      }
+
+      btnMonitorSync.onclick = function () {
+        if (!ws || ws.readyState !== WebSocket.OPEN) {
+          log('Not connected.', true);
+          return;
+        }
+        monitorSyncHint.textContent = '打包中…';
+        btnMonitorSync.disabled = true;
+        buildMonitorPublishPayload()
+          .then(function (payload) {
+            ws.send(JSON.stringify(payload));
+            monitorSyncHint.textContent = '已发送';
+            log('Monitor sync sent');
+          })
+          .catch(function (e) {
+            log('Monitor sync failed: ' + (e && e.message ? e.message : e), true);
+            monitorSyncHint.textContent = '';
+          })
+          .then(function () {
+            btnMonitorSync.disabled = false;
+            setTimeout(function () { monitorSyncHint.textContent = ''; }, 2500);
+          });
+      };
+
+      btnStart.onclick = function () {
+        transcriptEl.innerHTML = '';
+        asrPreviewEl.textContent = '';
+        logEl.innerHTML = '';
+        resetRecordingDebugCache();
+        vadStateEl.textContent = 'provider=- state=-';
+        voiceCapturing = false;
+        updateEngineLabel();
+        btnStart.disabled = true;
+        btnStop.disabled = false;
+        btnMute.disabled = false;
+        setEnginePickerEnabled(false);
+        setStatus('正在获取麦克风权限…', 'waiting');
+        acquireInterviewMic().then(function (stream) {
+          mediaStream = stream;
+          setStatus('正在连接服务器…', 'waiting');
+          connect();
+        }).catch(function (e) {
+          log('麦克风权限失败: ' + (e && e.message ? e.message : e), true);
+          btnStart.disabled = false;
+          btnStop.disabled = true;
+          btnMute.disabled = true;
+          setEnginePickerEnabled(true);
+          setStatus('麦克风权限失败', 'error');
+        });
+      };
+
+      btnStop.onclick = function () {
+        stopTtfsEmbedCapture();
+        if (mediaStream) {
+          mediaStream.getTracks().forEach(function (t) { t.stop(); });
+          mediaStream = null;
+        }
+        stopMicStreaming();
+        voiceCapturing = false;
+        if (ws) { ws.close(); ws = null; }
+        setEnginePickerEnabled(true);
+        btnStart.disabled = false;
+        btnStop.disabled = true;
+        btnMute.disabled = true;
+        btnSendText.disabled = true;
+        btnMonitorSync.disabled = true;
+        setStatus('已停止，点击 Start 重新开始', 'idle');
+      };
+
+      btnMute.onclick = function () {
+        micMuted = !micMuted;
+        btnMute.textContent = micMuted ? 'Unmute Mic' : 'Mute Mic';
+      };
+
+      btnSendText.onclick = function () {
+        const text = (userTextEl.value || '').trim();
+        if (!text || !ws || ws.readyState !== WebSocket.OPEN) return;
+        ws.send(JSON.stringify({ type: 'chat_text_query', content: text }));
+        transcriptEl.appendChild(document.createElement('br'));
+        const userSpan = document.createElement('span');
+        userSpan.textContent = '证明人: ' + text;
+        userSpan.style.color = '#666';
+        transcriptEl.appendChild(userSpan);
+        transcriptEl.appendChild(document.createElement('br'));
+        transcriptEl.scrollTop = transcriptEl.scrollHeight;
+        userTextEl.value = '';
+      };
+    })();
+  </script>
+</body>
+</html>

@@ -453,6 +453,23 @@ def _inline_ttfs_script_into_t2sbg_html(html: str) -> str:
     return html.replace(_T2SBG_TTFS_SCRIPT_MARKER, "<script>\n" + js_body + "\n</script>", 1)
 
 
+def _serve_demo_unified_page() -> HTMLResponse:
+    """Unified demo page: volcano T2SBG or Qwen Omni 3.5 on one screen."""
+    path = _frontend_dir() / "demo_unified.html"
+    if not path.exists():
+        return HTMLResponse("<p>demo_unified.html not found</p>", status_code=404)
+    raw = path.read_text(encoding="utf-8")
+    raw = raw.replace("__T2SBG_VOICE_VERSION__", _read_t2sbg_voice_version_from_config())
+    raw = raw.replace("__OMNI_VOICE_VERSION__", _read_omni_voice_version_from_config())
+    raw = _inline_ttfs_script_into_t2sbg_html(raw)
+    return HTMLResponse(raw, media_type="text/html; charset=utf-8")
+
+
+@app.get("/demo")
+async def demo_page():
+    return _serve_demo_unified_page()
+
+
 @app.get("/")
 async def root():
     return FileResponse(_frontend_dir() / "index.html")
