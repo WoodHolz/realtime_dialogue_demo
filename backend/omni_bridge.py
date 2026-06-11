@@ -25,9 +25,11 @@ from backend.monitor_snapshot import build_monitor_snapshot, pcm16le_to_wav_byte
 from backend.vad import (
     VadEvent,
     create_vad_backend,
+    is_local_semantic_vad_provider,
     vad_provider,
     vad_status_on_init_failure,
 )
+from backend.vad.config import resolve_vad_provider
 from config.prompt_templates import DEFAULT_SYSTEM_ROLE
 
 LOG = logging.getLogger(__name__)
@@ -43,7 +45,6 @@ DEFAULT_TURN_DETECTION_THRESHOLD_FLASH = 0.1
 DEFAULT_TURN_DETECTION_SILENCE_MS_FLASH = 900
 DEFAULT_TURN_DETECTION_THRESHOLD_35 = 0.7
 DEFAULT_TURN_DETECTION_SILENCE_MS_35 = 1100
-LOCAL_VAD_PROVIDER = "smart_turn_v3"
 OMNI_INSTRUCTIONS_TONE_HINT = "情绪语气平缓，像电话访谈一样自然对话。"
 
 
@@ -112,29 +113,29 @@ def _parse_smooth_output(value: Any) -> bool | None:
 
 def _resolve_use_local_smart_turn(cfg: dict[str, Any], model: str) -> bool:
     mode = (cfg.get("omni_vad_mode") or "").strip().lower()
-    if mode in {"local", "smart_turn_v3", "smart_turn"}:
+    if mode in {"local", "smart_turn_v3", "smart_turn", "livekit_turn_detector", "livekit"}:
         return True
     if mode in {"dashscope", "server", "server_vad", "semantic_vad", "alibaba", "ali"}:
         return False
     if _is_qwen35_omni_realtime(model):
         return False
-    return _omni_use_local_smart_turn()
+    return _omni_use_local_smart_turn(cfg)
 
 
-def _omni_use_local_smart_turn() -> bool:
+def _omni_use_local_smart_turn(cfg: dict[str, Any] | None = None) -> bool:
     """
     Whether Omni uses in-process Smart Turn v3 instead of DashScope server VAD.
 
     OMNI_VAD=server → always server VAD
-    OMNI_VAD=smart_turn_v3|local → always local Smart Turn
-    unset → follow global vad.provider (smart_turn_v3 enables local VAD)
+    OMNI_VAD=smart_turn_v3|livekit_turn_detector|local → always local VAD
+    unset → follow global vad.provider (smart_turn_v3 / livekit_turn_detector enable local VAD)
     """
     override = (os.environ.get("OMNI_VAD", "") or "").strip().lower()
     if override in {"server", "server_vad", "dashscope"}:
         return False
-    if override in {"smart_turn_v3", "smart_turn", "local"}:
+    if override in {"smart_turn_v3", "smart_turn", "local", "livekit_turn_detector", "livekit"}:
         return True
-    return vad_provider() == LOCAL_VAD_PROVIDER
+    return is_local_semantic_vad_provider(resolve_vad_provider(cfg=cfg or {}))
 
 
 def _build_dashscope_url(region: str) -> str:
@@ -196,6 +197,7 @@ class OmniRealtimeBridge:
         self.turn_detection_silence_duration_ms = _default_turn_detection_silence_ms(self.model)
         self._use_local_smart_turn = False
         self._local_vad = None
+        self._active_vad_provider = vad_provider()
         self._hush = create_hush_session() if hush_enabled() else None
         # First TTS PCM sent to browser (monotonic); 0 = not in a playback burst yet.
         self._tts_first_audio_mono: float = 0.0
@@ -541,12 +543,29 @@ class OmniRealtimeBridge:
         )
 
         self._use_local_smart_turn = _resolve_use_local_smart_turn(cfg, self.model)
+        self._active_vad_provider = (
+            resolve_vad_provider(cfg=cfg) if self._use_local_smart_turn else "dashscope"
+        )
+        LOG.info(
+            "Omni VAD session: model=%s use_local=%s provider=%s omni_vad_mode=%r vad_provider=%r local_vad_provider=%r",
+            self.model,
+            self._use_local_smart_turn,
+            self._active_vad_provider,
+            cfg.get("omni_vad_mode"),
+            cfg.get("vad_provider"),
+            cfg.get("local_vad_provider"),
+        )
+        embedded_asr = self._active_vad_provider == "livekit_turn_detector"
         if _is_qwen35_omni_realtime(self.model):
             if self._use_local_smart_turn:
-                self._local_vad = create_vad_backend()
+                self._local_vad = create_vad_backend(
+                    self._active_vad_provider,
+                    force_embedded_asr=embedded_asr or None,
+                )
                 if self._local_vad is None:
-                    LOG.warning("Omni Smart Turn v3 unavailable; falling back to semantic_vad")
+                    LOG.warning("Omni local VAD unavailable; falling back to semantic_vad")
                     self._use_local_smart_turn = False
+                    self._active_vad_provider = "dashscope"
                     self.turn_detection_type = "semantic_vad"
             else:
                 td = (cfg.get("omni_turn_detection_type") or "semantic_vad").strip()
@@ -557,10 +576,14 @@ class OmniRealtimeBridge:
                 self._local_vad = None
         elif self._use_local_smart_turn:
             self.turn_detection_type = "manual"
-            self._local_vad = create_vad_backend()
+            self._local_vad = create_vad_backend(
+                self._active_vad_provider,
+                force_embedded_asr=embedded_asr or None,
+            )
             if self._local_vad is None:
-                LOG.warning("Omni Smart Turn v3 unavailable; falling back to server_vad")
+                LOG.warning("Omni local VAD unavailable; falling back to server_vad")
                 self._use_local_smart_turn = False
+                self._active_vad_provider = "dashscope"
                 self.turn_detection_type = DEFAULT_TURN_DETECTION_TYPE
         else:
             td = (cfg.get("omni_turn_detection_type") or self.turn_detection_type).strip()
@@ -580,18 +603,20 @@ class OmniRealtimeBridge:
             try:
                 vad_status = await self._local_vad.start_session(uuid.uuid4().hex)
                 await self._send_client_json({"type": "vad_status", **vad_status})
-                vad_mode = "smart_turn_v3"
+                vad_mode = self._active_vad_provider
             except Exception as exc:
                 LOG.warning("Omni local VAD start failed: %s", exc)
+                failed_provider = self._active_vad_provider
                 await self._local_vad.close_session()
                 self._local_vad = None
                 self._use_local_smart_turn = False
+                self._active_vad_provider = "dashscope"
                 self.turn_detection_type = DEFAULT_TURN_DETECTION_TYPE
                 await self._update_omni_session()
                 await self._send_client_json(
                     {
                         "type": "vad_status",
-                        **vad_status_on_init_failure(LOCAL_VAD_PROVIDER, str(exc)),
+                        **vad_status_on_init_failure(failed_provider, str(exc)),
                     }
                 )
 
@@ -603,7 +628,7 @@ class OmniRealtimeBridge:
                 "omni_model": self.model,
                 "omni_voice": self.voice,
                 "omni_smooth_output": self.smooth_output if _supports_smooth_output(self.model) else None,
-                "omni_vad_mode": "smart_turn_v3" if self._use_local_smart_turn else "dashscope",
+                "omni_vad_mode": self._active_vad_provider if self._use_local_smart_turn else "dashscope",
                 "omni_turn_detection": (
                     None
                     if self._use_local_smart_turn

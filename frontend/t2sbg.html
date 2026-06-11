@@ -153,11 +153,28 @@
   <p style="color:#666; font-size:0.9rem;">
     支持直接以文本形式发起对话，或使用麦克风说话（豆包 ASR 识别后发送给语音对话模型）。
     服务端使用 <code>input_mod: "text"</code>，自动保证流式链路完整性。
-    语音上行链路：Browser → Backend → <strong>Hush 降噪</strong>（weya-ai/hush）→ Smart Turn v3 判停 → 豆包 ASR；Hush 未就绪时自动跳过。
+    语音上行链路：Browser → Backend → <strong>Hush 降噪</strong>（weya-ai/hush）→ 本地 VAD 判停 → 豆包 ASR；Hush 未就绪时自动跳过。
     TTFS 延迟面板已<strong>内联在本页</strong>：点 <strong>Start Session</strong> 时会自动请求 TTFS 麦克风（也可手动点 Mic）；AI TTS 自动接入 Playback 测光。停止会话会 <code>TTFS.stop()</code>。
   </p>
   <div class="session-status is-idle" id="status" role="status" aria-live="polite">点击 Start 建立会话，然后输入文本或语音。</div>
   <p class="meta-line"><span>Mode:</span> <span id="modeLabel">t2s</span></p>
+
+  <div class="section" id="vadProviderSection">
+    <strong>判停 / VAD</strong>
+    <p style="font-size:12px; color:#666; margin:6px 0 8px;">
+      Silero 检测说话与静音；判停可在 Smart Turn v3（音频 prosody）与 LiveKit turn-detector（ASR 文本语义）之间切换对比。
+    </p>
+    <div style="display:flex; flex-direction:column; gap:6px; font-size:0.9rem;">
+      <label style="cursor:pointer;">
+        <input type="radio" name="vadProvider" value="smart_turn_v3" checked />
+        Smart Turn v3（Pipecat，音频 prosody）
+      </label>
+      <label style="cursor:pointer;">
+        <input type="radio" name="vadProvider" value="livekit_turn_detector" />
+        LiveKit turn-detector（SenseVoice 本地 STT + Silero + 语义判停）
+      </label>
+    </div>
+  </div>
 
   <div class="controls">
     <button id="btnStart">Start Session</button>
@@ -242,7 +259,7 @@
     <strong>录音调试预览（后端合并）</strong>
     <button type="button" id="btnMonitorSync" disabled style="margin-left:8px;">同步到监控页</button>
     <span id="monitorSyncHint" style="font-size:12px;color:#888;margin-left:8px;"></span>
-    <p style="font-size:12px; color:#666;">链路：Browser 上行音频 → Backend → Hush 降噪 → Smart Turn v3 + ASR。下方主播放器是<strong>跨轮合并</strong>后的 WAV（VAD 分支为降噪后音频）；折叠里是<strong>每一轮单独</strong>的录音。</p>
+    <p style="font-size:12px; color:#666;">链路：Browser 上行音频 → Backend → Hush 降噪 → 本地 VAD + ASR。下方主播放器是<strong>跨轮合并</strong>后的 WAV（VAD 分支为降噪后音频）；折叠里是<strong>每一轮单独</strong>的录音。</p>
     <div style="margin-top:8px;">
       <div style="margin-bottom:10px;">
         <div style="font-size:12px; color:#666; margin-bottom:4px;">给 VAD 的录音（merged）</div>
@@ -861,7 +878,7 @@
         if (msg && msg.reason_label) return String(msg.reason_label);
         if (msg && msg.reason === 'user_speech') return '用户打断';
         var s = msg && msg.source;
-        if (s === 'duplug' || s === 'smart_turn_v3') return '用户打断（VAD）';
+        if (s === 'duplug' || s === 'smart_turn_v3' || s === 'livekit_turn_detector') return '用户打断（VAD）';
         return '用户打断';
       }
 
@@ -1152,13 +1169,13 @@
 
 【固定背景信息（本次访谈锚点，勿自行虚构或更改）】
 - 候选人：阿强
-- 主体公司：深圳图灵完备IO网络科技有限公司（简称「图灵完备IO」）
+- 主体公司：深圳图灵完备网络科技有限公司（简称「图灵完备IO」）
 - 候选人登记直属上级：阿珍（产品总监）
 - 行业：互联网 / 企业级 SaaS
 - 供职方式：全职正式员工
 
 【标准核实答案（用于交叉验证，勿主动泄露给对方）】
-- 主体公司：深圳图灵完备IO网络科技有限公司
+- 主体公司：深圳图灵完备网络科技有限公司
 - 入职：2022年6月13日
 - 离职：2025年11月28日（最后工作日同日，交接已完成）
 - 职位：离职前为高级产品经理
@@ -1181,17 +1198,17 @@
 6. 只核实、不深评：本访谈仅完成核实清单，不展开工作表现深度评价（除非对方主动补充且与当前问题相关）。
 
 【开场白（可一次性说完，算一轮）】
-「您好，请问是深圳图灵完备IO网络科技有限公司吗？我们是芝麻背调，专业做员工背景调查的第三方公司。候选人阿强提供了您作为证明人，想跟您做信息核实，大概需要5到7分钟，请问您现在方便吗？」
+「您好，请问是深圳图灵完备网络科技有限公司吗？我们是芝麻背调，专业做员工背景调查的第三方公司。候选人阿强提供了您作为证明人，想跟您做信息核实，大概需要5到7分钟，请问您现在方便吗？」
 
 【核实问题清单】
 
 === Q1 · 确定主体公司 ===
 目的：确认阿强任职主体公司全称无误。
 问法（每次只选一句）：
-- 「候选人阿强提供的主体公司是深圳图灵完备IO网络科技有限公司，请问您确认他是在这家公司任职的吗？」
+- 「候选人阿强提供的主体公司是深圳图灵完备网络科技有限公司，请问您确认他是在这家公司任职的吗？」
 细节要求：
 - 必须得到明确确认或否定；简称需追问是否指上述全称。
-- 若提到分公司、关联主体、外包，追问是否与深圳图灵完备IO网络科技有限公司签劳动合同。
+- 若提到分公司、关联主体、外包，追问是否与深圳图灵完备网络科技有限公司签劳动合同。
 - 本题不问入职时间或职位。
 
 === Q2 · 入职与离职时间 ===
@@ -1432,6 +1449,17 @@
         }
       }
 
+      function selectedVadProvider() {
+        const checked = document.querySelector('input[name="vadProvider"]:checked');
+        return checked ? checked.value : 'smart_turn_v3';
+      }
+
+      function setVadProviderControlsEnabled(enabled) {
+        document.querySelectorAll('input[name="vadProvider"]').forEach(function (el) {
+          el.disabled = !enabled;
+        });
+      }
+
       function requestVoiceStart(source) {
         if (!AUTO_CONTINUOUS_VOICE) return;
         if (!mediaStream) return;
@@ -1442,7 +1470,7 @@
         tsVadFirstPcmAfterStarted = 0;
         tsVoiceInputStartedAt = 0;
         vadFirstStateLogged = false;
-        ws.send(JSON.stringify({ type: 'voice_input_start' }));
+        ws.send(JSON.stringify({ type: 'voice_input_start', vad_provider: selectedVadProvider() }));
         btnVoiceStart.disabled = true;
         btnVoiceStop.disabled = false;
         setStatus('正在准备录音通道…', 'waiting');
@@ -1514,6 +1542,7 @@
                 setStatus(msg.message || '正在初始化语音通道…', 'waiting');
                 voiceStatusEl.textContent = '请稍候…';
                 log('Session preparing: ' + (msg.stage || '-'));
+                requestVoiceStart('session_preparing');
               } else if (msg.type === 'start_session_config') {
                 log('StartSession: mode=' + msg.mode + ' input_mod=' + msg.input_mod);
                 if (msg.followup) {
@@ -1786,6 +1815,7 @@
         resetRecordingDebugCache();
         btnStart.disabled = true;
         btnStop.disabled = false;
+        setVadProviderControlsEnabled(false);
         setStatus('正在获取麦克风权限…', 'waiting');
         acquireInterviewMic()
           .then(function (stream) {
@@ -1817,6 +1847,7 @@
         hardStopTTSPlayback();
         btnStart.disabled = false;
         btnStop.disabled = true;
+        setVadProviderControlsEnabled(true);
         btnSendText.disabled = true;
         btnVoiceStart.disabled = true;
         btnVoiceStop.disabled = true;

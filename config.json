@@ -51,13 +51,26 @@
     }
   },
   "vad": {
-    "description": "VAD provider: smart_turn_v3 (default) or duplug. Used by t2sbg and t2sbg-omni. Env: VAD_PROVIDER, SMART_TURN_*.",
+    "description": "VAD provider: smart_turn_v3 (default), livekit_turn_detector, or duplug. Used by t2sbg and t2sbg-omni. Env: VAD_PROVIDER, SMART_TURN_*, LIVEKIT_TURN_*.",
     "provider": "smart_turn_v3",
     "smart_turn": {
       "model_path": null,
       "cpu_count": 1,
       "silero_stop_secs": 0.2,
       "silero_confidence": 0.7
+    },
+    "livekit_turn": {
+      "language": "zh",
+      "threshold": null,
+      "embedded_asr": false,
+      "stt_backend": "funasr",
+      "funasr_model": "iic/SenseVoiceSmall",
+      "funasr_language": "zh",
+      "funasr_device": "cpu",
+      "funasr_hub": "ms",
+      "funasr_partial_interval_sec": 0.45,
+      "inference_stt_model": "deepgram/nova-3",
+      "inference_stt_language": "multi"
     },
     "duplug_enabled": false,
     "duplug_url": ""

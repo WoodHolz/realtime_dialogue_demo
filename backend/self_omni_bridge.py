@@ -27,15 +27,10 @@ from fastapi import WebSocket
 from backend.hush import create_hush_session, hush_enabled, hush_status_payload
 from backend.hush.manager import hush_manager_error
 from backend.monitor_snapshot import build_monitor_snapshot, pcm16le_to_wav_bytes
-from backend.vad import (
-    VadEvent,
-    create_vad_backend,
-    vad_status_on_init_failure,
-)
+from backend.vad.config import resolve_vad_provider
 
 LOG = logging.getLogger(__name__)
 
-LOCAL_VAD_PROVIDER = "smart_turn_v3"
 SELF_OMNI_TTS_SAMPLE_RATE = 24000
 
 
@@ -383,10 +378,22 @@ class SelfDeployedOmniBridge:
         if not self.ws_url:
             raise RuntimeError("SELF_OMNI_WS_URL is not configured (required for self-deployed Omni)")
 
-        self._local_vad = create_vad_backend()
-        vad_mode = "smart_turn_v3"
+        active_vad = resolve_vad_provider(cfg=cfg)
+        LOG.info(
+            "Self Omni VAD session: provider=%s omni_vad_mode=%r vad_provider=%r local_vad_provider=%r",
+            active_vad,
+            cfg.get("omni_vad_mode"),
+            cfg.get("vad_provider"),
+            cfg.get("local_vad_provider"),
+        )
+        embedded_asr = active_vad == "livekit_turn_detector"
+        self._local_vad = create_vad_backend(
+            active_vad,
+            force_embedded_asr=embedded_asr or None,
+        )
+        vad_mode = active_vad
         if self._local_vad is None:
-            raise RuntimeError("Smart Turn v3 VAD is required for self-deployed Omni")
+            raise RuntimeError(f"Local VAD ({vad_mode}) is required for self-deployed Omni")
         try:
             vad_status = await self._local_vad.start_session(uuid.uuid4().hex)
             await self._send_client_json({"type": "vad_status", **vad_status})
@@ -396,7 +403,7 @@ class SelfDeployedOmniBridge:
             await self._send_client_json(
                 {
                     "type": "vad_status",
-                    **vad_status_on_init_failure(LOCAL_VAD_PROVIDER, str(exc)),
+                    **vad_status_on_init_failure(vad_mode, str(exc)),
                 }
             )
             raise RuntimeError(f"Self Omni VAD start failed: {exc}") from exc

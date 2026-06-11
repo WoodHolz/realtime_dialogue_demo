@@ -149,9 +149,9 @@
   <h1>芝麻背调证明人访谈（Omni 直连）</h1>
   <p class="page-version" id="pageVersion"></p>
   <p style="color:#666; font-size:0.9rem;">
-    链路：Browser 上行音频 → Backend Omni Bridge → <strong>Hush 降噪</strong>（weya-ai/hush，ONNX + libweya_nc）→ Smart Turn v3 判停 → Omni 模型。
+    链路：Browser 上行音频 → Backend Omni Bridge → <strong>Hush 降噪</strong>（weya-ai/hush，ONNX + libweya_nc）→ 本地 VAD 判停 → Omni 模型。
     上行 PCM 先经 Hush 实时去噪再送 VAD / ASR；若 Hush 未就绪则自动跳过降噪、其余链路不变。
-    判停由后端 Smart Turn v3 完成；Qwen Omni 为流式 commit，自部署 Omni 为按轮整段 WAV 提交。
+    Qwen3.5 可选 DashScope 云端 VAD 或本地判停；Flash / 自部署 Omni 默认使用本地判停。
     TTFS 延迟面板已<strong>内联在本页</strong>：<strong>Start Session</strong> 会自动 <code>TTFS.startMic()</code>；Omni TTS 自动接入 Playback 测光。
   </p>
   <div class="session-status is-idle" id="status" role="status" aria-live="polite">选择 Omni 后端后点击 Start 建立会话，然后直接说话。</div>
@@ -189,7 +189,7 @@
   <div class="section" id="vadConfigSection" style="margin-top:12px; display:none;">
     <strong>判停 / VAD（Qwen3.5-Omni-Realtime 系列）</strong>
     <p style="font-size:12px; color:#888; margin:6px 0 0;">
-      默认使用阿里 <code>semantic_vad</code>；选本地 Smart Turn v3 时，<code>session.update</code> 不传 <code>turn_detection</code>（由 DashScope 使用默认 VAD）。
+      默认使用阿里 <code>semantic_vad</code>；选本地判停时，<code>session.update</code> 不传 <code>turn_detection</code>，由我们部署的 VAD 完成判停。
     </p>
     <div style="margin-top:8px; display:flex; flex-direction:column; gap:6px; font-size:0.9rem;">
       <label style="cursor:pointer;">
@@ -198,7 +198,18 @@
       </label>
       <label style="cursor:pointer;">
         <input type="radio" name="omniVadMode" id="omniVadModeLocal" value="local" />
-        本地 Smart Turn v3（我们部署，不传 turn_detection）
+        本地判停（我们部署，不传 turn_detection）
+      </label>
+    </div>
+    <div id="localVadProviderOptions" style="margin-top:10px; padding:10px; border:1px solid #eee; border-radius:6px; background:#fafafa; display:none;">
+      <div style="font-size:0.85rem; font-weight:600; margin-bottom:6px;">本地判停模型</div>
+      <label style="cursor:pointer; display:block; margin-bottom:4px;">
+        <input type="radio" name="localVadProvider" value="smart_turn_v3" checked />
+        Smart Turn v3（Pipecat，音频 prosody）
+      </label>
+      <label style="cursor:pointer; display:block;">
+        <input type="radio" name="localVadProvider" value="livekit_turn_detector" />
+        LiveKit turn-detector（SenseVoice 本地 STT + Silero + 语义判停）
       </label>
     </div>
     <div id="dashscopeVadOptions" style="margin-top:10px; padding:10px; border:1px solid #eee; border-radius:6px; background:#fafafa;">
@@ -223,6 +234,23 @@
         <input type="range" id="turnSilenceMs" min="200" max="6000" step="50" value="1100" style="width:100%;" />
         <div style="font-size:11px; color:#888;">范围 [200, 6000]，语音结束后静音多久触发回复，Qwen3.5 semantic_vad 默认 1100ms。</div>
       </div>
+    </div>
+  </div>
+
+  <div class="section" id="localVadOnlySection" style="margin-top:12px; display:none;">
+    <strong>本地判停 / VAD</strong>
+    <p style="font-size:12px; color:#888; margin:6px 0 0;">
+      Flash / 自部署 Omni 使用本地 VAD；可在 Smart Turn v3 与 LiveKit turn-detector 之间切换对比。
+    </p>
+    <div id="localVadOnlyOptions" style="margin-top:8px; display:flex; flex-direction:column; gap:6px; font-size:0.9rem;">
+      <label style="cursor:pointer;">
+        <input type="radio" name="localVadProviderOnly" value="smart_turn_v3" checked />
+        Smart Turn v3（Pipecat，音频 prosody）
+      </label>
+      <label style="cursor:pointer;">
+        <input type="radio" name="localVadProviderOnly" value="livekit_turn_detector" />
+        LiveKit turn-detector（SenseVoice 本地 STT + Silero + 语义判停）
+      </label>
     </div>
   </div>
 
@@ -314,7 +342,7 @@
     <strong>录音调试预览（后端合并）</strong>
     <button type="button" id="btnMonitorSync" disabled style="margin-left:8px;">同步到监控页</button>
     <span id="monitorSyncHint" style="font-size:12px;color:#888;margin-left:8px;"></span>
-    <p style="font-size:12px; color:#666;">链路：Browser 上行音频 → Backend Omni Bridge → Hush 降噪 → Smart Turn v3 + Qwen Omni。下方主播放器是<strong>跨轮合并</strong>后的 WAV（VAD 分支为降噪后音频）；折叠里是<strong>每一轮单独</strong>的录音。</p>
+    <p style="font-size:12px; color:#666;">链路：Browser 上行音频 → Backend Omni Bridge → Hush 降噪 → 本地 VAD + Qwen Omni。下方主播放器是<strong>跨轮合并</strong>后的 WAV（VAD 分支为降噪后音频）；折叠里是<strong>每一轮单独</strong>的录音。</p>
     <div style="margin-top:8px;">
       <div style="margin-bottom:10px;">
         <div style="font-size:12px; color:#666; margin-bottom:4px;">给 VAD 的录音（merged）</div>
@@ -378,6 +406,9 @@
       const omniBackendSelf = document.getElementById('omniBackendSelf');
       const smoothOutputSection = document.getElementById('smoothOutputSection');
       const vadConfigSection = document.getElementById('vadConfigSection');
+      const omniVadModeLocal = document.getElementById('omniVadModeLocal');
+      const localVadProviderOptions = document.getElementById('localVadProviderOptions');
+      const localVadOnlySection = document.getElementById('localVadOnlySection');
       const dashscopeVadOptions = document.getElementById('dashscopeVadOptions');
       const turnDetectionTypeEl = document.getElementById('turnDetectionType');
       const turnThresholdEl = document.getElementById('turnThreshold');
@@ -444,13 +475,13 @@
 
 【固定背景信息（本次访谈锚点，勿自行虚构或更改）】
 - 候选人：阿强
-- 主体公司：深圳图灵完备IO网络科技有限公司（简称「图灵完备IO」）
+- 主体公司：深圳图灵完备网络科技有限公司（简称「图灵完备IO」）
 - 候选人登记直属上级：阿珍（产品总监）
 - 行业：互联网 / 企业级 SaaS
 - 供职方式：全职正式员工
 
 【标准核实答案（用于交叉验证，勿主动泄露给对方）】
-- 主体公司：深圳图灵完备IO网络科技有限公司
+- 主体公司：深圳图灵完备网络科技有限公司
 - 入职：2022年6月13日
 - 离职：2025年11月28日（最后工作日同日，交接已完成）
 - 职位：离职前为高级产品经理
@@ -473,17 +504,17 @@
 6. 只核实、不深评：本访谈仅完成核实清单，不展开工作表现深度评价（除非对方主动补充且与当前问题相关）。
 
 【开场白（可一次性说完，算一轮）】
-「您好，请问是深圳图灵完备IO网络科技有限公司吗？我们是芝麻背调，专业做员工背景调查的第三方公司。候选人阿强提供了您作为证明人，想跟您做信息核实，大概需要5到7分钟，请问您现在方便吗？」
+「您好，请问是深圳图灵完备网络科技有限公司吗？我们是芝麻背调，专业做员工背景调查的第三方公司。候选人阿强提供了您作为证明人，想跟您做信息核实，大概需要5到7分钟，请问您现在方便吗？」
 
 【核实问题清单】
 
 === Q1 · 确定主体公司 ===
 目的：确认阿强任职主体公司全称无误。
 问法（每次只选一句）：
-- 「候选人阿强提供的主体公司是深圳图灵完备IO网络科技有限公司，请问您确认他是在这家公司任职的吗？」
+- 「候选人阿强提供的主体公司是深圳图灵完备网络科技有限公司，请问您确认他是在这家公司任职的吗？」
 细节要求：
 - 必须得到明确确认或否定；简称需追问是否指上述全称。
-- 若提到分公司、关联主体、外包，追问是否与深圳图灵完备IO网络科技有限公司签劳动合同。
+- 若提到分公司、关联主体、外包，追问是否与深圳图灵完备网络科技有限公司签劳动合同。
 - 本题不问入职时间或职位。
 
 === Q2 · 入职与离职时间 ===
@@ -1051,6 +1082,28 @@
         return checked ? checked.value : 'local';
       }
 
+      function syncLocalVadProviderSelection(sourceValue) {
+        document.querySelectorAll('input[name="localVadProvider"], input[name="localVadProviderOnly"]').forEach(function (el) {
+          el.checked = (el.value === sourceValue);
+        });
+      }
+
+      function selectedLocalVadProvider() {
+        var nested = document.querySelector('input[name="localVadProvider"]:checked');
+        var only = document.querySelector('input[name="localVadProviderOnly"]:checked');
+        if (isFlashRealtimeModel() || isSelfDeployedOmni()) {
+          return only ? only.value : (nested ? nested.value : 'smart_turn_v3');
+        }
+        return nested ? nested.value : (only ? only.value : 'smart_turn_v3');
+      }
+
+      function resolvedOmniVadModeForBackend() {
+        if (isQwen35RealtimeModel()) {
+          return selectedOmniVadMode() === 'dashscope' ? 'dashscope' : selectedLocalVadProvider();
+        }
+        return selectedLocalVadProvider();
+      }
+
       function selectedSmoothOutput() {
         const checked = document.querySelector('input[name="smoothOutput"]:checked');
         if (!checked) return true;
@@ -1075,6 +1128,12 @@
         document.querySelectorAll('input[name="omniVadMode"]').forEach(function (el) {
           el.disabled = !enabled;
         });
+        document.querySelectorAll('input[name="localVadProvider"]').forEach(function (el) {
+          el.disabled = !enabled;
+        });
+        document.querySelectorAll('input[name="localVadProviderOnly"]').forEach(function (el) {
+          el.disabled = !enabled;
+        });
         if (turnDetectionTypeEl) turnDetectionTypeEl.disabled = !enabled;
         if (turnThresholdEl) turnThresholdEl.disabled = !enabled;
         if (turnSilenceMsEl) turnSilenceMsEl.disabled = !enabled;
@@ -1085,12 +1144,18 @@
         if (dashscopeVadOptions) {
           dashscopeVadOptions.style.display = showDashscopeOptions ? 'block' : 'none';
         }
+        if (localVadProviderOptions) {
+          localVadProviderOptions.style.display =
+            isQwen35RealtimeModel() && selectedOmniVadMode() === 'local' ? 'block' : 'none';
+        }
       }
 
       function updateModelOptionSections() {
         const sessionOpen = ws && ws.readyState === WebSocket.OPEN;
         const showSmoothOutput = isFlashRealtimeModel();
         const showVadConfig = isQwen35RealtimeModel();
+        const showLocalOnly = isFlashRealtimeModel() || isSelfDeployedOmni();
+        const prevProvider = selectedLocalVadProvider();
 
         if (smoothOutputSection) {
           smoothOutputSection.style.display = showSmoothOutput ? 'block' : 'none';
@@ -1098,9 +1163,14 @@
         if (vadConfigSection) {
           vadConfigSection.style.display = showVadConfig ? 'block' : 'none';
         }
+        if (localVadOnlySection) {
+          localVadOnlySection.style.display = showLocalOnly ? 'block' : 'none';
+        }
+
+        syncLocalVadProviderSelection(prevProvider);
 
         setSmoothOutputControlsEnabled(showSmoothOutput && !sessionOpen);
-        setVadConfigControlsEnabled(showVadConfig && !sessionOpen);
+        setVadConfigControlsEnabled((showVadConfig || showLocalOnly) && !sessionOpen);
         updateDashscopeVadOptionsVisibility();
 
         if (backendLabel) {
@@ -1122,6 +1192,21 @@
       });
       document.querySelectorAll('input[name="omniVadMode"]').forEach(function (el) {
         el.addEventListener('change', updateModelOptionSections);
+      });
+      document.querySelectorAll('input[name="localVadProvider"]').forEach(function (el) {
+        el.addEventListener('change', function () {
+          syncLocalVadProviderSelection(el.value);
+          if (omniVadModeLocal) omniVadModeLocal.checked = true;
+          if (vadStateEl) vadStateEl.textContent = 'provider=' + el.value + ' state=pending';
+          updateModelOptionSections();
+        });
+      });
+      document.querySelectorAll('input[name="localVadProviderOnly"]').forEach(function (el) {
+        el.addEventListener('change', function () {
+          syncLocalVadProviderSelection(el.value);
+          if (vadStateEl) vadStateEl.textContent = 'provider=' + el.value + ' state=pending';
+          updateModelOptionSections();
+        });
       });
       if (turnThresholdEl && turnThresholdValEl) {
         turnThresholdEl.addEventListener('input', function () {
@@ -1151,11 +1236,14 @@
         );
 
         ws.onopen = function () {
+          const localProvider = selectedLocalVadProvider();
           const startCfg = {
             mode: 'omni',
             omni_backend: backend,
             system_role: DEFAULT_SYSTEM_ROLE,
-            speaking_style: DEFAULT_SPEAKING_STYLE
+            speaking_style: DEFAULT_SPEAKING_STYLE,
+            vad_provider: localProvider,
+            local_vad_provider: localProvider,
           };
           if (isQwenDashScopeModel()) {
             startCfg.omni_model = model;
@@ -1164,8 +1252,10 @@
             startCfg.omni_smooth_output = selectedSmoothOutput();
           }
           if (isQwen35RealtimeModel()) {
-            const vadMode = selectedOmniVadMode();
+            const vadMode = resolvedOmniVadModeForBackend();
             startCfg.omni_vad_mode = vadMode;
+            startCfg.vad_provider = vadMode === 'dashscope' ? undefined : vadMode;
+            startCfg.local_vad_provider = vadMode === 'dashscope' ? undefined : vadMode;
             if (vadMode === 'dashscope') {
               startCfg.omni_turn_detection_type = turnDetectionTypeEl ? turnDetectionTypeEl.value : 'semantic_vad';
               startCfg.omni_turn_detection_threshold = turnThresholdEl ? Number(turnThresholdEl.value) : 0.7;
@@ -1173,7 +1263,20 @@
                 ? Number(turnSilenceMsEl.value)
                 : 1100;
             }
+          } else if (isFlashRealtimeModel() || isSelfDeployedOmni()) {
+            startCfg.omni_vad_mode = localProvider;
+            startCfg.vad_provider = localProvider;
+            startCfg.local_vad_provider = localProvider;
           }
+          if (vadStateEl) {
+            vadStateEl.textContent = 'provider=' + (startCfg.vad_provider || startCfg.omni_vad_mode || localProvider) + ' state=connecting';
+          }
+          log(
+            'connect cfg backend=' + backend +
+            ' omni_vad_mode=' + (startCfg.omni_vad_mode || '-') +
+            ' vad_provider=' + (startCfg.vad_provider || '-') +
+            ' local_vad_provider=' + (startCfg.local_vad_provider || '-')
+          );
           ws.send(JSON.stringify(startCfg));
         };
 
@@ -1198,6 +1301,10 @@
                   ' threshold=' + msg.omni_turn_detection.threshold +
                   ' silence_ms=' + msg.omni_turn_detection.silence_duration_ms;
               }
+              const activeVad = msg.omni_vad_mode || msg.vad_mode || '-';
+              if (activeVad && activeVad !== 'dashscope') {
+                vadStateEl.textContent = 'provider=' + activeVad + ' state=ready';
+              }
               log(
                 'ready backend=' + backend +
                 ' model=' + model +
@@ -1205,7 +1312,7 @@
                 (msg.omni_smooth_output !== undefined
                   ? ' smooth_output=' + smoothOutputLabel(msg.omni_smooth_output)
                   : '') +
-                ' omni_vad_mode=' + (msg.omni_vad_mode || '-') +
+                ' omni_vad_mode=' + activeVad +
                 turnDetectionLog +
                 ' vad_mode=' + (msg.vad_mode || '-') +
                 (msg.self_omni_ws_url ? ' url=' + msg.self_omni_ws_url : '')
@@ -1238,6 +1345,7 @@
             } else if (msg.type === 'vad_status') {
               var vp = msg.provider || '-';
               var en = msg.enabled ? 'on' : 'off';
+              vadStateEl.textContent = 'provider=' + vp + ' state=' + (msg.enabled ? 'ready' : 'off');
               log('VAD status: provider=' + vp + ' enabled=' + en + ' mode=' + (msg.mode || '-'));
               if (!msg.enabled && msg.error) log('VAD error: ' + msg.error, true);
             } else if (msg.type === 'asr') {
@@ -1333,7 +1441,7 @@
         asrPreviewEl.textContent = '';
         logEl.innerHTML = '';
         resetRecordingDebugCache();
-        vadStateEl.textContent = 'provider=smart_turn_v3 state=-';
+        vadStateEl.textContent = 'provider=' + selectedLocalVadProvider() + ' state=connecting';
         if (backendLabel) {
           backendLabel.textContent = isSelfDeployedOmni() ? 'self' : selectedOmniModel();
         }

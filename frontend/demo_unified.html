@@ -172,7 +172,7 @@
 <body class="demo-mode">
   <h1>芝麻背调证明人访谈 · Demo</h1>
   <p style="font-size:0.9rem;">
-    开始对话前选择推理引擎。链路均经 <strong>Hush 降噪</strong> → Smart Turn v3 / semantic_vad 判停。
+    开始对话前选择推理引擎。链路均经 <strong>Hush 降噪</strong> → 本地 VAD / semantic_vad 判停。
     TTFS 延迟面板内联在本页，<strong>Start Session</strong> 自动启动麦克风。
   </p>
   <div class="session-status is-idle" id="status" role="status" aria-live="polite">选择推理引擎后点击 Start 建立会话，然后直接说话。</div>
@@ -201,6 +201,44 @@
         </div>
         <div class="desc">Qwen3.5-Omni-Flash-Realtime 直连，DashScope semantic_vad。</div>
         <span class="tag">DashScope Omni 3.5</span>
+      </label>
+    </div>
+  </div>
+
+  <div class="section" id="volcanoVadSection">
+    <strong>判停 / VAD（火山 T2SBG）</strong>
+    <div style="margin-top:8px; display:flex; flex-direction:column; gap:6px; font-size:0.9rem;">
+      <label style="cursor:pointer;">
+        <input type="radio" name="volcanoVadProvider" value="smart_turn_v3" checked />
+        Smart Turn v3（Pipecat，音频 prosody）
+      </label>
+      <label style="cursor:pointer;">
+        <input type="radio" name="volcanoVadProvider" value="livekit_turn_detector" />
+        LiveKit turn-detector（SenseVoice 本地 STT + Silero）
+      </label>
+    </div>
+  </div>
+
+  <div class="section" id="omniVadSection" style="display:none;">
+    <strong>判停 / VAD（Qwen Omni 3.5）</strong>
+    <div style="margin-top:8px; display:flex; flex-direction:column; gap:6px; font-size:0.9rem;">
+      <label style="cursor:pointer;">
+        <input type="radio" name="omniVadMode" value="dashscope" checked />
+        阿里 DashScope VAD（semantic_vad，默认）
+      </label>
+      <label style="cursor:pointer;">
+        <input type="radio" name="omniVadMode" value="local" />
+        本地判停（我们部署）
+      </label>
+    </div>
+    <div id="demoLocalVadOptions" style="margin-top:10px; padding:10px; border:1px solid #2a3142; border-radius:6px; display:none;">
+      <label style="cursor:pointer; display:block; margin-bottom:4px;">
+        <input type="radio" name="demoLocalVadProvider" value="smart_turn_v3" checked />
+        Smart Turn v3
+      </label>
+      <label style="cursor:pointer; display:block;">
+        <input type="radio" name="demoLocalVadProvider" value="livekit_turn_detector" />
+        LiveKit turn-detector
       </label>
     </div>
   </div>
@@ -272,7 +310,7 @@
     <strong>录音调试预览（后端合并）</strong>
     <button type="button" id="btnMonitorSync" disabled style="margin-left:8px;">同步到监控页</button>
     <span id="monitorSyncHint" style="font-size:12px;color:#888;margin-left:8px;"></span>
-    <p style="font-size:12px; color:#666;">链路：Browser 上行音频 → Backend Omni Bridge → Hush 降噪 → Smart Turn v3 + Qwen Omni。下方主播放器是<strong>跨轮合并</strong>后的 WAV（VAD 分支为降噪后音频）；折叠里是<strong>每一轮单独</strong>的录音。</p>
+    <p style="font-size:12px; color:#666;">链路：Browser 上行音频 → Backend Omni Bridge → Hush 降噪 → 本地 VAD + Qwen Omni。下方主播放器是<strong>跨轮合并</strong>后的 WAV（VAD 分支为降噪后音频）；折叠里是<strong>每一轮单独</strong>的录音。</p>
     <div style="margin-top:8px;">
       <div style="margin-bottom:10px;">
         <div style="font-size:12px; color:#666; margin-bottom:4px;">给 VAD 的录音（merged）</div>
@@ -348,6 +386,9 @@
       const asrRawTurnClipsEl = document.getElementById('asrRawTurnClips');
       const fullRawTurnClipsEl = document.getElementById('fullRawTurnClips');
       const userTextEl = document.getElementById('userText');
+      const volcanoVadSection = document.getElementById('volcanoVadSection');
+      const omniVadSection = document.getElementById('omniVadSection');
+      const demoLocalVadOptions = document.getElementById('demoLocalVadOptions');
 
       const TARGET_SAMPLE_RATE = 16000;
       let currentFullChunks = [];
@@ -412,6 +453,45 @@
         return selectedEngine() === 'omni35';
       }
 
+      function selectedVolcanoVadProvider() {
+        const el = document.querySelector('input[name="volcanoVadProvider"]:checked');
+        return el ? el.value : 'smart_turn_v3';
+      }
+
+      function selectedDemoOmniVadMode() {
+        const el = document.querySelector('input[name="omniVadMode"]:checked');
+        return el ? el.value : 'dashscope';
+      }
+
+      function selectedDemoLocalVadProvider() {
+        const el = document.querySelector('input[name="demoLocalVadProvider"]:checked');
+        return el ? el.value : 'smart_turn_v3';
+      }
+
+      function resolvedDemoOmniVadMode() {
+        return selectedDemoOmniVadMode() === 'dashscope'
+          ? 'dashscope'
+          : selectedDemoLocalVadProvider();
+      }
+
+      function setVadPickerEnabled(enabled) {
+        ['volcanoVadProvider', 'omniVadMode', 'demoLocalVadProvider'].forEach(function (name) {
+          document.querySelectorAll('input[name="' + name + '"]').forEach(function (el) {
+            el.disabled = !enabled;
+          });
+        });
+      }
+
+      function updateVadSectionVisibility() {
+        const volcano = isVolcanoEngine();
+        if (volcanoVadSection) volcanoVadSection.style.display = volcano ? 'block' : 'none';
+        if (omniVadSection) omniVadSection.style.display = volcano ? 'none' : 'block';
+        if (demoLocalVadOptions) {
+          demoLocalVadOptions.style.display =
+            !volcano && selectedDemoOmniVadMode() === 'local' ? 'block' : 'none';
+        }
+      }
+
       function updateEngineLabel() {
         if (engineLabel) engineLabel.textContent = ENGINE_LABELS[selectedEngine()] || selectedEngine();
       }
@@ -425,22 +505,31 @@
       }
 
       document.querySelectorAll('input[name="engine"]').forEach(function (el) {
-        el.addEventListener('change', updateEngineLabel);
+        el.addEventListener('change', function () {
+          updateEngineLabel();
+          updateVadSectionVisibility();
+        });
+      });
+      ['volcanoVadProvider', 'omniVadMode', 'demoLocalVadProvider'].forEach(function (name) {
+        document.querySelectorAll('input[name="' + name + '"]').forEach(function (el) {
+          el.addEventListener('change', updateVadSectionVisibility);
+        });
       });
       updateEngineLabel();
+      updateVadSectionVisibility();
 
       const DEFAULT_SYSTEM_ROLE = `【角色设定】
 你是「芝麻背调」的专业背景调查访谈员，正在电话核实候选人背景信息。语气专业、亲和、严谨，情绪平缓，像真实电话访谈一样自然对话。
 
 【固定背景信息（本次访谈锚点，勿自行虚构或更改）】
 - 候选人：阿强
-- 主体公司：深圳图灵完备IO网络科技有限公司（简称「图灵完备IO」）
+- 主体公司：深圳图灵完备网络科技有限公司（简称「图灵完备IO」）
 - 候选人登记直属上级：阿珍（产品总监）
 - 行业：互联网 / 企业级 SaaS
 - 供职方式：全职正式员工
 
 【标准核实答案（用于交叉验证，勿主动泄露给对方）】
-- 主体公司：深圳图灵完备IO网络科技有限公司
+- 主体公司：深圳图灵完备网络科技有限公司
 - 入职：2022年6月13日
 - 离职：2025年11月28日（最后工作日同日，交接已完成）
 - 职位：离职前为高级产品经理
@@ -463,17 +552,17 @@
 6. 只核实、不深评：本访谈仅完成核实清单，不展开工作表现深度评价（除非对方主动补充且与当前问题相关）。
 
 【开场白（可一次性说完，算一轮）】
-「您好，请问是深圳图灵完备IO网络科技有限公司吗？我们是芝麻背调，专业做员工背景调查的第三方公司。候选人阿强提供了您作为证明人，想跟您做信息核实，大概需要5到7分钟，请问您现在方便吗？」
+「您好，请问是深圳图灵完备网络科技有限公司吗？我们是芝麻背调，专业做员工背景调查的第三方公司。候选人阿强提供了您作为证明人，想跟您做信息核实，大概需要5到7分钟，请问您现在方便吗？」
 
 【核实问题清单】
 
 === Q1 · 确定主体公司 ===
 目的：确认阿强任职主体公司全称无误。
 问法（每次只选一句）：
-- 「候选人阿强提供的主体公司是深圳图灵完备IO网络科技有限公司，请问您确认他是在这家公司任职的吗？」
+- 「候选人阿强提供的主体公司是深圳图灵完备网络科技有限公司，请问您确认他是在这家公司任职的吗？」
 细节要求：
 - 必须得到明确确认或否定；简称需追问是否指上述全称。
-- 若提到分公司、关联主体、外包，追问是否与深圳图灵完备IO网络科技有限公司签劳动合同。
+- 若提到分公司、关联主体、外包，追问是否与深圳图灵完备网络科技有限公司签劳动合同。
 - 本题不问入职时间或职位。
 
 === Q2 · 入职与离职时间 ===
@@ -1078,7 +1167,10 @@
         tsVadFirstPcmAfterStarted = 0;
         tsVoiceInputStartedAt = 0;
         vadFirstStateLogged = false;
-        ws.send(JSON.stringify({ type: 'voice_input_start' }));
+        ws.send(JSON.stringify({
+          type: 'voice_input_start',
+          vad_provider: selectedVolcanoVadProvider(),
+        }));
         setStatus('正在准备录音通道…', 'waiting');
         log('Volcano voice start [source=' + source + ']');
       }
@@ -1115,6 +1207,7 @@
         if (msg.type === 'debug_audio_preview') return true;
         if (msg.type === 'vad_status') {
           log('VAD status: provider=' + (msg.provider || '-') + ' enabled=' + (!!msg.enabled));
+          vadStateEl.textContent = 'provider=' + (msg.provider || '-') + ' state=' + (msg.enabled ? 'ready' : 'off');
           if (!msg.enabled && msg.error) log('VAD error: ' + msg.error, true);
           return true;
         }
@@ -1193,6 +1286,7 @@
           }
         } else if (msg.type === 'session_preparing') {
           setStatus(msg.message || '正在初始化语音通道…', 'waiting');
+          requestVolcanoVoiceStart('session_preparing');
         } else if (msg.type === 'voice_input_started') {
           startTurnRecordingCache();
           asrPreviewEl.textContent = '';
@@ -1254,17 +1348,23 @@
               external_followup_enabled: false,
             }));
           } else {
-            ws.send(JSON.stringify({
+            const omniVad = resolvedDemoOmniVadMode();
+            const omniCfg = {
               mode: 'omni',
               omni_backend: 'qwen',
               omni_model: OMNI35_MODEL,
-              omni_vad_mode: 'dashscope',
-              omni_turn_detection_type: 'semantic_vad',
-              omni_turn_detection_threshold: 0.7,
-              omni_turn_detection_silence_duration_ms: 1100,
+              omni_vad_mode: omniVad,
               system_role: DEFAULT_SYSTEM_ROLE,
               speaking_style: DEFAULT_SPEAKING_STYLE,
-            }));
+            };
+            if (omniVad === 'dashscope') {
+              omniCfg.omni_turn_detection_type = 'semantic_vad';
+              omniCfg.omni_turn_detection_threshold = 0.7;
+              omniCfg.omni_turn_detection_silence_duration_ms = 1100;
+            } else {
+              omniCfg.vad_provider = omniVad;
+            }
+            ws.send(JSON.stringify(omniCfg));
           }
         };
 
@@ -1327,6 +1427,8 @@
         btnStop.disabled = false;
         btnMute.disabled = false;
         setEnginePickerEnabled(false);
+        setVadPickerEnabled(false);
+        updateVadSectionVisibility();
         setStatus('正在获取麦克风权限…', 'waiting');
         acquireInterviewMic().then(function (stream) {
           mediaStream = stream;
@@ -1338,6 +1440,8 @@
           btnStop.disabled = true;
           btnMute.disabled = true;
           setEnginePickerEnabled(true);
+          setVadPickerEnabled(true);
+          updateVadSectionVisibility();
           setStatus('麦克风权限失败', 'error');
         });
       };
@@ -1352,6 +1456,8 @@
         voiceCapturing = false;
         if (ws) { ws.close(); ws = null; }
         setEnginePickerEnabled(true);
+        setVadPickerEnabled(true);
+        updateVadSectionVisibility();
         btnStart.disabled = false;
         btnStop.disabled = true;
         btnMute.disabled = true;
