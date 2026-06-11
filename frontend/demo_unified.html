@@ -64,6 +64,10 @@
     details.debug-raw-clips { margin-top: 8px; font-size: 12px; }
     details.debug-raw-clips summary { cursor: pointer; color: #555; user-select: none; }
     details.debug-raw-clips .raw-clips-body { margin-top: 6px; padding-left: 8px; border-left: 2px solid #eee; }
+    details.vad-advanced { margin-top: 4px; font-size: 0.82rem; }
+    details.vad-advanced summary { cursor: pointer; color: #8b93a7; user-select: none; list-style: none; }
+    details.vad-advanced summary::-webkit-details-marker { display: none; }
+    details.vad-advanced[open] summary { margin-bottom: 8px; }
     .ttfs-hint { font-size: 12px; color: #666; margin: 6px 0 8px; }
     .ttfs-inline-root {
       --ttfs-bg: #0f1218;
@@ -174,6 +178,7 @@
   <p style="font-size:0.9rem;">
     开始对话前选择推理方案。链路均经降噪与判停处理。
     TTFS 延迟面板内联在本页，<strong>Start Session</strong> 自动启动麦克风。
+    <a href="/demo/asr" target="_blank" rel="noopener" style="color:#22d3ee;margin-left:6px;">实时识别 ↗</a>
   </p>
   <div class="session-status is-idle" id="status" role="status" aria-live="polite">选择推理方案后点击 Start 建立会话，然后直接说话。</div>
   <p class="meta-line">
@@ -210,28 +215,17 @@
     <div style="margin-top:8px; display:flex; flex-direction:column; gap:6px; font-size:0.9rem;">
       <label style="cursor:pointer;">
         <input type="radio" name="volcanoVadProvider" value="smart_turn_v3" checked />
-        Smart Turn v3
+        链路1
       </label>
       <label style="cursor:pointer;">
         <input type="radio" name="volcanoVadProvider" value="livekit_turn_detector" />
-        LiveKit turn-detector
+        链路2
       </label>
-      <div id="volcanoLivekitSttOptions" style="margin:4px 0 0 1.25rem; padding:8px 10px; border:1px solid #2a3142; border-radius:6px; display:none;">
-        <div style="font-size:0.82rem; color:#8b93a7; margin-bottom:6px;">ASR（LiveKit 语义判停需文本）</div>
-        <label style="cursor:pointer; display:block; margin-bottom:4px;">
-          <input type="radio" name="volcanoLivekitStt" value="funasr" checked />
-          FunASR SenseVoice（本地 CPU）
-        </label>
-        <label style="cursor:pointer; display:block;">
-          <input type="radio" name="volcanoLivekitStt" value="volc" />
-          豆包流式 ASR（Volc 云端）
-        </label>
-        <div style="margin-top:10px;">
-          <label style="font-size:0.82rem; color:#8b93a7;">
-            EOU threshold（越低越敏感） <span id="volcanoLivekitThresholdVal">0.004</span>
-          </label>
-          <input type="range" id="volcanoLivekitThreshold" min="0.001" max="0.015" step="0.001" value="0.004" style="width:100%; margin-top:4px;" />
-        </div>
+      <div id="volcanoLivekitSttOptions" style="margin:4px 0 0 1.25rem; display:none;">
+        <details class="vad-advanced">
+          <summary>EOU threshold（越低越敏感） <span id="volcanoLivekitThresholdVal">0.004</span></summary>
+          <input type="range" id="volcanoLivekitThreshold" min="0.001" max="0.015" step="0.001" value="0.004" style="width:100%;" />
+        </details>
       </div>
     </div>
   </div>
@@ -251,28 +245,17 @@
     <div id="demoLocalVadOptions" style="margin-top:10px; padding:10px; border:1px solid #2a3142; border-radius:6px; display:none;">
       <label style="cursor:pointer; display:block; margin-bottom:4px;">
         <input type="radio" name="demoLocalVadProvider" value="smart_turn_v3" checked />
-        Smart Turn v3
+        链路1
       </label>
       <label style="cursor:pointer; display:block;">
         <input type="radio" name="demoLocalVadProvider" value="livekit_turn_detector" />
-        LiveKit turn-detector
+        链路2
       </label>
-      <div id="demoLivekitSttOptions" style="margin:6px 0 0 1.25rem; padding:8px 10px; border:1px solid #2a3142; border-radius:6px; display:none;">
-        <div style="font-size:0.82rem; color:#8b93a7; margin-bottom:6px;">ASR（LiveKit 语义判停需文本）</div>
-        <label style="cursor:pointer; display:block; margin-bottom:4px;">
-          <input type="radio" name="demoLivekitStt" value="funasr" checked />
-          FunASR SenseVoice（本地 CPU）
-        </label>
-        <label style="cursor:pointer; display:block;">
-          <input type="radio" name="demoLivekitStt" value="volc" />
-          豆包流式 ASR（Volc 云端）
-        </label>
-        <div style="margin-top:10px;">
-          <label style="font-size:0.82rem; color:#8b93a7;">
-            EOU threshold（越低越敏感） <span id="demoLivekitThresholdVal">0.004</span>
-          </label>
-          <input type="range" id="demoLivekitThreshold" min="0.001" max="0.015" step="0.001" value="0.004" style="width:100%; margin-top:4px;" />
-        </div>
+      <div id="demoLivekitSttOptions" style="margin:6px 0 0 1.25rem; display:none;">
+        <details class="vad-advanced">
+          <summary>EOU threshold（越低越敏感） <span id="demoLivekitThresholdVal">0.004</span></summary>
+          <input type="range" id="demoLivekitThreshold" min="0.001" max="0.015" step="0.001" value="0.004" style="width:100%;" />
+        </details>
       </div>
     </div>
   </div>
@@ -335,10 +318,7 @@
     </div>
   </div>
 
-  <div class="section">
-    <strong>实时识别</strong>
-    <div id="asrPreview" class="transcript" style="min-height:48px; font-size:0.9rem; color:#666;"></div>
-  </div>
+  <div id="asrPreview" class="demo-hide" aria-hidden="true"></div>
 
   <div class="section demo-hide">
     <strong>录音调试预览（后端合并）</strong>
@@ -376,7 +356,7 @@
     </div>
   </div>
 
-  <div class="section">
+  <div class="section demo-hide">
     <strong>AI 面试官回复（文本 + 语音）</strong>
     <div class="transcript" id="transcript"></div>
   </div>
@@ -504,16 +484,6 @@
         return el ? el.value : 'smart_turn_v3';
       }
 
-      function selectedVolcanoLivekitStt() {
-        const el = document.querySelector('input[name="volcanoLivekitStt"]:checked');
-        return el ? el.value : 'funasr';
-      }
-
-      function selectedDemoLivekitStt() {
-        const el = document.querySelector('input[name="demoLivekitStt"]:checked');
-        return el ? el.value : 'funasr';
-      }
-
       function selectedLivekitTurnThreshold() {
         const el = isVolcanoEngine()
           ? document.getElementById('volcanoLivekitThreshold')
@@ -532,10 +502,10 @@
 
       function resolvedLivekitSttBackend() {
         if (isVolcanoEngine()) {
-          return selectedVolcanoVadProvider() === 'livekit_turn_detector' ? selectedVolcanoLivekitStt() : null;
+          return selectedVolcanoVadProvider() === 'livekit_turn_detector' ? 'volc' : null;
         }
         if (selectedDemoOmniVadMode() === 'local' && selectedDemoLocalVadProvider() === 'livekit_turn_detector') {
-          return selectedDemoLivekitStt();
+          return 'volc';
         }
         return null;
       }
@@ -547,7 +517,7 @@
       }
 
       function setVadPickerEnabled(enabled) {
-        ['volcanoVadProvider', 'omniVadMode', 'demoLocalVadProvider', 'volcanoLivekitStt', 'demoLivekitStt'].forEach(function (name) {
+        ['volcanoVadProvider', 'omniVadMode', 'demoLocalVadProvider'].forEach(function (name) {
           document.querySelectorAll('input[name="' + name + '"]').forEach(function (el) {
             el.disabled = !enabled;
           });
@@ -602,7 +572,7 @@
           updateVadSectionVisibility();
         });
       });
-      ['volcanoVadProvider', 'omniVadMode', 'demoLocalVadProvider', 'volcanoLivekitStt', 'demoLivekitStt'].forEach(function (name) {
+      ['volcanoVadProvider', 'omniVadMode', 'demoLocalVadProvider'].forEach(function (name) {
         document.querySelectorAll('input[name="' + name + '"]').forEach(function (el) {
           el.addEventListener('change', updateVadSectionVisibility);
         });
@@ -1138,6 +1108,22 @@
         }
       }
 
+      function stopTTSPlayback() {
+        ttsSuppressedByBargeIn = true;
+        flushTTSPlayback();
+        try {
+          if (window.TTFS && typeof TTFS.detachPlaybackMediaStream === 'function') {
+            TTFS.detachPlaybackMediaStream();
+          }
+        } catch (e) { /* ignore */ }
+        if (ttsAudioContext) {
+          try { ttsAudioContext.close(); } catch (e) {}
+          ttsAudioContext = null;
+        }
+        ttsNextPlayTime = 0;
+        currentAiTextNode = null;
+      }
+
       function ensureAiLine() {
         if (currentAiTextNode) return currentAiTextNode;
         transcriptEl.appendChild(document.createElement('br'));
@@ -1493,6 +1479,7 @@
         };
 
         ws.onclose = function () {
+          stopTTSPlayback();
           setStatus('已停止，点击 Start 重新开始', 'idle');
           btnSendText.disabled = true;
           btnMonitorSync.disabled = true;
@@ -1559,6 +1546,7 @@
       };
 
       btnStop.onclick = function () {
+        stopTTSPlayback();
         stopTtfsEmbedCapture();
         if (mediaStream) {
           mediaStream.getTracks().forEach(function (t) { t.stop(); });

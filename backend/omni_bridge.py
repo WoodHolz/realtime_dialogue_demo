@@ -216,6 +216,11 @@ class OmniRealtimeBridge:
             await self.client_ws.send_text(json.dumps(payload, ensure_ascii=False))
         except Exception:
             pass
+        else:
+            from backend.demo_asr_broadcast import DEMO_ASR_EVENT_TYPES, schedule_demo_asr_broadcast
+
+            if payload.get("type") in DEMO_ASR_EVENT_TYPES:
+                schedule_demo_asr_broadcast(payload)
 
     async def _send_client_audio(self, pcm_s16le: bytes) -> None:
         try:

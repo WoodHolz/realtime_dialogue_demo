@@ -71,7 +71,13 @@ from backend.hush import (
     init_hush_manager,
     shutdown_hush_manager,
 )
-from backend.hush.manager import hush_manager_error
+from backend.demo_asr_broadcast import (
+    DEMO_ASR_EVENT_TYPES,
+    demo_asr_last_event,
+    register_demo_asr_viewer,
+    schedule_demo_asr_broadcast,
+    unregister_demo_asr_viewer,
+)
 
 LOG = logging.getLogger(__name__)
 
@@ -473,6 +479,42 @@ def _serve_demo_unified_page() -> HTMLResponse:
 @app.get("/demo")
 async def demo_page():
     return _serve_demo_unified_page()
+
+
+@app.get("/demo/asr")
+async def demo_asr_page():
+    path = _frontend_dir() / "demo_asr.html"
+    if not path.exists():
+        return HTMLResponse("<p>demo_asr.html not found</p>", status_code=404)
+    return FileResponse(path)
+
+
+@app.websocket("/ws/demo-asr")
+async def websocket_demo_asr(websocket: WebSocket):
+    await websocket.accept()
+    last = demo_asr_last_event()
+    if last is not None:
+        try:
+            await websocket.send_text(json.dumps(last, ensure_ascii=False))
+        except Exception:
+            try:
+                await websocket.close()
+            except Exception:
+                pass
+            return
+    await register_demo_asr_viewer(websocket)
+    try:
+        while True:
+            try:
+                await websocket.receive_text()
+            except WebSocketDisconnect:
+                break
+            except RuntimeError as e:
+                if 'Cannot call "receive" once a disconnect message has been received.' in str(e):
+                    break
+                raise
+    finally:
+        await unregister_demo_asr_viewer(websocket)
 
 
 @app.get("/")
@@ -1017,6 +1059,8 @@ async def websocket_endpoint(websocket: WebSocket):
             pass
 
     def send_json(obj: dict) -> asyncio.Task | None:
+        if isinstance(obj, dict) and obj.get("type") in DEMO_ASR_EVENT_TYPES:
+            schedule_demo_asr_broadcast(obj)
         try:
             return asyncio.create_task(_send_text_safe(json.dumps(obj, ensure_ascii=False)))
         except Exception:

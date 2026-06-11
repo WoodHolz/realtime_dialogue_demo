@@ -1,0 +1,245 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>实时识别 · Demo</title>
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      font-family: ui-sans-serif, system-ui, "Segoe UI", Roboto, "PingFang SC", sans-serif;
+      background: #0f1218;
+      color: #e8ecf4;
+      display: flex;
+      flex-direction: column;
+    }
+    header {
+      padding: 0.85rem 1.25rem;
+      border-bottom: 1px solid #2a3142;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+    header h1 {
+      margin: 0;
+      font-size: 1rem;
+      font-weight: 650;
+      color: #f1f5f9;
+    }
+    .conn {
+      font-size: 0.78rem;
+      color: #8b93a7;
+    }
+    .conn.is-live { color: #5eead4; }
+    .conn.is-error { color: #fca5a5; }
+    main {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      padding: 1rem 1.25rem 1.5rem;
+      gap: 1rem;
+      max-width: 960px;
+      width: 100%;
+      margin: 0 auto;
+    }
+    .live-panel {
+      flex: 1;
+      min-height: 180px;
+      padding: 1.1rem 1.25rem;
+      border-radius: 12px;
+      border: 1px solid #2a3142;
+      background: #171b24;
+      display: flex;
+      flex-direction: column;
+      gap: 0.5rem;
+    }
+    .live-label {
+      font-size: 0.72rem;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: #8b93a7;
+    }
+    #liveText {
+      flex: 1;
+      font-size: clamp(1.35rem, 4vw, 2rem);
+      line-height: 1.45;
+      font-weight: 500;
+      color: #f1f5f9;
+      white-space: pre-wrap;
+      word-break: break-word;
+      min-height: 3rem;
+    }
+    #liveText.is-interim { color: #cbd5e1; opacity: 0.75; }
+    #liveText.is-empty { color: #4b5563; font-size: 1rem; font-weight: 400; }
+    .history {
+      border-radius: 12px;
+      border: 1px solid #2a3142;
+      background: #171b24;
+      overflow: hidden;
+    }
+    .history-head {
+      padding: 0.65rem 1rem;
+      font-size: 0.78rem;
+      color: #8b93a7;
+      border-bottom: 1px solid #2a3142;
+    }
+    #historyList {
+      margin: 0;
+      padding: 0.5rem 0;
+      list-style: none;
+      max-height: 40vh;
+      overflow-y: auto;
+    }
+    #historyList li {
+      padding: 0.55rem 1rem;
+      border-bottom: 1px solid #1f2430;
+      font-size: 0.92rem;
+      line-height: 1.4;
+      color: #cbd5e1;
+    }
+    #historyList li:last-child { border-bottom: none; }
+    #historyList .time {
+      display: block;
+      font-size: 0.68rem;
+      color: #6b7280;
+      margin-bottom: 0.2rem;
+      font-variant-numeric: tabular-nums;
+    }
+    #historyList:empty::after {
+      content: '暂无已确认语句';
+      display: block;
+      padding: 0.75rem 1rem;
+      color: #6b7280;
+      font-size: 0.85rem;
+    }
+    .hint {
+      font-size: 0.78rem;
+      color: #6b7280;
+      line-height: 1.45;
+    }
+    .hint a { color: #22d3ee; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>实时识别</h1>
+    <div class="conn" id="connStatus">连接中…</div>
+  </header>
+  <main>
+    <p class="hint">在 <a href="/demo">Demo 主页面</a> 启动会话后，本页会同步显示 ASR 识别结果。可单独开窗口投屏。</p>
+    <section class="live-panel" aria-live="polite" aria-atomic="true">
+      <div class="live-label">当前识别</div>
+      <div id="liveText" class="is-empty">等待语音输入…</div>
+    </section>
+    <section class="history">
+      <div class="history-head">已确认语句</div>
+      <ul id="historyList"></ul>
+    </section>
+  </main>
+  <script>
+    (function () {
+      var liveTextEl = document.getElementById('liveText');
+      var historyListEl = document.getElementById('historyList');
+      var connStatusEl = document.getElementById('connStatus');
+
+      function setConn(text, kind) {
+        connStatusEl.textContent = text;
+        connStatusEl.className = 'conn' + (kind ? ' is-' + kind : '');
+      }
+
+      function formatTime(at) {
+        if (!at) return '';
+        try {
+          var d = new Date(at);
+          if (isNaN(d.getTime())) return at;
+          return d.toLocaleTimeString('zh-CN', { hour12: false });
+        } catch (e) {
+          return at;
+        }
+      }
+
+      function setLive(text, interim) {
+        var t = (text || '').trim();
+        if (!t) {
+          liveTextEl.textContent = '等待语音输入…';
+          liveTextEl.className = 'is-empty';
+          return;
+        }
+        liveTextEl.textContent = text;
+        liveTextEl.className = interim ? 'is-interim' : '';
+      }
+
+      function appendHistory(text, at) {
+        var t = (text || '').trim();
+        if (!t) return;
+        if (t === lastHistoryText) return;
+        lastHistoryText = t;
+        var li = document.createElement('li');
+        var timeEl = document.createElement('span');
+        timeEl.className = 'time';
+        timeEl.textContent = formatTime(at);
+        li.appendChild(timeEl);
+        li.appendChild(document.createTextNode(t));
+        historyListEl.insertBefore(li, historyListEl.firstChild);
+      }
+
+      var lastHistoryText = '';
+
+      function handleEvent(msg) {
+        var type = msg.type;
+        if (type === 'voice_input_started') {
+          lastHistoryText = '';
+          setLive('', false);
+          return;
+        }
+        if (type === 'asr') {
+          setLive(msg.text || '', !!msg.is_interim);
+          if (!msg.is_interim) {
+            appendHistory(msg.text || '', msg.at);
+            setLive('', false);
+          }
+          return;
+        }
+        if (type === 'local_asr_text') {
+          appendHistory(msg.text || '', msg.at);
+          setLive('', false);
+          return;
+        }
+        if (type === 'asr_ended') {
+          var finalText = msg.final_text || '';
+          if ((finalText || '').trim()) {
+            appendHistory(finalText, msg.at);
+          }
+          setLive('', false);
+        }
+      }
+
+      var protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+      var wsUrl = protocol + '//' + location.host + '/ws/demo-asr';
+      var ws = new WebSocket(wsUrl);
+
+      ws.onopen = function () {
+        setConn('已连接 · ' + wsUrl, 'live');
+      };
+      ws.onclose = function () {
+        setConn('连接已断开，3 秒后重试…', 'error');
+        setTimeout(function () { location.reload(); }, 3000);
+      };
+      ws.onerror = function () {
+        setConn('连接错误', 'error');
+      };
+      ws.onmessage = function (ev) {
+        try {
+          handleEvent(JSON.parse(ev.data));
+        } catch (e) {
+          /* ignore */
+        }
+      };
+    })();
+  </script>
+</body>
+</html>
