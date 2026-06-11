@@ -200,21 +200,20 @@
           setLive(msg.text || '', !!msg.is_interim);
           if (!msg.is_interim) {
             appendHistory(msg.text || '', msg.at);
-            setLive('', false);
           }
           return;
         }
         if (type === 'local_asr_text') {
           appendHistory(msg.text || '', msg.at);
-          setLive('', false);
+          setLive(msg.text || '', false);
           return;
         }
         if (type === 'asr_ended') {
           var finalText = msg.final_text || '';
           if ((finalText || '').trim()) {
             appendHistory(finalText, msg.at);
+            setLive(finalText, false);
           }
-          setLive('', false);
         }
       }
 

@@ -406,6 +406,12 @@ class OmniRealtimeBridge:
                             await self._send_client_audio(pcm)
                         except Exception:
                             pass
+                elif t == "conversation.item.input_audio_transcription.delta":
+                    preview = (event.get("text", "") or "") + (event.get("stash", "") or "")
+                    if preview.strip():
+                        await self._send_client_json(
+                            {"type": "asr", "text": preview, "is_interim": True}
+                        )
                 elif t == "conversation.item.input_audio_transcription.completed":
                     text = event.get("transcript", "") or ""
                     await self._send_client_json({"type": "asr", "text": text, "is_interim": False})
