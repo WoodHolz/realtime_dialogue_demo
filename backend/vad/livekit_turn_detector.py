@@ -17,7 +17,7 @@ from backend.livekit_turn_stt import (
 from backend.vad.config import (
     livekit_turn_embedded_asr_enabled,
     livekit_turn_language,
-    livekit_turn_threshold_override,
+    resolve_livekit_turn_threshold,
     smart_turn_silero_confidence,
     smart_turn_silero_stop_secs,
 )
@@ -34,7 +34,13 @@ class LivekitTurnDetectorBackend:
 
     provider = "livekit_turn_detector"
 
-    def __init__(self, *, force_embedded_asr: bool | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        force_embedded_asr: bool | None = None,
+        stt_backend: str | None = None,
+        turn_threshold: float | str | None = None,
+    ) -> None:
         stop_secs = smart_turn_silero_stop_secs()
         self._silero = SileroVADAnalyzer(
             sample_rate=_SAMPLE_RATE,
@@ -45,7 +51,12 @@ class LivekitTurnDetectorBackend:
         )
         self._eou = get_livekit_eou_model()
         self._language = livekit_turn_language()
-        self._threshold_override = livekit_turn_threshold_override()
+        self._threshold_override = resolve_livekit_turn_threshold(override=turn_threshold)
+        self._stt_backend = livekit_turn_stt_backend()
+        if stt_backend is not None:
+            from backend.livekit_turn_stt import resolve_livekit_turn_stt_backend
+
+            self._stt_backend = resolve_livekit_turn_stt_backend(override=stt_backend)
         if force_embedded_asr is None:
             self._embedded_asr_enabled = livekit_turn_embedded_asr_enabled()
         else:
@@ -82,12 +93,17 @@ class LivekitTurnDetectorBackend:
         self._external_transcript = False
         self._stt_buffer.clear()
         self._silero.set_sample_rate(_SAMPLE_RATE)
-        LOG.info(
-            "LiveKit turn-detector session started (eou_lang=%s stt=%s/%s/%s)",
+        effective_threshold = self._eou.threshold_for_language(
             self._language,
-            livekit_turn_stt_backend(),
-            livekit_turn_stt_model_label(),
-            livekit_turn_stt_language_label(),
+            override=self._threshold_override,
+        )
+        LOG.info(
+            "LiveKit turn-detector session started (eou_lang=%s threshold=%s stt=%s/%s/%s)",
+            self._language,
+            effective_threshold,
+            self._stt_backend,
+            livekit_turn_stt_model_label(self._stt_backend),
+            livekit_turn_stt_language_label(self._stt_backend),
         )
         return {
             "provider": self.provider,
@@ -96,9 +112,10 @@ class LivekitTurnDetectorBackend:
             "model": "livekit/turn-detector",
             "revision": "v0.4.1-intl",
             "language": self._language,
-            "stt": livekit_turn_stt_backend(),
-            "stt_model": livekit_turn_stt_model_label(),
-            "stt_language": livekit_turn_stt_language_label(),
+            "threshold": effective_threshold,
+            "stt": self._stt_backend,
+            "stt_model": livekit_turn_stt_model_label(self._stt_backend),
+            "stt_language": livekit_turn_stt_language_label(self._stt_backend),
         }
 
     async def _start_embedded_stt_if_needed(self) -> None:
@@ -112,7 +129,7 @@ class LivekitTurnDetectorBackend:
             if text.strip():
                 self._user_transcript = text.strip()
 
-        session = create_livekit_turn_stt_session(on_partial=_on_partial)
+        session = create_livekit_turn_stt_session(on_partial=_on_partial, stt_backend=self._stt_backend)
         try:
             await session.start()
         except Exception as exc:  # noqa: BLE001

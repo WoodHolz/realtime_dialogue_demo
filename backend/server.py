@@ -49,7 +49,11 @@ from backend.asr_client import (
     CHUNK_BYTES as ASR_CHUNK_BYTES,
     asr_error_hint,
 )
-from backend.livekit_turn_stt import create_livekit_turn_stt_session, livekit_turn_stt_backend
+from backend.livekit_turn_stt import (
+    create_livekit_turn_stt_session,
+    livekit_turn_stt_display_label,
+    resolve_livekit_turn_stt_backend,
+)
 from backend.duplug_vad_local import duplug_local_config_path, duplug_local_enabled
 from backend.vad import (
     SEMANTIC_VAD_SOURCES,
@@ -1773,7 +1777,11 @@ async def websocket_endpoint(websocket: WebSocket):
             t2s_vad = None
         t2s_voice_active = False
 
-    async def _t2s_start_voice_input(vad_provider_override: str | None = None) -> bool:
+    async def _t2s_start_voice_input(
+        vad_provider_override: str | None = None,
+        stt_backend_override: str | None = None,
+        livekit_turn_threshold_override: str | float | None = None,
+    ) -> bool:
         """Initialize VAD + streaming ASR; notify client via voice_input_started when ready."""
         nonlocal t2s_asr_streaming, t2s_asr_stream_buffer, t2s_pcm_buffer, t2s_voice_active
         nonlocal t2s_speech_started, t2s_eou_fired, t2s_speech_started_ts, t2s_last_nonidle_ts
@@ -1804,8 +1812,20 @@ async def websocket_endpoint(websocket: WebSocket):
         _close_t2s_debug_files()
         _open_t2s_debug_files_for_turn()
         active_vad = resolve_vad_provider(override=vad_provider_override)
-        LOG.info("t2s voice_input_start: vad_provider=%r resolved=%s", vad_provider_override, active_vad)
-        t2s_vad = create_vad_backend(active_vad)
+        LOG.info(
+            "t2s voice_input_start: vad_provider=%r resolved=%s livekit_stt=%r livekit_threshold=%r",
+            vad_provider_override,
+            active_vad,
+            stt_backend_override,
+            livekit_turn_threshold_override,
+        )
+        t2s_vad = create_vad_backend(
+            active_vad,
+            livekit_stt_backend=stt_backend_override if active_vad == "livekit_turn_detector" else None,
+            livekit_turn_threshold=livekit_turn_threshold_override
+            if active_vad == "livekit_turn_detector"
+            else None,
+        )
         if t2s_vad is not None:
             try:
                 vad_status = await t2s_vad.start_session(uuid.uuid4().hex)
@@ -1866,9 +1886,14 @@ async def websocket_endpoint(websocket: WebSocket):
 
         use_livekit_stt = active_vad == "livekit_turn_detector"
         if use_livekit_stt:
-            session = create_livekit_turn_stt_session(on_partial=_on_asr_partial, on_notify=_on_asr_notify)
-            stt_backend = livekit_turn_stt_backend()
-            stt_label = "FunASR SenseVoice" if stt_backend == "funasr" else f"LiveKit turn STT ({stt_backend})"
+            resolved_stt = resolve_livekit_turn_stt_backend(override=stt_backend_override)
+            session = create_livekit_turn_stt_session(
+                stt_backend=stt_backend_override,
+                on_partial=_on_asr_partial,
+                on_notify=_on_asr_notify,
+                on_server_error=_on_asr_server_error,
+            )
+            stt_label = livekit_turn_stt_display_label(resolved_stt)
         else:
             rid = os.environ.get("ASR_RESOURCE_ID", DEFAULT_ASR_RESOURCE_ID)
             session = VolcAsrStreamingSession(
@@ -1894,21 +1919,26 @@ async def websocket_endpoint(websocket: WebSocket):
                     pass
                 t2s_vad = None
             if use_livekit_stt:
-                stt_backend = livekit_turn_stt_backend()
-                if stt_backend == "funasr":
+                resolved_stt = resolve_livekit_turn_stt_backend(override=stt_backend_override)
+                if resolved_stt == "funasr":
                     err_msg = (
                         f"FunASR SenseVoice 启动失败: {e}. "
                         "请安装: pip install funasr modelscope torch torchaudio "
                         "（CPU: pip install torch torchaudio --index-url https://download.pytorch.org/whl/cpu）"
                         "；首次运行会自动下载 iic/SenseVoiceSmall。"
                     )
-                elif stt_backend == "livekit_inference":
+                elif resolved_stt == "volc":
+                    err_msg = (
+                        f"豆包流式 ASR 连接失败: {e}. 排查：1) 火山控制台-豆包语音-语音识别大模型 已开通 "
+                        "2) ASR_APP_ID / ASR_ACCESS_KEY 或 config.json asr_app_id / asr_access_key"
+                    )
+                elif resolved_stt == "livekit_inference":
                     err_msg = (
                         f"LiveKit Inference STT 连接失败: {e}. "
                         "请配置 LIVEKIT_API_KEY + LIVEKIT_API_SECRET。"
                     )
                 else:
-                    err_msg = f"LiveKit turn STT ({stt_backend}) 连接失败: {e}"
+                    err_msg = f"LiveKit turn STT ({resolved_stt}) 连接失败: {e}"
             else:
                 err_msg = (
                     f"ASR 连接失败 (403): {e}. 排查：1) 火山控制台-豆包语音-语音识别大模型 已开通 "
@@ -2204,7 +2234,15 @@ async def websocket_endpoint(websocket: WebSocket):
                     elif obj.get("type") == "voice_input_start":
                         # t2s 流式：开启麦克风流式输入 → ASR 流式输出（后续轮次由客户端触发）
                         vp = (obj.get("vad_provider") or obj.get("local_vad_provider") or "").strip()
-                        await _t2s_start_voice_input(vp or None)
+                        stt_be = (
+                            obj.get("livekit_stt_backend")
+                            or obj.get("stt_backend")
+                            or ""
+                        ).strip()
+                        lk_th = obj.get("livekit_turn_threshold")
+                        if lk_th is None:
+                            lk_th = obj.get("threshold")
+                        await _t2s_start_voice_input(vp or None, stt_be or None, lk_th)
                     elif obj.get("type") == "voice_input_complete":
                         # t2s 模式：用户语音结束，用豆包 ASR 转写后发送给语音对话模型。
                         if not client or mode != "t2s":

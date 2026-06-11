@@ -56,12 +56,12 @@
     "smart_turn": {
       "model_path": null,
       "cpu_count": 1,
-      "silero_stop_secs": 0.2,
-      "silero_confidence": 0.7
+      "silero_stop_secs": 0.3,
+      "silero_confidence": 0.6
     },
     "livekit_turn": {
       "language": "zh",
-      "threshold": null,
+      "threshold": 0.004,
       "embedded_asr": false,
       "stt_backend": "funasr",
       "funasr_model": "iic/SenseVoiceSmall",
@@ -91,6 +91,6 @@
     "t2s_min_turn_gap_ms": 300,
     "t2s_tts_barge_suppress_ms": 2000
   },
-  "t2sbg_voice_version": "0.0.11",
-  "omni_voice_version": "0.0.17"
+  "t2sbg_voice_version": "0.0.12",
+  "omni_voice_version": "0.0.18"
 }

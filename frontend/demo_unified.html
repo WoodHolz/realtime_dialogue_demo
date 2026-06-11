@@ -216,6 +216,23 @@
         <input type="radio" name="volcanoVadProvider" value="livekit_turn_detector" />
         LiveKit turn-detector
       </label>
+      <div id="volcanoLivekitSttOptions" style="margin:4px 0 0 1.25rem; padding:8px 10px; border:1px solid #2a3142; border-radius:6px; display:none;">
+        <div style="font-size:0.82rem; color:#8b93a7; margin-bottom:6px;">ASR（LiveKit 语义判停需文本）</div>
+        <label style="cursor:pointer; display:block; margin-bottom:4px;">
+          <input type="radio" name="volcanoLivekitStt" value="funasr" checked />
+          FunASR SenseVoice（本地 CPU）
+        </label>
+        <label style="cursor:pointer; display:block;">
+          <input type="radio" name="volcanoLivekitStt" value="volc" />
+          豆包流式 ASR（Volc 云端）
+        </label>
+        <div style="margin-top:10px;">
+          <label style="font-size:0.82rem; color:#8b93a7;">
+            EOU threshold（越低越敏感） <span id="volcanoLivekitThresholdVal">0.004</span>
+          </label>
+          <input type="range" id="volcanoLivekitThreshold" min="0.001" max="0.015" step="0.001" value="0.004" style="width:100%; margin-top:4px;" />
+        </div>
+      </div>
     </div>
   </div>
 
@@ -240,6 +257,23 @@
         <input type="radio" name="demoLocalVadProvider" value="livekit_turn_detector" />
         LiveKit turn-detector
       </label>
+      <div id="demoLivekitSttOptions" style="margin:6px 0 0 1.25rem; padding:8px 10px; border:1px solid #2a3142; border-radius:6px; display:none;">
+        <div style="font-size:0.82rem; color:#8b93a7; margin-bottom:6px;">ASR（LiveKit 语义判停需文本）</div>
+        <label style="cursor:pointer; display:block; margin-bottom:4px;">
+          <input type="radio" name="demoLivekitStt" value="funasr" checked />
+          FunASR SenseVoice（本地 CPU）
+        </label>
+        <label style="cursor:pointer; display:block;">
+          <input type="radio" name="demoLivekitStt" value="volc" />
+          豆包流式 ASR（Volc 云端）
+        </label>
+        <div style="margin-top:10px;">
+          <label style="font-size:0.82rem; color:#8b93a7;">
+            EOU threshold（越低越敏感） <span id="demoLivekitThresholdVal">0.004</span>
+          </label>
+          <input type="range" id="demoLivekitThreshold" min="0.001" max="0.015" step="0.001" value="0.004" style="width:100%; margin-top:4px;" />
+        </div>
+      </div>
     </div>
   </div>
 
@@ -389,6 +423,8 @@
       const volcanoVadSection = document.getElementById('volcanoVadSection');
       const omniVadSection = document.getElementById('omniVadSection');
       const demoLocalVadOptions = document.getElementById('demoLocalVadOptions');
+      const volcanoLivekitSttOptions = document.getElementById('volcanoLivekitSttOptions');
+      const demoLivekitSttOptions = document.getElementById('demoLivekitSttOptions');
 
       const TARGET_SAMPLE_RATE = 16000;
       let currentFullChunks = [];
@@ -468,6 +504,42 @@
         return el ? el.value : 'smart_turn_v3';
       }
 
+      function selectedVolcanoLivekitStt() {
+        const el = document.querySelector('input[name="volcanoLivekitStt"]:checked');
+        return el ? el.value : 'funasr';
+      }
+
+      function selectedDemoLivekitStt() {
+        const el = document.querySelector('input[name="demoLivekitStt"]:checked');
+        return el ? el.value : 'funasr';
+      }
+
+      function selectedLivekitTurnThreshold() {
+        const el = isVolcanoEngine()
+          ? document.getElementById('volcanoLivekitThreshold')
+          : document.getElementById('demoLivekitThreshold');
+        return el ? Number(el.value) : 0.004;
+      }
+
+      function syncLivekitThresholdLabels() {
+        const v = selectedLivekitTurnThreshold();
+        const vStr = v.toFixed(3);
+        const volcanoVal = document.getElementById('volcanoLivekitThresholdVal');
+        const demoVal = document.getElementById('demoLivekitThresholdVal');
+        if (volcanoVal) volcanoVal.textContent = vStr;
+        if (demoVal) demoVal.textContent = vStr;
+      }
+
+      function resolvedLivekitSttBackend() {
+        if (isVolcanoEngine()) {
+          return selectedVolcanoVadProvider() === 'livekit_turn_detector' ? selectedVolcanoLivekitStt() : null;
+        }
+        if (selectedDemoOmniVadMode() === 'local' && selectedDemoLocalVadProvider() === 'livekit_turn_detector') {
+          return selectedDemoLivekitStt();
+        }
+        return null;
+      }
+
       function resolvedDemoOmniVadMode() {
         return selectedDemoOmniVadMode() === 'dashscope'
           ? 'dashscope'
@@ -475,11 +547,30 @@
       }
 
       function setVadPickerEnabled(enabled) {
-        ['volcanoVadProvider', 'omniVadMode', 'demoLocalVadProvider'].forEach(function (name) {
+        ['volcanoVadProvider', 'omniVadMode', 'demoLocalVadProvider', 'volcanoLivekitStt', 'demoLivekitStt'].forEach(function (name) {
           document.querySelectorAll('input[name="' + name + '"]').forEach(function (el) {
             el.disabled = !enabled;
           });
         });
+        ['volcanoLivekitThreshold', 'demoLivekitThreshold'].forEach(function (id) {
+          const el = document.getElementById(id);
+          if (el) el.disabled = !enabled;
+        });
+      }
+
+      function updateLivekitSttOptionsVisibility() {
+        const showVolcano =
+          isVolcanoEngine() && selectedVolcanoVadProvider() === 'livekit_turn_detector';
+        if (volcanoLivekitSttOptions) {
+          volcanoLivekitSttOptions.style.display = showVolcano ? 'block' : 'none';
+        }
+        const showOmni =
+          !isVolcanoEngine() &&
+          selectedDemoOmniVadMode() === 'local' &&
+          selectedDemoLocalVadProvider() === 'livekit_turn_detector';
+        if (demoLivekitSttOptions) {
+          demoLivekitSttOptions.style.display = showOmni ? 'block' : 'none';
+        }
       }
 
       function updateVadSectionVisibility() {
@@ -490,6 +581,7 @@
           demoLocalVadOptions.style.display =
             !volcano && selectedDemoOmniVadMode() === 'local' ? 'block' : 'none';
         }
+        updateLivekitSttOptionsVisibility();
       }
 
       function updateEngineLabel() {
@@ -510,11 +602,22 @@
           updateVadSectionVisibility();
         });
       });
-      ['volcanoVadProvider', 'omniVadMode', 'demoLocalVadProvider'].forEach(function (name) {
+      ['volcanoVadProvider', 'omniVadMode', 'demoLocalVadProvider', 'volcanoLivekitStt', 'demoLivekitStt'].forEach(function (name) {
         document.querySelectorAll('input[name="' + name + '"]').forEach(function (el) {
           el.addEventListener('change', updateVadSectionVisibility);
         });
       });
+      ['volcanoLivekitThreshold', 'demoLivekitThreshold'].forEach(function (id) {
+        const el = document.getElementById(id);
+        if (!el) return;
+        el.addEventListener('input', function () {
+          const otherId = id === 'volcanoLivekitThreshold' ? 'demoLivekitThreshold' : 'volcanoLivekitThreshold';
+          const other = document.getElementById(otherId);
+          if (other) other.value = el.value;
+          syncLivekitThresholdLabels();
+        });
+      });
+      syncLivekitThresholdLabels();
       updateEngineLabel();
       updateVadSectionVisibility();
 
@@ -1170,6 +1273,8 @@
         ws.send(JSON.stringify({
           type: 'voice_input_start',
           vad_provider: selectedVolcanoVadProvider(),
+          livekit_stt_backend: resolvedLivekitSttBackend(),
+          livekit_turn_threshold: selectedLivekitTurnThreshold(),
         }));
         setStatus('正在准备录音通道…', 'waiting');
         log('Volcano voice start [source=' + source + ']');
@@ -1206,8 +1311,10 @@
         }
         if (msg.type === 'debug_audio_preview') return true;
         if (msg.type === 'vad_status') {
-          log('VAD status: provider=' + (msg.provider || '-') + ' enabled=' + (!!msg.enabled));
-          vadStateEl.textContent = 'provider=' + (msg.provider || '-') + ' state=' + (msg.enabled ? 'ready' : 'off');
+          const sttHint = msg.stt ? (' stt=' + msg.stt) : '';
+          const thHint = msg.threshold != null ? (' threshold=' + msg.threshold) : '';
+          log('VAD status: provider=' + (msg.provider || '-') + sttHint + thHint + ' enabled=' + (!!msg.enabled));
+          vadStateEl.textContent = 'provider=' + (msg.provider || '-') + (msg.stt ? (' stt=' + msg.stt) : '') + (msg.threshold != null ? (' threshold=' + msg.threshold) : '') + ' state=' + (msg.enabled ? 'ready' : 'off');
           if (!msg.enabled && msg.error) log('VAD error: ' + msg.error, true);
           return true;
         }
@@ -1363,6 +1470,11 @@
               omniCfg.omni_turn_detection_silence_duration_ms = 1100;
             } else {
               omniCfg.vad_provider = omniVad;
+              const livekitStt = resolvedLivekitSttBackend();
+              if (livekitStt) omniCfg.livekit_stt_backend = livekitStt;
+              if (omniVad === 'livekit_turn_detector') {
+                omniCfg.livekit_turn_threshold = selectedLivekitTurnThreshold();
+              }
             }
             ws.send(JSON.stringify(omniCfg));
           }

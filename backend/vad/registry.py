@@ -19,6 +19,8 @@ def create_vad_backend(
     provider: str | None = None,
     *,
     force_embedded_asr: bool | None = None,
+    livekit_stt_backend: str | None = None,
+    livekit_turn_threshold: float | str | None = None,
 ):
     active = normalize_vad_provider(provider) or resolve_vad_provider(override=provider)
     LOG.info("Creating VAD backend: provider=%s (requested=%r)", active, provider)
@@ -34,7 +36,11 @@ def create_vad_backend(
         try:
             from backend.vad.livekit_turn_detector import LivekitTurnDetectorBackend
 
-            return LivekitTurnDetectorBackend(force_embedded_asr=force_embedded_asr)
+            return LivekitTurnDetectorBackend(
+                force_embedded_asr=force_embedded_asr,
+                stt_backend=livekit_stt_backend,
+                turn_threshold=livekit_turn_threshold,
+            )
         except Exception as exc:  # noqa: BLE001
             LOG.warning("LiveKit turn-detector init failed: %s", exc)
             return None

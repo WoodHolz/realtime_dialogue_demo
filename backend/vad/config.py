@@ -191,6 +191,15 @@ def livekit_turn_threshold_override() -> float | None:
     return None
 
 
+def resolve_livekit_turn_threshold(*, override: float | str | None = None) -> float | None:
+    if override is not None and str(override).strip() != "":
+        try:
+            return float(override)
+        except (TypeError, ValueError):
+            pass
+    return livekit_turn_threshold_override()
+
+
 def livekit_turn_embedded_asr_enabled() -> bool:
     env = (os.environ.get("LIVEKIT_TURN_EMBEDDED_ASR", "") or "").strip().lower()
     if env in {"0", "false", "no"}:

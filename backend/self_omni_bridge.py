@@ -387,9 +387,15 @@ class SelfDeployedOmniBridge:
             cfg.get("local_vad_provider"),
         )
         embedded_asr = active_vad == "livekit_turn_detector"
+        livekit_stt = (cfg.get("livekit_stt_backend") or cfg.get("stt_backend") or "").strip() or None
+        livekit_th = cfg.get("livekit_turn_threshold")
+        if livekit_th is None:
+            livekit_th = cfg.get("threshold")
         self._local_vad = create_vad_backend(
             active_vad,
             force_embedded_asr=embedded_asr or None,
+            livekit_stt_backend=livekit_stt,
+            livekit_turn_threshold=livekit_th,
         )
         vad_mode = active_vad
         if self._local_vad is None:
