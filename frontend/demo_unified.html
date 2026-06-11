@@ -172,73 +172,73 @@
 <body class="demo-mode">
   <h1>芝麻背调证明人访谈 · Demo</h1>
   <p style="font-size:0.9rem;">
-    开始对话前选择推理引擎。链路均经 <strong>Hush 降噪</strong> → 本地 VAD / semantic_vad 判停。
+    开始对话前选择推理方案。链路均经降噪与判停处理。
     TTFS 延迟面板内联在本页，<strong>Start Session</strong> 自动启动麦克风。
   </p>
-  <div class="session-status is-idle" id="status" role="status" aria-live="polite">选择推理引擎后点击 Start 建立会话，然后直接说话。</div>
+  <div class="session-status is-idle" id="status" role="status" aria-live="polite">选择推理方案后点击 Start 建立会话，然后直接说话。</div>
   <p class="meta-line">
-    <span>Engine:</span> <span id="engineLabel">火山 T2SBG</span>
+    <span>方案:</span> <span id="engineLabel">方案 A</span>
     <span style="margin-left:12px;">VAD:</span> <span id="vadState">provider=- state=-</span>
   </p>
 
   <div class="section" id="enginePickerSection">
-    <strong>推理引擎（开始对话前选择）</strong>
+    <strong>推理方案（开始对话前选择）</strong>
     <div class="engine-grid">
       <label class="engine-card" id="engineCardVolcano">
         <input type="radio" name="engine" id="engineVolcano" value="volcano" checked />
         <div class="card-head">
-          <div class="title">火山 T2SBG</div>
+          <div class="title">方案 A</div>
           <span class="version" id="volcanoVersion">v__T2SBG_VOICE_VERSION__</span>
         </div>
-        <div class="desc">豆包 ASR → 火山实时语音 TTS。端到端可控 T2S 链路。</div>
-        <span class="tag">Doubao / Volcengine</span>
+        <div class="desc">分步推理：语音识别 → 实时语音合成，端到端可控。</div>
+        <span class="tag">分步链路</span>
       </label>
       <label class="engine-card" id="engineCardOmni35">
         <input type="radio" name="engine" id="engineOmni35" value="omni35" />
         <div class="card-head">
-          <div class="title">Qwen Omni 3.5</div>
+          <div class="title">方案 B</div>
           <span class="version" id="omniVersion">v__OMNI_VOICE_VERSION__</span>
         </div>
-        <div class="desc">Qwen3.5-Omni-Flash-Realtime 直连，DashScope semantic_vad。</div>
-        <span class="tag">DashScope Omni 3.5</span>
+        <div class="desc">一体化实时推理，支持云端语义判停。</div>
+        <span class="tag">一体化链路</span>
       </label>
     </div>
   </div>
 
   <div class="section" id="volcanoVadSection">
-    <strong>判停 / VAD（火山 T2SBG）</strong>
+    <strong>判停 / VAD（方案 A）</strong>
     <div style="margin-top:8px; display:flex; flex-direction:column; gap:6px; font-size:0.9rem;">
       <label style="cursor:pointer;">
         <input type="radio" name="volcanoVadProvider" value="smart_turn_v3" checked />
-        Smart Turn v3（Pipecat，音频 prosody）
+        判停策略 1（韵律分析）
       </label>
       <label style="cursor:pointer;">
         <input type="radio" name="volcanoVadProvider" value="livekit_turn_detector" />
-        LiveKit turn-detector（SenseVoice 本地 STT + Silero）
+        判停策略 2（本地识别）
       </label>
     </div>
   </div>
 
   <div class="section" id="omniVadSection" style="display:none;">
-    <strong>判停 / VAD（Qwen Omni 3.5）</strong>
+    <strong>判停 / VAD（方案 B）</strong>
     <div style="margin-top:8px; display:flex; flex-direction:column; gap:6px; font-size:0.9rem;">
       <label style="cursor:pointer;">
         <input type="radio" name="omniVadMode" value="dashscope" checked />
-        阿里 DashScope VAD（semantic_vad，默认）
+        云端语义判停（默认）
       </label>
       <label style="cursor:pointer;">
         <input type="radio" name="omniVadMode" value="local" />
-        本地判停（我们部署）
+        本地判停
       </label>
     </div>
     <div id="demoLocalVadOptions" style="margin-top:10px; padding:10px; border:1px solid #2a3142; border-radius:6px; display:none;">
       <label style="cursor:pointer; display:block; margin-bottom:4px;">
         <input type="radio" name="demoLocalVadProvider" value="smart_turn_v3" checked />
-        Smart Turn v3
+        判停策略 1
       </label>
       <label style="cursor:pointer; display:block;">
         <input type="radio" name="demoLocalVadProvider" value="livekit_turn_detector" />
-        LiveKit turn-detector
+        判停策略 2
       </label>
     </div>
   </div>
@@ -252,7 +252,7 @@
   <div class="section">
     <strong>TTFS 麦克风 / 延迟面板（本页内联）</strong>
     <p class="ttfs-hint">
-      <strong>Start Session</strong> 会自动调用 <code>TTFS.startMic()</code> 并 <code>cloneMicForConsumer()</code> 供上行 Omni。端到端延迟 = 麦克风声学结束（Hang ms）→ 扬声器下一次起声；Stop 会 <code>TTFS.stop()</code>。
+      <strong>Start Session</strong> 会自动启动麦克风并克隆音频流供上行推理。端到端延迟 = 麦克风声学结束（Hang ms）→ 扬声器下一次起声。
     </p>
     <div class="ttfs-inline-root">
       <div class="embed-root">
@@ -302,7 +302,7 @@
   </div>
 
   <div class="section">
-    <strong>ASR 实时识别（Omni）</strong>
+    <strong>实时识别（方案 B）</strong>
     <div id="asrPreview" class="transcript" style="min-height:48px; font-size:0.9rem; color:#666;"></div>
   </div>
 
@@ -435,8 +435,8 @@
       });
 
       const ENGINE_LABELS = {
-        volcano: '火山 T2SBG',
-        omni35: 'Qwen Omni 3.5',
+        volcano: '方案 A',
+        omni35: '方案 B',
       };
       const OMNI35_MODEL = 'qwen3.5-omni-flash-realtime';
 
@@ -921,7 +921,7 @@
           if (/失败|Error|error/i.test(text)) resolved = 'error';
           else if (/录音中|请开始说话|已就绪/.test(text)) resolved = 'ready';
           else if (/正在|Connecting|Waiting|请稍候/.test(text)) resolved = 'waiting';
-          else if (/Stopped|Disconnected|点击 Start|选择 Omni/.test(text)) resolved = 'idle';
+          else if (/Stopped|Disconnected|点击 Start|选择推理方案/.test(text)) resolved = 'idle';
           else resolved = 'idle';
         }
         statusEl.classList.add('is-' + resolved);
@@ -1323,7 +1323,7 @@
         if (handleSharedMessage(msg)) return;
         if (msg.type === 'ready') {
           const model = msg.omni_model || OMNI35_MODEL;
-          setStatus('录音中 — 请说话，说完后等待 ' + model + ' 回复', 'recording');
+          setStatus('录音中 — 请说话，说完后等待 ' + (ENGINE_LABELS.omni35 || '方案 B') + ' 回复', 'recording');
           log('ready model=' + model);
           btnSendText.disabled = false;
           btnMonitorSync.disabled = false;
@@ -1337,7 +1337,7 @@
         const url = protocol + '//' + location.host + (volcano ? '/ws' : '/ws-omni');
         ws = new WebSocket(url);
         ws.binaryType = 'arraybuffer';
-        setStatus(volcano ? '正在连接火山 T2SBG…' : '正在连接 Qwen Omni 3.5…', 'waiting');
+        setStatus('正在连接 ' + (ENGINE_LABELS[selectedEngine()] || selectedEngine()) + '…', 'waiting');
 
         ws.onopen = function () {
           if (volcano) {
