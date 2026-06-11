@@ -206,39 +206,39 @@
   </div>
 
   <div class="section" id="volcanoVadSection">
-    <strong>判停 / VAD（方案 A）</strong>
+    <strong>判停 / VAD</strong>
     <div style="margin-top:8px; display:flex; flex-direction:column; gap:6px; font-size:0.9rem;">
       <label style="cursor:pointer;">
         <input type="radio" name="volcanoVadProvider" value="smart_turn_v3" checked />
-        判停策略 1（韵律分析）
+        Smart Turn v3
       </label>
       <label style="cursor:pointer;">
         <input type="radio" name="volcanoVadProvider" value="livekit_turn_detector" />
-        判停策略 2（本地识别）
+        LiveKit turn-detector
       </label>
     </div>
   </div>
 
   <div class="section" id="omniVadSection" style="display:none;">
-    <strong>判停 / VAD（方案 B）</strong>
+    <strong>判停 / VAD</strong>
     <div style="margin-top:8px; display:flex; flex-direction:column; gap:6px; font-size:0.9rem;">
       <label style="cursor:pointer;">
         <input type="radio" name="omniVadMode" value="dashscope" checked />
-        云端语义判停（默认）
+        自带semantic_vad
       </label>
       <label style="cursor:pointer;">
         <input type="radio" name="omniVadMode" value="local" />
-        本地判停
+        自部署
       </label>
     </div>
     <div id="demoLocalVadOptions" style="margin-top:10px; padding:10px; border:1px solid #2a3142; border-radius:6px; display:none;">
       <label style="cursor:pointer; display:block; margin-bottom:4px;">
         <input type="radio" name="demoLocalVadProvider" value="smart_turn_v3" checked />
-        判停策略 1
+        Smart Turn v3
       </label>
       <label style="cursor:pointer; display:block;">
         <input type="radio" name="demoLocalVadProvider" value="livekit_turn_detector" />
-        判停策略 2
+        LiveKit turn-detector
       </label>
     </div>
   </div>
