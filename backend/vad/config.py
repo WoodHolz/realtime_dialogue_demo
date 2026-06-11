@@ -140,6 +140,34 @@ def smart_turn_silero_stop_secs() -> float:
     return 0.2
 
 
+def vad_silence_force_secs() -> float:
+    """
+    Sustained silence (seconds) during an active turn before forcing turn end.
+
+    Applies to smart_turn_v3 and livekit_turn_detector after semantic EOU rejects.
+    Set to 0 to disable (semantic-only endpointing).
+    """
+    env = (os.environ.get("VAD_SILENCE_FORCE_SECS", "") or "").strip()
+    if env:
+        try:
+            return max(0.0, float(env))
+        except ValueError:
+            pass
+    cfg = _load_vad_json()
+    if cfg.get("silence_force_secs") is not None:
+        try:
+            return max(0.0, float(cfg["silence_force_secs"]))
+        except (TypeError, ValueError):
+            pass
+    smart_turn = cfg.get("smart_turn") or {}
+    if isinstance(smart_turn, dict) and smart_turn.get("silence_force_secs") is not None:
+        try:
+            return max(0.0, float(smart_turn["silence_force_secs"]))
+        except (TypeError, ValueError):
+            pass
+    return 1.0
+
+
 def smart_turn_silero_confidence() -> float:
     env = (os.environ.get("SMART_TURN_SILERO_CONFIDENCE", "") or "").strip()
     if env:

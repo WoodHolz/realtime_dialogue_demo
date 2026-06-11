@@ -14,7 +14,9 @@ from backend.vad.config import (
     smart_turn_model_path,
     smart_turn_silero_confidence,
     smart_turn_silero_stop_secs,
+    vad_silence_force_secs,
 )
+from backend.vad.silence_force import SilenceForceTracker
 from backend.vad.types import VadEvent
 
 LOG = logging.getLogger(__name__)
@@ -50,22 +52,64 @@ class SmartTurnV3Backend:
         self._pcm_buf = bytearray()
         self._prev_vad = VADState.QUIET
         self._turn_active = False
+        self._silence_force = SilenceForceTracker(vad_silence_force_secs())
 
     async def start_session(self, session_id: str) -> dict[str, Any]:
         del session_id  # stateless per websocket turn; reset analyzers each start
         self._pcm_buf.clear()
         self._prev_vad = VADState.QUIET
         self._turn_active = False
+        self._silence_force.reset()
         self._silero.set_sample_rate(_SAMPLE_RATE)
         self._turn.set_sample_rate(_SAMPLE_RATE)
         self._turn.clear()
-        LOG.info("Smart Turn v3 session started")
+        LOG.info(
+            "Smart Turn v3 session started (silence_force_secs=%s)",
+            vad_silence_force_secs(),
+        )
         return {
             "provider": self.provider,
             "enabled": True,
             "mode": "local",
             "model": "smart-turn-v3.2-cpu",
+            "silence_force_secs": vad_silence_force_secs(),
         }
+
+    def _frame_duration_ms(self, frame_bytes: int) -> float:
+        return (frame_bytes / 2) / _SAMPLE_RATE * 1000.0
+
+    def _track_silence(self, *, is_speech: bool, frame_ms: float) -> None:
+        if not self._turn_active:
+            return
+        if is_speech:
+            self._silence_force.reset()
+        else:
+            self._silence_force.tick(frame_ms)
+
+    def _emit_turn_end(
+        self,
+        events: list[VadEvent],
+        meta: dict[str, Any] | None = None,
+        *,
+        forced: bool = False,
+    ) -> None:
+        payload = dict(meta or {})
+        if forced:
+            payload.update(self._silence_force.force_meta())
+            LOG.info(
+                "Smart Turn v3 force turn end after %.0fms silence (semantic rejected)",
+                self._silence_force.elapsed_ms,
+            )
+        events.append(
+            VadEvent(
+                kind="turn_end_candidate",
+                provider=self.provider,
+                state="speak",
+                meta=payload,
+            )
+        )
+        self._turn_active = False
+        self._silence_force.reset()
 
     async def feed_pcm_s16le_16k(self, pcm_chunk: bytes) -> list[VadEvent]:
         if not pcm_chunk:
@@ -78,10 +122,12 @@ class SmartTurnV3Backend:
         while len(self._pcm_buf) >= frame_bytes:
             frame = bytes(self._pcm_buf[:frame_bytes])
             del self._pcm_buf[:frame_bytes]
+            frame_ms = self._frame_duration_ms(frame_bytes)
 
             vad_state = await self._silero.analyze_audio(frame)
             is_speech = vad_state in (VADState.SPEAKING, VADState.STARTING)
             self._turn.append_audio(frame, is_speech)
+            self._track_silence(is_speech=is_speech, frame_ms=frame_ms)
 
             if vad_state == VADState.SPEAKING and self._prev_vad != VADState.SPEAKING:
                 self._turn.update_vad_start_secs(self._silero.params.start_secs)
@@ -106,15 +152,9 @@ class SmartTurnV3Backend:
                     if prob is not None:
                         meta["probability"] = round(float(prob), 4)
                 if eot == EndOfTurnState.COMPLETE:
-                    events.append(
-                        VadEvent(
-                            kind="turn_end_candidate",
-                            provider=self.provider,
-                            state="speak",
-                            meta=meta,
-                        )
-                    )
-                    self._turn_active = False
+                    self._emit_turn_end(events, meta)
+                elif self._silence_force.reached():
+                    self._emit_turn_end(events, meta, forced=True)
                 else:
                     events.append(
                         VadEvent(
@@ -124,6 +164,13 @@ class SmartTurnV3Backend:
                             meta=meta,
                         )
                     )
+            elif (
+                vad_state == VADState.QUIET
+                and self._prev_vad == VADState.QUIET
+                and self._turn_active
+                and self._silence_force.reached()
+            ):
+                self._emit_turn_end(events, forced=True)
 
             self._prev_vad = vad_state
 
@@ -133,6 +180,7 @@ class SmartTurnV3Backend:
         self._pcm_buf.clear()
         self._prev_vad = VADState.QUIET
         self._turn_active = False
+        self._silence_force.reset()
         try:
             await self._silero.cleanup()
         except Exception:

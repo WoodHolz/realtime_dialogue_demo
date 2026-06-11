@@ -20,8 +20,10 @@ from backend.vad.config import (
     resolve_livekit_turn_threshold,
     smart_turn_silero_confidence,
     smart_turn_silero_stop_secs,
+    vad_silence_force_secs,
 )
 from backend.vad.livekit_eou_model import build_chat_ctx, get_livekit_eou_model
+from backend.vad.silence_force import SilenceForceTracker
 from backend.vad.types import VadEvent
 
 LOG = logging.getLogger(__name__)
@@ -71,6 +73,7 @@ class LivekitTurnDetectorBackend:
 
         self._stt_session = None
         self._stt_buffer = bytearray()
+        self._silence_force = SilenceForceTracker(vad_silence_force_secs())
 
     def update_user_transcript(self, text: str) -> None:
         """Feed partial/final ASR text from the outer pipeline (t2s mode)."""
@@ -92,15 +95,17 @@ class LivekitTurnDetectorBackend:
         self._user_transcript = ""
         self._external_transcript = False
         self._stt_buffer.clear()
+        self._silence_force.reset()
         self._silero.set_sample_rate(_SAMPLE_RATE)
         effective_threshold = self._eou.threshold_for_language(
             self._language,
             override=self._threshold_override,
         )
         LOG.info(
-            "LiveKit turn-detector session started (eou_lang=%s threshold=%s stt=%s/%s/%s)",
+            "LiveKit turn-detector session started (eou_lang=%s threshold=%s silence_force_secs=%s stt=%s/%s/%s)",
             self._language,
             effective_threshold,
+            vad_silence_force_secs(),
             self._stt_backend,
             livekit_turn_stt_model_label(self._stt_backend),
             livekit_turn_stt_language_label(self._stt_backend),
@@ -113,6 +118,7 @@ class LivekitTurnDetectorBackend:
             "revision": "v0.4.1-intl",
             "language": self._language,
             "threshold": effective_threshold,
+            "silence_force_secs": vad_silence_force_secs(),
             "stt": self._stt_backend,
             "stt_model": livekit_turn_stt_model_label(self._stt_backend),
             "stt_language": livekit_turn_stt_language_label(self._stt_backend),
@@ -188,6 +194,42 @@ class LivekitTurnDetectorBackend:
             meta["input_preview"] = formatted[-120:]
         return prob >= threshold, meta
 
+    def _frame_duration_ms(self, frame_bytes: int) -> float:
+        return (frame_bytes / 2) / _SAMPLE_RATE * 1000.0
+
+    def _track_silence(self, *, is_speech: bool, frame_ms: float) -> None:
+        if not self._turn_active:
+            return
+        if is_speech:
+            self._silence_force.reset()
+        else:
+            self._silence_force.tick(frame_ms)
+
+    def _emit_turn_end(
+        self,
+        events: list[VadEvent],
+        meta: dict[str, Any] | None = None,
+        *,
+        forced: bool = False,
+    ) -> None:
+        payload = dict(meta or {})
+        if forced:
+            payload.update(self._silence_force.force_meta())
+            LOG.info(
+                "LiveKit turn-detector force turn end after %.0fms silence (semantic rejected)",
+                self._silence_force.elapsed_ms,
+            )
+        events.append(
+            VadEvent(
+                kind="turn_end_candidate",
+                provider=self.provider,
+                state="speak",
+                meta=payload,
+            )
+        )
+        self._turn_active = False
+        self._silence_force.reset()
+
     async def feed_pcm_s16le_16k(self, pcm_chunk: bytes) -> list[VadEvent]:
         if not pcm_chunk:
             return []
@@ -201,6 +243,9 @@ class LivekitTurnDetectorBackend:
             del self._pcm_buf[:frame_bytes]
 
             vad_state = await self._silero.analyze_audio(frame)
+            is_speech = vad_state in (VADState.SPEAKING, VADState.STARTING)
+            frame_ms = self._frame_duration_ms(frame_bytes)
+            self._track_silence(is_speech=is_speech, frame_ms=frame_ms)
 
             if vad_state == VADState.SPEAKING and self._prev_vad != VADState.SPEAKING:
                 self._turn_active = True
@@ -232,15 +277,9 @@ class LivekitTurnDetectorBackend:
 
                 complete, meta = await self._predict_turn_complete()
                 if complete:
-                    events.append(
-                        VadEvent(
-                            kind="turn_end_candidate",
-                            provider=self.provider,
-                            state="speak",
-                            meta=meta,
-                        )
-                    )
-                    self._turn_active = False
+                    self._emit_turn_end(events, meta)
+                elif self._silence_force.reached():
+                    self._emit_turn_end(events, meta, forced=True)
                 else:
                     events.append(
                         VadEvent(
@@ -250,6 +289,13 @@ class LivekitTurnDetectorBackend:
                             meta=meta,
                         )
                     )
+            elif (
+                vad_state == VADState.QUIET
+                and self._prev_vad == VADState.QUIET
+                and self._turn_active
+                and self._silence_force.reached()
+            ):
+                self._emit_turn_end(events, forced=True)
 
             self._prev_vad = vad_state
 
@@ -261,6 +307,7 @@ class LivekitTurnDetectorBackend:
         self._prev_vad = VADState.QUIET
         self._turn_active = False
         self._user_transcript = ""
+        self._silence_force.reset()
         try:
             await self._silero.cleanup()
         except Exception:

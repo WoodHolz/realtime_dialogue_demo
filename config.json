@@ -51,8 +51,10 @@
     }
   },
   "vad": {
-    "description": "VAD provider: smart_turn_v3 (default), livekit_turn_detector, or duplug. Used by t2sbg and t2sbg-omni. Env: VAD_PROVIDER, SMART_TURN_*, LIVEKIT_TURN_*.",
+    "description": "VAD provider: smart_turn_v3 (default), livekit_turn_detector, or duplug. Used by t2sbg and t2sbg-omni. Env: VAD_PROVIDER, SMART_TURN_*, LIVEKIT_TURN_*, VAD_SILENCE_FORCE_SECS.",
     "provider": "smart_turn_v3",
+    "silence_force_secs": 1.0,
+    "silence_force_secs_comment": "Sustained silence during an active turn before forcing turn end when semantic EOU rejects. 0 = semantic-only.",
     "smart_turn": {
       "model_path": null,
       "cpu_count": 1,
