@@ -194,8 +194,8 @@
           <div class="title">方案 A</div>
           <span class="version" id="volcanoVersion">v__T2SBG_VOICE_VERSION__</span>
         </div>
-        <div class="desc">分步推理：语音识别 → 实时语音合成，端到端可控。</div>
-        <span class="tag">分步链路</span>
+        <div class="desc">豆包 3.0 全双工：麦克风流直传，服务端 semantic_vad 判停。</div>
+        <span class="tag">Duplex 3.0</span>
       </label>
       <label class="engine-card" id="engineCardOmni35">
         <input type="radio" name="engine" id="engineOmni35" value="omni35" />
@@ -212,20 +212,13 @@
   <div class="section" id="volcanoVadSection">
     <strong>判停 / VAD</strong>
     <div style="margin-top:8px; display:flex; flex-direction:column; gap:6px; font-size:0.9rem;">
-      <label style="cursor:pointer;">
-        <input type="radio" name="volcanoVadProvider" value="smart_turn_v3" checked />
-        链路1
+      <label style="cursor:default;">
+        <input type="radio" name="volcanoVadProvider" value="duplex_server_vad" checked disabled />
+        豆包 3.0 服务端 semantic_vad
       </label>
-      <label style="cursor:pointer;">
-        <input type="radio" name="volcanoVadProvider" value="livekit_turn_detector" />
-        链路2
-      </label>
-      <div id="volcanoLivekitSttOptions" style="margin:4px 0 0 1.25rem; display:none;">
-        <details class="vad-advanced">
-          <summary>EOU threshold（越低越敏感） <span id="volcanoLivekitThresholdVal">0.004</span></summary>
-          <input type="range" id="volcanoLivekitThreshold" min="0.001" max="0.015" step="0.001" value="0.004" style="width:100%;" />
-        </details>
-      </div>
+      <p style="margin:0; color:#888; font-size:0.85rem; line-height:1.45;">
+        麦克风流直传 duplex 全双工；判停与 ASR 由模型侧完成（<code>conversation.item.input_audio_transcription.*</code>），无需本地 Smart Turn / LiveKit。
+      </p>
     </div>
   </div>
 
@@ -423,8 +416,8 @@
       let micMuted = false;
       let micStreamingStarted = false;
 
-      // Volcano T2SBG path state
-      const AUTO_CONTINUOUS_VOICE = true;
+      const VOLCANO_SERVER_VAD = true;
+      const AUTO_CONTINUOUS_VOICE = !VOLCANO_SERVER_VAD;
       const MIC_SCRIPT_BUFFER_SIZE = 2048;
       let voiceCapturing = false;
       let vadAwaitingFirstPcm = false;
@@ -469,8 +462,7 @@
       }
 
       function selectedVolcanoVadProvider() {
-        const el = document.querySelector('input[name="volcanoVadProvider"]:checked');
-        return el ? el.value : 'smart_turn_v3';
+        return 'duplex_server_vad';
       }
 
       function selectedDemoOmniVadMode() {
@@ -500,9 +492,7 @@
       }
 
       function resolvedLivekitSttBackend() {
-        if (isVolcanoEngine()) {
-          return selectedVolcanoVadProvider() === 'livekit_turn_detector' ? 'volc' : null;
-        }
+        if (isVolcanoEngine()) return null;
         if (selectedDemoOmniVadMode() === 'local' && selectedDemoLocalVadProvider() === 'livekit_turn_detector') {
           return 'volc';
         }
@@ -528,11 +518,7 @@
       }
 
       function updateLivekitSttOptionsVisibility() {
-        const showVolcano =
-          isVolcanoEngine() && selectedVolcanoVadProvider() === 'livekit_turn_detector';
-        if (volcanoLivekitSttOptions) {
-          volcanoLivekitSttOptions.style.display = showVolcano ? 'block' : 'none';
-        }
+        if (volcanoLivekitSttOptions) volcanoLivekitSttOptions.style.display = 'none';
         const showOmni =
           !isVolcanoEngine() &&
           selectedDemoOmniVadMode() === 'local' &&
@@ -1359,27 +1345,32 @@
 
       function handleVolcanoMessage(msg) {
         if (handleSharedMessage(msg)) {
-          if (msg.type === 'tts_start' && AUTO_CONTINUOUS_VOICE) {
+          if (!VOLCANO_SERVER_VAD && msg.type === 'tts_start' && AUTO_CONTINUOUS_VOICE) {
             setTimeout(function () { requestVolcanoVoiceStart('tts_start_barge_listen'); }, 20);
-          } else if (msg.type === 'tts_end' && AUTO_CONTINUOUS_VOICE) {
+          } else if (!VOLCANO_SERVER_VAD && msg.type === 'tts_end' && AUTO_CONTINUOUS_VOICE) {
             setTimeout(function () { requestVolcanoVoiceStart('tts_end'); }, 50);
           }
           return;
         }
         if (msg.type === 'ready') {
-          log('Session ' + (msg.session_id || '-') + ' mode=' + (msg.mode || 't2s'));
+          log('Session ' + (msg.session_id || '-') + ' mode=' + (msg.mode || 'e2e') +
+            ' duplex_server_vad=' + (msg.duplex_server_vad !== false));
           btnSendText.disabled = false;
           btnMonitorSync.disabled = false;
-          if (msg.recording_ready) {
-            setStatus('已就绪，请开始说话。', 'ready');
-            requestVolcanoVoiceStart('ready');
+          if (msg.recording_ready || VOLCANO_SERVER_VAD) {
+            setStatus('已就绪，请开始说话（服务端 semantic_vad）。', 'ready');
+            startTurnRecordingCache();
+            voiceCapturing = true;
+            vadAwaitingFirstPcm = true;
+            sendAudioConfig(TARGET_SAMPLE_RATE);
+            startVolcanoAudioProcessor();
           } else {
             setStatus('会话已建立，正在启动 VAD 与语音识别…', 'waiting');
           }
-        } else if (msg.type === 'session_preparing') {
+        } else if (msg.type === 'session_preparing' && !VOLCANO_SERVER_VAD) {
           setStatus(msg.message || '正在初始化语音通道…', 'waiting');
           requestVolcanoVoiceStart('session_preparing');
-        } else if (msg.type === 'voice_input_started') {
+        } else if (msg.type === 'voice_input_started' && !VOLCANO_SERVER_VAD) {
           startTurnRecordingCache();
           asrPreviewEl.textContent = '';
           setStatus('录音中 — 请说话，说完后自动发送', 'recording');
@@ -1393,11 +1384,11 @@
         } else if (msg.type === 'voice_input_complete_suggested') {
           stopVolcanoVoiceCapture();
           log('Server VAD completed [source=' + (msg.source || '-') + ']');
-        } else if (msg.type === 'voice_turn_finished') {
+        } else if (msg.type === 'voice_turn_finished' && !VOLCANO_SERVER_VAD) {
           if (AUTO_CONTINUOUS_VOICE && !msg.asr_text_sent) {
             setTimeout(function () { requestVolcanoVoiceStart('asr_empty'); }, 50);
           }
-        } else if (msg.type === 'local_asr_text') {
+        } else if (msg.type === 'local_asr_text' && !VOLCANO_SERVER_VAD) {
           asrPreviewEl.textContent = msg.text || '';
           appendUserTranscript(msg.text || '');
         }
@@ -1434,7 +1425,9 @@
         ws.onopen = function () {
           if (volcano) {
             ws.send(JSON.stringify({
-              mode: 't2s',
+              mode: 'e2e',
+              duplex_server_vad: true,
+              volcano_vad: 'semantic_vad',
               system_role: DEFAULT_SYSTEM_ROLE,
               speaking_style: DEFAULT_SPEAKING_STYLE,
               external_followup_enabled: false,

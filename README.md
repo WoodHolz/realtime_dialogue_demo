@@ -1,6 +1,6 @@
 # AI Interviewer Realtime Voice Demo
 
-Web demo of an **AI technical interviewer** using the **Doubao (豆包) Realtime Voice API** (火山引擎端到端实时语音大模型). The app supports two modes and tests prompt controllability, dynamic prompt updates, follow-up questioning, and barge-in.
+Web demo of an **AI technical interviewer** using the **Doubao (豆包) Realtime Voice API 3.0** (火山引擎端到端实时语音大模型 Seeduplex 全双工). The app supports two modes and tests prompt controllability, dynamic prompt updates, follow-up questioning, and barge-in.
 
 ## Architecture
 
@@ -9,9 +9,9 @@ Browser (Gradio UI / Voice page)
      │ WebSocket (audio + control)
      ▼
 Python Backend (FastAPI)
-     │ WebSocket (binary protocol)
+     │ WebSocket (JSON duplex protocol)
      ▼
-Doubao Realtime Voice API
+Doubao Realtime Voice API 3.0 (wss://.../duplex/realtime/dialogue)
 ```
 
 - **Frontend**: Gradio (mode, stage, system prompt) + standalone real-time voice page (WebSocket, mic, transcript, playback).
@@ -39,11 +39,13 @@ Doubao Realtime Voice API
    Create a `.env` or export:
 
    ```bash
+   export DOUBAO_API_KEY="your-api-key"
+   # Optional: ASR for t2sbg external ASR path
    export DOUBAO_APP_ID="your-app-id"
    export DOUBAO_ACCESS_KEY="your-access-key"
    ```
 
-   Get these from the [Volc Engine Console](https://www.volcengine.com/docs/6561/196768).
+   Get `DOUBAO_API_KEY` from [Volcengine Console → API Key 管理](https://console.volcengine.com/speech/new/setting/apikeys). See [duplex 3.0 docs](https://www.volcengine.com/docs/6561/2549732).
 
 2. **Install** (recommend a virtualenv)
 
@@ -73,8 +75,9 @@ Then open:
 ai_interviewer_demo/
   backend/
     server.py           # FastAPI + WebSocket bridge
-    realtime_client.py  # Doubao API WebSocket client
-    protocol.py         # Binary protocol encode/decode
+    duplex_client.py  # Doubao API 3.0 duplex JSON WebSocket client
+    realtime_client.py  # Legacy binary protocol client (reference)
+    protocol.py         # Legacy binary protocol encode/decode
     audio_stream.py     # PCM chunking (16k, 20ms)
     prompt_manager.py  # Stage + custom prompt
     latency_logger.py  # Timestamps per turn
@@ -88,12 +91,15 @@ ai_interviewer_demo/
   requirements.txt
 ```
 
-## API notes (Doubao)
+## API notes (Doubao 3.0 duplex)
 
-- **Audio in**: PCM 16 kHz, mono, s16le; recommended 20 ms per chunk (640 bytes).
-- **Audio out**: Configured as PCM 24 kHz s16le for easier browser playback (optional in `realtime_client.py`).
-- **Barge-in**: Server sends ASRInfo when user starts speaking; client should stop TTS playback and handle new input.
-- **Semi mode**: After ASREnded, backend wraps the final ASR text with `wrap_asr_for_semi()` and sends it via ChatTextQuery.
+- **Endpoint**: `wss://openspeech.bytedance.com/api/v3/duplex/realtime/dialogue`
+- **Auth**: `X-Api-Key` header (new console)
+- **Model**: `1.2.6.0` (Seeduplex full-duplex)
+- **Audio in**: PCM 16 kHz, mono, s16le; recommended 20 ms per chunk (640 bytes), Base64 in JSON.
+- **Audio out**: PCM 24 kHz s16le (Base64 in `response.output_audio.delta`).
+- **Barge-in**: Server sends `conversation.item.input_audio_transcription.started` when user starts speaking.
+- **Semi / t2s text**: User text is sent via `conversation.item.create` (replaces legacy ChatTextQuery 501).
 
 ## Verification: 动态 Prompt 控制聊天内容
 

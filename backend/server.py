@@ -26,6 +26,8 @@ import uuid
 from collections import deque
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
+from typing import Any
+
 import numpy as np
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse, FileResponse
@@ -38,7 +40,7 @@ except Exception:  # noqa: BLE001
 from backend.audio_stream import pcm_chunks_from_bytes
 from backend.latency_logger import LatencyLogger
 from backend.prompt_manager import PromptManager
-from backend.realtime_client import RealtimeVoiceClient
+from backend.duplex_client import DuplexVoiceClient
 from backend.followup_client import FollowupQuestionClient
 from backend.omni_bridge import OmniRealtimeBridge
 from backend.self_omni_bridge import SelfDeployedOmniBridge
@@ -99,8 +101,72 @@ VAD_ASR_TARGET_SAMPLE_RATE = 16000
 
 
 
+def _load_doubao_api_key() -> str:
+    """Load Doubao API Key for duplex 3.0 (X-Api-Key) from env or config.json."""
+    api_key = os.environ.get("DOUBAO_API_KEY", "") or ""
+    if api_key:
+        return api_key
+    try:
+        root = Path(__file__).resolve().parent.parent
+        cfg_path = root / "config.json"
+        if cfg_path.exists():
+            with cfg_path.open("r", encoding="utf-8") as f:
+                data = json.load(f)
+            doubao = data.get("doubao", {}) or {}
+            api_key = doubao.get("api_key", "") or ""
+    except Exception:
+        pass
+    return api_key
+
+
+def _load_doubao_duplex_vad_config() -> tuple[bool, int]:
+    """
+    Duplex 3.0 server-side VAD defaults.
+
+    Returns (duplex_server_vad, end_smooth_window_ms).
+  """
+    server_vad = True
+    end_smooth_ms = 1500
+    try:
+        root = Path(__file__).resolve().parent.parent
+        cfg_path = root / "config.json"
+        if cfg_path.exists():
+            with cfg_path.open("r", encoding="utf-8") as f:
+                data = json.load(f)
+            doubao = data.get("doubao", {}) or {}
+            if "duplex_server_vad" in doubao:
+                server_vad = _parse_bool(doubao.get("duplex_server_vad"), default=server_vad)
+            if "end_smooth_window_ms" in doubao:
+                end_smooth_ms = int(doubao.get("end_smooth_window_ms") or end_smooth_ms)
+    except Exception:
+        pass
+    env_sv = os.environ.get("DOUBAO_DUPLEX_SERVER_VAD")
+    if env_sv is not None:
+        server_vad = _parse_bool(env_sv, default=server_vad)
+    env_es = os.environ.get("DOUBAO_END_SMOOTH_WINDOW_MS")
+    if env_es is not None and str(env_es).strip():
+        try:
+            end_smooth_ms = int(env_es)
+        except ValueError:
+            pass
+    end_smooth_ms = max(200, min(5000, end_smooth_ms))
+    return server_vad, end_smooth_ms
+
+
+def _resolve_duplex_server_vad(cfg: dict[str, Any], default: bool) -> bool:
+    """Client cfg overrides config.json default for volcano duplex server VAD."""
+    if "duplex_server_vad" in cfg:
+        return _parse_bool(cfg.get("duplex_server_vad"), default=default)
+    volcano_vad = str(cfg.get("volcano_vad") or cfg.get("vad_mode") or "").strip().lower()
+    if volcano_vad in {"server", "semantic_vad", "duplex", "server_vad", "duplex_server_vad"}:
+        return True
+    if volcano_vad in {"local", "smart_turn_v3", "livekit_turn_detector", "client"}:
+        return False
+    return default
+
+
 def _load_doubao_credentials() -> tuple[str, str]:
-    """Load Doubao APP_ID and ACCESS_KEY from env or config.json."""
+    """Load Doubao APP_ID and ACCESS_KEY (ASR / legacy) from env or config.json."""
     app_id = os.environ.get("DOUBAO_APP_ID", "") or ""
     access_key = os.environ.get("DOUBAO_ACCESS_KEY", "") or ""
 
@@ -343,6 +409,8 @@ def _load_t2s_tts_barge_suppress_ms() -> int:
     return max(100, ms)
 
 
+DOUBAO_API_KEY = _load_doubao_api_key()
+DEFAULT_DUPLEX_SERVER_VAD, DEFAULT_DUPLEX_END_SMOOTH_MS = _load_doubao_duplex_vad_config()
 APP_ID, ACCESS_KEY = _load_doubao_credentials()
 ASR_APP_ID, ASR_ACCESS_KEY = _load_asr_credentials(APP_ID, ACCESS_KEY)
 T2S_DEBUG_AUDIO_DUMP, T2S_DEBUG_AUDIO_DIR = _load_t2s_debug_audio_config()
@@ -706,7 +774,9 @@ async def websocket_endpoint(websocket: WebSocket):
     # 队列里放结构化信息，方便在日志中关联“哪一句回答触发了哪一个追问”
     pending_followups: list[dict] = []
     external_followup_enabled = True
-    client: RealtimeVoiceClient | None = None
+    duplex_server_vad = DEFAULT_DUPLEX_SERVER_VAD
+    duplex_end_smooth_ms = DEFAULT_DUPLEX_END_SMOOTH_MS
+    client: DuplexVoiceClient | None = None
     # 标记当前这一轮模型回复（文本/音频）是否还在进行中，主要用于 one-shot 501 防止抢占打断
     reply_in_progress = False
     barge_in_flag = False
@@ -1556,7 +1626,9 @@ async def websocket_endpoint(websocket: WebSocket):
                 system_role=prompt_manager.get_system_role(),
                 speaking_style=prompt_manager.get_speaking_style(),
                 dialog_id=dialog_id_latest,
-                input_mod="audio",
+                input_mod="audio" if duplex_server_vad else ("text" if mode == "t2s" else "audio"),
+                server_vad=duplex_server_vad,
+                end_smooth_window_ms=duplex_end_smooth_ms,
             )
             sessions.get(conn_id, {})["session_id"] = new_sid
             seen_llm_start_reply_ids.clear()
@@ -1737,14 +1809,20 @@ async def websocket_endpoint(websocket: WebSocket):
                                 }
                             )
 
-                await client.send_text_query(query_base)
+                pcm_turn = bytes(t2s_asr_capture_buffer)
+                merged = query_base.strip() != (text or "").strip()
+                if pcm_turn and not merged:
+                    await client.send_audio_turn(pcm_turn)
+                    send_reason = "t2s_voice_pcm"
+                else:
+                    await client.send_text_query(query_base)
+                    send_reason = "t2s_voice_asr"
                 _append_history("证明人", text)
                 asr_text_sent = True
-                merged = query_base.strip() != (text or "").strip()
                 send_json(
                     {
                         "type": "chat_text_query_sent",
-                        "reason": "t2s_voice_asr",
+                        "reason": send_reason,
                         "trigger": f"voice_input_complete:{source}",
                         "merged_followup": merged,
                     }
@@ -2036,19 +2114,31 @@ async def websocket_endpoint(websocket: WebSocket):
                     system_role=cfg.get("system_role"),
                     speaking_style=cfg.get("speaking_style"),
                 )
+            duplex_server_vad = _resolve_duplex_server_vad(cfg, DEFAULT_DUPLEX_SERVER_VAD)
+            if duplex_server_vad and mode != "semi":
+                mode = "e2e"
         except json.JSONDecodeError:
             pass
 
-        if not APP_ID or not ACCESS_KEY:
+        if not DOUBAO_API_KEY and not (APP_ID and ACCESS_KEY):
             await websocket.send_text(
-                json.dumps({"type": "error", "message": "DOUBAO_APP_ID and DOUBAO_ACCESS_KEY must be set"})
+                json.dumps(
+                    {
+                        "type": "error",
+                        "message": (
+                            "Missing Doubao credentials. Set DOUBAO_API_KEY (new console, X-Api-Key) "
+                            "or DOUBAO_APP_ID + DOUBAO_ACCESS_KEY (legacy console)."
+                        ),
+                    }
+                )
             )
             await websocket.close()
             return
 
-        client = RealtimeVoiceClient(
-            APP_ID,
-            ACCESS_KEY,
+        client = DuplexVoiceClient(
+            api_key=DOUBAO_API_KEY,
+            app_id=APP_ID,
+            access_key=ACCESS_KEY,
             on_asr=on_asr,
             on_asr_ended=on_asr_ended,
             on_tts_audio=on_tts_audio,
@@ -2062,12 +2152,20 @@ async def websocket_endpoint(websocket: WebSocket):
         )
         await client.connect()
         # mode: e2e（语音-语音）, semi（语音+追问）, t2s（外部 ASR → 文本 → 语音）
-        input_mod = "text" if mode == "t2s" else "audio"
-        LOG.info("StartSession with mode=%s input_mod=%s", mode, input_mod)
+        input_mod = "audio" if duplex_server_vad else ("text" if mode == "t2s" else "audio")
+        duplex_input_mod = input_mod
+        LOG.info(
+            "StartSession with mode=%s input_mod=%s duplex_server_vad=%s",
+            mode,
+            input_mod,
+            duplex_server_vad,
+        )
         session_id = await client.start_session(
             system_role=prompt_manager.get_system_role(),
             speaking_style=prompt_manager.get_speaking_style(),
             input_mod=input_mod,
+            server_vad=duplex_server_vad,
+            end_smooth_window_ms=duplex_end_smooth_ms,
         )
         client.start_receive_loop()
         sessions[conn_id] = {
@@ -2083,7 +2181,13 @@ async def websocket_endpoint(websocket: WebSocket):
                 "type": "start_session_config",
                 "mode": mode,
                 "input_mod": input_mod,
+                "duplex_input_mod": duplex_input_mod,
+                "duplex_server_vad": duplex_server_vad,
+                "end_smooth_window_ms": duplex_end_smooth_ms,
                 "session_id": session_id,
+                "api_version": "duplex-3.0",
+                "auth_mode": client.auth_mode(),
+                "model": "1.2.6.0",
                 "followup": followup_client.describe_for_client(),
                 "auto_501_from_asr_enabled": auto_501_from_asr_enabled,
                 "external_followup_enabled": external_followup_enabled,
@@ -2100,7 +2204,8 @@ async def websocket_endpoint(websocket: WebSocket):
                 "type": "ready",
                 "session_id": session_id,
                 "mode": mode,
-                "recording_ready": mode != "t2s",
+                "duplex_server_vad": duplex_server_vad,
+                "recording_ready": mode != "t2s" or duplex_server_vad,
                 "followup": followup_client.describe_for_client(),
                 "auto_501_from_asr_enabled": auto_501_from_asr_enabled,
                 "external_followup_enabled": external_followup_enabled,
@@ -2118,7 +2223,7 @@ async def websocket_endpoint(websocket: WebSocket):
                 else hush_status_payload(ready=False, error=""),
             }
         )
-        if mode == "t2s":
+        if mode == "t2s" and not duplex_server_vad:
             send_json(
                 {
                     "type": "session_preparing",

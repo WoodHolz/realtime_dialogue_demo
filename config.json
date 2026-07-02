@@ -32,7 +32,10 @@
     }
   },
   "doubao": {
-    "description": "Doubao Realtime Voice API. Prefer DOUBAO_* / ASR_* in .env (see .env.example).",
+    "description": "Doubao Realtime Voice API 3.0 (duplex JSON). Set DOUBAO_API_KEY in .env (new console). ASR still uses DOUBAO_APP_ID/ACCESS_KEY or ASR_*.",
+    "api_key": "",
+    "duplex_server_vad": true,
+    "end_smooth_window_ms": 1500,
     "app_id": "",
     "access_key": "",
     "asr_app_id": "",
@@ -93,6 +96,6 @@
     "t2s_min_turn_gap_ms": 300,
     "t2s_tts_barge_suppress_ms": 2000
   },
-  "t2sbg_voice_version": "0.0.13",
+  "t2sbg_voice_version": "3.0.0",
   "omni_voice_version": "0.0.19"
 }
