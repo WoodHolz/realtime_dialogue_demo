@@ -96,6 +96,6 @@
     "t2s_min_turn_gap_ms": 300,
     "t2s_tts_barge_suppress_ms": 2000
   },
-  "t2sbg_voice_version": "3.0.0",
+  "t2sbg_voice_version": "0.0.14",
   "omni_voice_version": "0.0.19"
 }
