@@ -97,5 +97,17 @@
     "t2s_tts_barge_suppress_ms": 2000
   },
   "t2sbg_voice_version": "0.0.14",
-  "omni_voice_version": "0.0.19"
+  "omni_voice_version": "0.0.19",
+  "rlcc": {
+    "description": "容联云 RLCC 呼叫中心。Set RLCC_* in .env. Browser page: /call-center. SDK docs: docs/bg_check_voice_docs/容联云/",
+    "enabled": false,
+    "sdk_base_url": "https://cc.yuntongxun.com/ccc/public/cc_sdk",
+    "login_type": "2",
+    "softphone_type": "2",
+    "forkstream_enabled": false
+  },
+  "outbound": {
+    "description": "Partner API POST /api/v1/calls. Scenario urge_auth uses config/urge_auth_prompt.py. Set PARTNER_API_KEY / OUTBOUND_DRY_RUN in .env.",
+    "default_scenario": "urge_auth"
+  }
 }

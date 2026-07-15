@@ -10,3 +10,4 @@ models/
 .pytest_cache/
 .mypy_cache/
 tmp/
+docs/bg_check_voice_docs/

@@ -80,6 +80,8 @@ from backend.demo_asr_broadcast import (
     schedule_demo_asr_broadcast,
     unregister_demo_asr_viewer,
 )
+from backend.rlcc.routes import router as rlcc_router
+from backend.outbound.routes import router as partner_outbound_router
 
 LOG = logging.getLogger(__name__)
 
@@ -96,6 +98,8 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="AI Interviewer Realtime Voice Demo", lifespan=lifespan)
+app.include_router(rlcc_router)
+app.include_router(partner_outbound_router)
 
 VAD_ASR_TARGET_SAMPLE_RATE = 16000
 
@@ -628,6 +632,15 @@ async def t2sbg_omni_page():
     raw = raw.replace("'__OMNI_VOICE_VERSION__'", json.dumps(_read_omni_voice_version_from_config()))
     raw = _inline_ttfs_script_into_t2sbg_html(raw)
     return HTMLResponse(raw, media_type="text/html; charset=utf-8")
+
+
+@app.get("/call-center")
+async def rlcc_call_page():
+    """容联云 WebRTC 软话机 + 可选 Omni AI 桥接页。"""
+    path = _frontend_dir() / "rlcc_call.html"
+    if not path.exists():
+        return HTMLResponse("<p>rlcc_call.html not found</p>", status_code=404)
+    return FileResponse(path)
 
 
 @app.get("/t2sbg-monitor")
