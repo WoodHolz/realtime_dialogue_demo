@@ -7,10 +7,24 @@ import json
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Sequence
+
+from backend.rlcc.dial import (
+    DEFAULT_ANI,
+    DEFAULT_CALLED_PREFIX,
+    DEFAULT_DISPLAY_POOL,
+)
 
 
 def _md5_lower(text: str) -> str:
     return hashlib.md5(text.encode("utf-8")).hexdigest()
+
+
+def _parse_csv_numbers(raw: str, fallback: Sequence[str] | None = None) -> tuple[str, ...]:
+    parts = [p.strip() for p in (raw or "").replace(";", ",").split(",") if p.strip()]
+    if parts:
+        return tuple(parts)
+    return tuple(fallback or DEFAULT_DISPLAY_POOL)
 
 
 @dataclass(frozen=True)
@@ -32,6 +46,12 @@ class RlccConfig:
     callback_base_url: str = ""
     forkstream_subscribe_url: str = ""
     forkstream_enabled: bool = False
+    # AI 外呼拨号（容联号码池）
+    called_prefix: str = DEFAULT_CALLED_PREFIX
+    ani: str = DEFAULT_ANI
+    display_numbers: tuple[str, ...] = field(default_factory=lambda: tuple(DEFAULT_DISPLAY_POOL))
+    default_display: str = "02180639544"
+    caller_mode: str = "display"
 
     def public_dict(self) -> dict:
         """Non-secret fields exposed to the browser."""
@@ -46,15 +66,24 @@ class RlccConfig:
             "softphone_type": self.softphone_type,
             "forkstream_enabled": self.forkstream_enabled,
             "configured": self.is_configured(),
+            "called_prefix": self.called_prefix,
+            "ani": self.ani,
+            "default_display": self.default_display,
+            "display_numbers": list(self.display_numbers),
+            "caller_mode": self.caller_mode,
         }
 
     def is_configured(self) -> bool:
-        return bool(
-            self.enabled
-            and self.url_3cs
-            and self.company_id
-            and (self.connector_username or self.operator_id)
+        """WebRTC 签入或 CONNECTOR 外呼任一就绪即可。"""
+        if not self.enabled:
+            return False
+        has_connector = bool(
+            self.connector_api and self.connector_username and self.connector_password
         )
+        has_webrtc = bool(
+            self.url_3cs and self.company_id and (self.connector_username or self.operator_id)
+        )
+        return has_connector or has_webrtc
 
     def connector_auth(self) -> tuple[str, str]:
         return self.connector_username, self.connector_password
@@ -109,6 +138,15 @@ def load_rlcc_config() -> RlccConfig:
     callback_base = _env("RLCC_CALLBACK_BASE_URL")
     fork_subscribe = callback_base.rstrip("/") + "/api/rlcc/forkstream/on-call" if callback_base else ""
 
+    pool_raw = _env("RLCC_DISPLAY_NUMBERS") or ",".join(
+        str(x) for x in (cfg.get("display_numbers") or DEFAULT_DISPLAY_POOL)
+    )
+    display_pool = _parse_csv_numbers(pool_raw)
+    default_display = _env("RLCC_DEFAULT_DISPLAY") or str(cfg.get("default_display") or "02180639544")
+    ani = _env("RLCC_ANI") or str(cfg.get("ani") or DEFAULT_ANI)
+    called_prefix = _env("RLCC_CALLED_PREFIX") or str(cfg.get("called_prefix") or DEFAULT_CALLED_PREFIX)
+    caller_mode = _env("RLCC_CALLER_MODE") or str(cfg.get("caller_mode") or "display")
+
     return RlccConfig(
         enabled=_env_bool("RLCC_ENABLED", bool(cfg.get("enabled", False))),
         api_base=api_base,
@@ -127,4 +165,9 @@ def load_rlcc_config() -> RlccConfig:
         callback_base_url=callback_base,
         forkstream_subscribe_url=fork_subscribe,
         forkstream_enabled=_env_bool("RLCC_FORKSTREAM_ENABLED", bool(cfg.get("forkstream_enabled", False))),
+        called_prefix=called_prefix,
+        ani=ani,
+        display_numbers=display_pool,
+        default_display=default_display,
+        caller_mode=caller_mode,
     )

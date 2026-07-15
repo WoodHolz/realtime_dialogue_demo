@@ -38,8 +38,10 @@ class ConnectorRequest(BaseModel):
 class OutboundRequest(BaseModel):
     called: str
     caller: str = ""
+    display: str = ""
     user_data: str = ""
     agent: str = ""
+    apply_dial_plan: bool = True
 
 
 class ForkSubscribeRequest(BaseModel):
@@ -97,8 +99,10 @@ async def rlcc_outbound(req: OutboundRequest) -> dict[str, Any]:
         result = await client.make_call(
             req.called,
             caller=req.caller,
+            display=req.display or req.caller,
             user_data=req.user_data,
             agent=req.agent,
+            apply_dial_plan=req.apply_dial_plan,
         )
     except Exception as exc:
         LOG.exception("RLCC outbound failed")

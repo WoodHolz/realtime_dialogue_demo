@@ -99,12 +99,29 @@
   "t2sbg_voice_version": "0.0.14",
   "omni_voice_version": "0.0.19",
   "rlcc": {
-    "description": "容联云 RLCC 呼叫中心。Set RLCC_* in .env. Browser page: /call-center. SDK docs: docs/bg_check_voice_docs/容联云/",
+    "description": "容联云 AI 外呼：API makecall + 号码池。主叫 ANI=01080435740，被叫前缀 a1，外显号池见 display_numbers。Set RLCC_* in .env.",
     "enabled": false,
     "sdk_base_url": "https://cc.yuntongxun.com/ccc/public/cc_sdk",
     "login_type": "2",
     "softphone_type": "2",
-    "forkstream_enabled": false
+    "forkstream_enabled": false,
+    "called_prefix": "a1",
+    "ani": "01080435740",
+    "caller_mode": "display",
+    "default_display": "02180639544",
+    "display_numbers": [
+      "02180639544",
+      "02180639545",
+      "02180639546",
+      "02180639547",
+      "02180639548",
+      "02160602083",
+      "02160602066",
+      "02160602067",
+      "02160602068",
+      "02160602069",
+      "02160602112"
+    ]
   },
   "outbound": {
     "description": "Partner API POST /api/v1/calls. Scenario urge_auth uses config/urge_auth_prompt.py. Set PARTNER_API_KEY / OUTBOUND_DRY_RUN in .env.",

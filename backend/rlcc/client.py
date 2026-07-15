@@ -70,13 +70,40 @@ class RlccClient:
         user_data: str = "",
         callback_url: str = "",
         agent: str = "",
+        agentcaller: str = "",
+        apply_dial_plan: bool = True,
+        display: str = "",
     ) -> dict[str, Any]:
+        """
+        CONNECTOR makecall.
+        apply_dial_plan=True 时自动：被叫加 a1 前缀、caller 填外显/主叫（按 caller_mode）。
+        """
+        from backend.rlcc.dial import build_dial_plan
+
+        dial = None
+        if apply_dial_plan:
+            dial = build_dial_plan(
+                called,
+                called_prefix=self._config.called_prefix,
+                ani=self._config.ani,
+                display=display or caller,
+                default_display=self._config.default_display,
+                display_pool=self._config.display_numbers,
+                caller_mode=self._config.caller_mode,
+            )
+            called = dial.called
+            caller = dial.caller_for_api
+            if not agentcaller:
+                agentcaller = dial.ani
+
         payload: dict[str, Any] = {
             "cmd": "makecall",
             "called": called,
         }
         if caller:
             payload["caller"] = caller
+        if agentcaller:
+            payload["agentcaller"] = agentcaller
         if user_data:
             payload["userData"] = user_data
         if callback_url:
@@ -85,7 +112,10 @@ class RlccClient:
             payload["callBackUrl"] = self._config.callback_base_url.rstrip("/") + "/api/rlcc/webhook/call-events"
         if agent:
             payload["agent"] = agent
-        return await self.connector_command(payload)
+        result = await self.connector_command(payload)
+        if dial is not None and isinstance(result, dict):
+            result = {**result, "_dial": dial.as_dict()}
+        return result
 
     async def agent_logon(self, *, work_type: int = 1, online: int = 1, callback_url: str = "", agent: str = "") -> dict[str, Any]:
         payload: dict[str, Any] = {

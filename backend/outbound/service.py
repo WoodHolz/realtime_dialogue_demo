@@ -65,6 +65,7 @@ async def create_outbound_call(
     callback_url: str = "",
     payload: dict[str, Any] | None = None,
     dry_run: bool | None = None,
+    display: str = "",
     store: CallStore | None = None,
 ) -> CallTask:
     phone = (phone or "").strip()
@@ -75,6 +76,8 @@ async def create_outbound_call(
         raise ValueError(f"Unsupported scenario: {scenario}. Supported: {sorted(SUPPORTED_SCENARIOS)}")
 
     body = dict(payload or {})
+    if display:
+        body["display"] = display.strip()
     system_role, speaking_style = build_scenario_prompt(scenario, body)
     store = store or get_call_store()
 
@@ -93,12 +96,37 @@ async def create_outbound_call(
     )
     store.put(task)
 
+    # Always attach resolved dial plan for inspection (even dry_run).
+    try:
+        from backend.rlcc.config import load_rlcc_config
+        from backend.rlcc.dial import build_dial_plan
+
+        cfg = load_rlcc_config()
+        dial = build_dial_plan(
+            phone,
+            called_prefix=cfg.called_prefix,
+            ani=cfg.ani,
+            display=str(body.get("display") or ""),
+            default_display=cfg.default_display,
+            display_pool=cfg.display_numbers,
+            caller_mode=cfg.caller_mode,
+        )
+        store.update(task.call_id, telephony={"dial": dial.as_dict()})
+        task = store.get(task.call_id) or task
+    except Exception:
+        LOG.exception("failed to build dial plan for call_id=%s", task.call_id)
+
     if use_dry:
-        LOG.info("outbound dry_run call_id=%s phone=%s", task.call_id, phone)
+        LOG.info(
+            "outbound dry_run call_id=%s phone=%s dial=%s",
+            task.call_id,
+            phone,
+            (task.telephony or {}).get("dial"),
+        )
         return task
 
     await _dispatch_to_rlcc(task, store)
-    return task
+    return store.get(task.call_id) or task
 
 
 async def _dispatch_to_rlcc(task: CallTask, store: CallStore) -> None:
@@ -111,7 +139,11 @@ async def _dispatch_to_rlcc(task: CallTask, store: CallStore) -> None:
             task.call_id,
             status=STATUS_FAILED,
             result=RESULT_FAILED,
-            error="RLCC not configured; set RLCC_ENABLED and credentials, or OUTBOUND_DRY_RUN=true",
+            error=(
+                "RLCC not configured; set RLCC_ENABLED=true and "
+                "RLCC_CONNECTOR_USERNAME/PASSWORD + RLCC_API_BASE (or url_3cs), "
+                "or OUTBOUND_DRY_RUN=true"
+            ),
             finished_at=datetime.now(timezone.utc).isoformat(),
         )
         updated = store.get(task.call_id)
@@ -121,20 +153,30 @@ async def _dispatch_to_rlcc(task: CallTask, store: CallStore) -> None:
 
     store.update(task.call_id, status=STATUS_DIALING)
     client = RlccClient(cfg)
+    display = str((task.payload or {}).get("display") or "")
     user_data = {
         "call_id": task.call_id,
         "scenario": task.scenario,
         "external_id": task.external_id,
+        "phone_raw": task.phone,
+        "ani": cfg.ani,
     }
     import json
 
     try:
         raw = await client.make_call(
             task.phone,
+            display=display,
             user_data=json.dumps(user_data, ensure_ascii=False),
+            apply_dial_plan=True,
         )
-        store.update(task.call_id, rlcc_raw=raw, telephony={"dispatch": raw})
-        LOG.info("RLCC makecall ok call_id=%s raw=%s", task.call_id, raw)
+        dial_meta = raw.pop("_dial", None) if isinstance(raw, dict) else None
+        tel = dict(task.telephony or {})
+        if dial_meta:
+            tel["dial"] = dial_meta
+        tel["dispatch"] = raw
+        store.update(task.call_id, rlcc_raw=raw, telephony=tel)
+        LOG.info("RLCC makecall ok call_id=%s dial=%s raw=%s", task.call_id, dial_meta, raw)
     except Exception as exc:
         LOG.exception("RLCC makecall failed call_id=%s", task.call_id)
         store.update(

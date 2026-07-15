@@ -24,7 +24,7 @@ router = APIRouter(prefix="/api/v1", tags=["partner-outbound"])
 
 
 class CreateCallRequest(BaseModel):
-    phone: str = Field(..., description="被叫手机号")
+    phone: str = Field(..., description="被叫手机号（系统会自动加 a1 前缀）")
     scenario: str = Field(default="urge_auth", description="目前仅支持 urge_auth（催授权）")
     external_id: str = Field(default="", description="合作方侧业务单号，原样回传")
     callback_url: str = Field(default="", description="通话结束后 POST 结果到此地址")
@@ -35,6 +35,10 @@ class CreateCallRequest(BaseModel):
     deadline: str = Field(default="一个工作日内")
     hotline: str = Field(default="", description="答疑回拨号码")
     extra_note: str = Field(default="", description="额外备注，注入剧本")
+    display: str = Field(
+        default="",
+        description="外显号（用户来电显示）；空则用 RLCC_DEFAULT_DISPLAY / 号池第一个",
+    )
     dry_run: bool | None = Field(
         default=None,
         description="true=只建任务不下外呼；默认跟随 OUTBOUND_DRY_RUN / RLCC 配置",
@@ -92,21 +96,24 @@ async def create_call(
             callback_url=req.callback_url,
             payload=payload,
             dry_run=req.dry_run,
+            display=req.display,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
+    dial = (task.telephony or {}).get("dial")
     return {
         "call_id": task.call_id,
         "status": task.status,
         "scenario": task.scenario,
         "external_id": task.external_id or None,
         "dry_run": task.dry_run,
+        "dial": dial,
         "poll_url": f"/api/v1/calls/{task.call_id}",
         "message": (
-            "任务已创建（dry_run，未真实外呼）。用 POST /api/v1/calls/{id}/complete 模拟结果，或 GET 查询。"
+            "任务已创建（dry_run，未真实外呼）。查看 dial 字段确认 a1/外显；可用 POST .../complete 模拟结果。"
             if task.dry_run
-            else "已提交容联云外呼；请轮询 poll_url 或等待 callback_url。"
+            else "已按容联拨号规则提交外呼（被叫加 a1、外显/主叫）；请轮询 poll_url 或等待 callback_url。"
         ),
     }
 
