@@ -620,8 +620,24 @@ async def sip_call_page():
             "scenario": "urge_auth",
             "error": str(exc),
         }
-    boot_json = json.dumps(boot, ensure_ascii=False).replace("</", "<\\/")
-    raw = raw.replace("/*__SIP_CALL_BOOT__*/null", boot_json, 1)
+
+    nums = [str(n).strip() for n in (boot.get("display_numbers") or []) if str(n).strip()]
+    default = str(boot.get("default_display") or (nums[0] if nums else "")).strip()
+    option_html: list[str] = []
+    for n in nums:
+        selected = " selected" if n == default else ""
+        option_html.append(f'<option value="{n}"{selected}>{n}</option>')
+    raw = raw.replace("<!--__DISPLAY_OPTIONS__-->", "\n        ".join(option_html), 1)
+
+    status = (
+        f"已加载 {len(nums)} 个外显号。主叫 ANI={boot.get('ani') or '-'}"
+        if nums
+        else "未配置外显号池，请检查 config.json outbound.display_numbers"
+    )
+    raw = raw.replace("<!--__STATUS_BOOT__-->", status, 1)
+
+    boot_json = json.dumps(boot, ensure_ascii=False).replace("<", "\\u003c")
+    raw = raw.replace("<!--__SIP_CALL_BOOT_JSON__-->", boot_json, 1)
     return HTMLResponse(raw, media_type="text/html; charset=utf-8")
 
 

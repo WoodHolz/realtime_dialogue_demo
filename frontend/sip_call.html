@@ -129,9 +129,6 @@
     }
     .back:hover { text-decoration: underline; }
   </style>
-  <link rel="preconnect" href="https://fonts.googleapis.com" />
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600&family=IBM+Plex+Sans:wght@400;600&display=swap" rel="stylesheet" />
 </head>
 <body>
   <main>
@@ -141,7 +138,9 @@
 
     <form class="panel" id="form">
       <label for="display">外显号</label>
-      <select id="display" required></select>
+      <select id="display" name="display" required>
+        <!--__DISPLAY_OPTIONS__-->
+      </select>
       <p class="hint">号池来自 <code>config.json → outbound.display_numbers</code></p>
 
       <label for="phone">被测手机号</label>
@@ -163,180 +162,150 @@
       <input id="apiKey" type="password" placeholder="PARTNER_API_KEY 为空时可留空" autocomplete="off" />
 
       <button type="submit" id="callBtn">发起外呼</button>
-      <div class="status" id="status">就绪。填写号码后点击发起。</div>
+      <div class="status" id="status"><!--__STATUS_BOOT__--></div>
     </form>
   </main>
 
-    // Server injects config.json dial options here.
-    const SIP_CALL_BOOT = /*__SIP_CALL_BOOT__*/null;
-    const API_BASE = "/outbound/v1";
-
-    const prefixDefault = "a1";
-    let calledPrefix = prefixDefault;
-    let pollTimer = null;
-
-    const el = {
-      display: document.getElementById("display"),
-      phone: document.getElementById("phone"),
-      candidate: document.getElementById("candidate"),
-      client: document.getElementById("client"),
-      apiKey: document.getElementById("apiKey"),
-      calledPreview: document.getElementById("calledPreview"),
-      status: document.getElementById("status"),
-      form: document.getElementById("form"),
-      callBtn: document.getElementById("callBtn"),
-    };
-
-    function headers() {
-      const h = { "Content-Type": "application/json" };
-      const key = (el.apiKey.value || "").trim();
-      if (key) h["X-API-Key"] = key;
-      return h;
-    }
-
-    function normalizePhone(raw) {
-      return String(raw || "").replace(/[\s\-()]/g, "").trim();
-    }
-
-    function withPrefix(phone) {
-      const p = normalizePhone(phone);
-      if (!p) return "";
-      const pref = calledPrefix || prefixDefault;
-      if (p.toLowerCase().startsWith(pref.toLowerCase())) return p;
-      return pref + p.replace(/^\+/, "");
-    }
-
-    function updatePreview() {
-      const called = withPrefix(el.phone.value);
-      el.calledPreview.textContent = called || (calledPrefix + "…");
-    }
-
-    function setStatus(text, isErr) {
-      el.status.textContent = text;
-      el.status.classList.toggle("err", !!isErr);
-    }
-
-    function foreignApiHint(data, rawText) {
-      const looksForeign = (data && data.code === 404 && data.msg) || /"msg"\s*:\s*"Not Found"/.test(rawText || "");
-      if (!looksForeign) return "";
-      return (
-        "\n\n当前页: " + window.location.href +
-        "\n请求: " + API_BASE +
-        "\n返回体像容联/其它网关，不是本服务。请用 http://<主机>:7998/sip-call 打开，并确认 curl " +
-        window.location.origin + API_BASE + "/dial-options 能返回 display_numbers。"
-      );
-    }
-
-    function applyBoot(data) {
-      calledPrefix = data.called_prefix || prefixDefault;
-      const nums = data.display_numbers || [];
-      const def = data.default_display || nums[0] || "";
-      el.display.innerHTML = "";
-      nums.forEach((n) => {
-        const opt = document.createElement("option");
-        opt.value = n;
-        opt.textContent = n;
-        if (n === def) opt.selected = true;
-        el.display.appendChild(opt);
-      });
-      if (!nums.length) {
-        throw new Error("config.json 未配置 outbound.display_numbers");
-      }
-      updatePreview();
-      setStatus(
-        "已加载 " + nums.length + " 个外显号。主叫 ANI=" + (data.ani || "-") +
-        "\nAPI=" + window.location.origin + API_BASE
-      );
-    }
-
-    async function loadOptions() {
-      if (SIP_CALL_BOOT && Array.isArray(SIP_CALL_BOOT.display_numbers) && SIP_CALL_BOOT.display_numbers.length) {
-        applyBoot(SIP_CALL_BOOT);
-        return;
-      }
-      const resp = await fetch(API_BASE + "/dial-options", { headers: headers() });
-      const rawText = await resp.text();
-      let data = {};
-      try { data = JSON.parse(rawText); } catch (_) { data = {}; }
-      if (!resp.ok) {
-        throw new Error("加载外显号池失败: " + resp.status + " " + rawText + foreignApiHint(data, rawText));
-      }
-      applyBoot(data);
-    }
-
-    async function pollCall(callId) {
-      if (pollTimer) clearInterval(pollTimer);
-      pollTimer = setInterval(async () => {
-        try {
-          const resp = await fetch(API_BASE + "/calls/" + callId, { headers: headers() });
-          if (!resp.ok) return;
-          const data = await resp.json();
-          const dial = data.telephony && data.telephony.dial;
-          const sip = data.telephony && data.telephony.sip;
-          let line =
-            "call_id=" + data.call_id +
-            "\nstatus=" + data.status +
-            (data.result ? ("\nresult=" + data.result) : "") +
-            (dial ? ("\ncalled=" + dial.called + " display=" + dial.display) : "");
-          if (sip && sip.error) line += "\nsip=" + sip.error;
-          if (data.error) line += "\nerror=" + data.error;
-          if (data.result_summary) line += "\n" + data.result_summary;
-          setStatus(line, data.status === "failed");
-          if (data.status === "completed" || data.status === "failed") {
-            clearInterval(pollTimer);
-            pollTimer = null;
-            el.callBtn.disabled = false;
-          }
-        } catch (_) { /* keep polling */ }
-      }, 2000);
-    }
-
-    el.phone.addEventListener("input", updatePreview);
-    el.form.addEventListener("submit", async (e) => {
-      e.preventDefault();
-      const phone = normalizePhone(el.phone.value);
-      if (!phone) {
-        setStatus("请填写手机号", true);
-        return;
-      }
-      el.callBtn.disabled = true;
-      setStatus("正在发起外呼…\n实际被叫 " + withPrefix(phone) + "\nPOST " + API_BASE + "/calls");
+  <script type="application/json" id="sip-call-boot"><!--__SIP_CALL_BOOT_JSON__--></script>
+  <script>
+    (function () {
+      var API_BASE = "/outbound/v1";
+      var bootEl = document.getElementById("sip-call-boot");
+      var boot = {};
       try {
-        const resp = await fetch(API_BASE + "/calls", {
-          method: "POST",
-          headers: headers(),
-          body: JSON.stringify({
-            phone,
-            scenario: "urge_auth",
-            display: el.display.value,
-            candidate_name: el.candidate.value.trim() || "张先生",
-            client_name: el.client.value.trim() || "测试公司",
-          }),
-        });
-        const rawText = await resp.text();
-        let data = {};
-        try { data = JSON.parse(rawText); } catch (_) { data = {}; }
-        if (!resp.ok) {
-          throw new Error(
-            (data.detail || rawText || resp.statusText) + foreignApiHint(data, rawText)
-          );
-        }
-        const dial = data.dial || {};
-        setStatus(
-          "已创建 call_id=" + data.call_id +
-          "\nstatus=" + data.status +
-          "\ncalled=" + (dial.called || withPrefix(phone)) +
-          "\ndisplay=" + (dial.display || el.display.value) +
-          "\n轮询中…"
-        );
-        pollCall(data.call_id);
-      } catch (err) {
-        setStatus(String(err.message || err), true);
-        el.callBtn.disabled = false;
+        boot = JSON.parse((bootEl && bootEl.textContent) || "{}");
+      } catch (e) {
+        boot = {};
       }
-    });
+      var calledPrefix = boot.called_prefix || "a1";
+      var pollTimer = null;
 
-    loadOptions().catch((err) => setStatus(String(err.message || err), true));
+      var el = {
+        display: document.getElementById("display"),
+        phone: document.getElementById("phone"),
+        candidate: document.getElementById("candidate"),
+        client: document.getElementById("client"),
+        apiKey: document.getElementById("apiKey"),
+        calledPreview: document.getElementById("calledPreview"),
+        status: document.getElementById("status"),
+        form: document.getElementById("form"),
+        callBtn: document.getElementById("callBtn"),
+      };
+
+      function headers() {
+        var h = { "Content-Type": "application/json" };
+        var key = (el.apiKey.value || "").trim();
+        if (key) h["X-API-Key"] = key;
+        return h;
+      }
+
+      function normalizePhone(raw) {
+        return String(raw || "").replace(/[\s\-()]/g, "").trim();
+      }
+
+      function withPrefix(phone) {
+        var p = normalizePhone(phone);
+        if (!p) return "";
+        if (p.toLowerCase().indexOf(calledPrefix.toLowerCase()) === 0) return p;
+        return calledPrefix + p.replace(/^\+/, "");
+      }
+
+      function updatePreview() {
+        var called = withPrefix(el.phone.value);
+        el.calledPreview.textContent = called || (calledPrefix + "…");
+      }
+
+      function setStatus(text, isErr) {
+        el.status.textContent = text;
+        el.status.classList.toggle("err", !!isErr);
+      }
+
+      function foreignApiHint(data, rawText) {
+        var looksForeign = (data && data.code === 404 && data.msg) || /"msg"\s*:\s*"Not Found"/.test(rawText || "");
+        if (!looksForeign) return "";
+        return (
+          "\n\n当前页: " + window.location.href +
+          "\n请求: " + API_BASE +
+          "\n返回体像其它网关。请确认打开 http://<主机>:7998/sip-call"
+        );
+      }
+
+      function pollCall(callId) {
+        if (pollTimer) clearInterval(pollTimer);
+        pollTimer = setInterval(async function () {
+          try {
+            var resp = await fetch(API_BASE + "/calls/" + callId, { headers: headers() });
+            if (!resp.ok) return;
+            var data = await resp.json();
+            var dial = data.telephony && data.telephony.dial;
+            var sip = data.telephony && data.telephony.sip;
+            var line =
+              "call_id=" + data.call_id +
+              "\nstatus=" + data.status +
+              (data.result ? ("\nresult=" + data.result) : "") +
+              (dial ? ("\ncalled=" + dial.called + " display=" + dial.display) : "");
+            if (sip && sip.error) line += "\nsip=" + sip.error;
+            if (data.error) line += "\nerror=" + data.error;
+            if (data.result_summary) line += "\n" + data.result_summary;
+            setStatus(line, data.status === "failed");
+            if (data.status === "completed" || data.status === "failed") {
+              clearInterval(pollTimer);
+              pollTimer = null;
+              el.callBtn.disabled = false;
+            }
+          } catch (e) { /* keep polling */ }
+        }, 2000);
+      }
+
+      el.phone.addEventListener("input", updatePreview);
+      updatePreview();
+
+      el.form.addEventListener("submit", async function (e) {
+        e.preventDefault();
+        var phone = normalizePhone(el.phone.value);
+        if (!phone) {
+          setStatus("请填写手机号", true);
+          return;
+        }
+        if (!el.display.value) {
+          setStatus("请选择外显号", true);
+          return;
+        }
+        el.callBtn.disabled = true;
+        setStatus("正在发起外呼…\n实际被叫 " + withPrefix(phone) + "\nPOST " + API_BASE + "/calls");
+        try {
+          var resp = await fetch(API_BASE + "/calls", {
+            method: "POST",
+            headers: headers(),
+            body: JSON.stringify({
+              phone: phone,
+              scenario: "urge_auth",
+              display: el.display.value,
+              candidate_name: (el.candidate.value || "").trim() || "张先生",
+              client_name: (el.client.value || "").trim() || "测试公司",
+            }),
+          });
+          var rawText = await resp.text();
+          var data = {};
+          try { data = JSON.parse(rawText); } catch (err) { data = {}; }
+          if (!resp.ok) {
+            throw new Error((data.detail || rawText || resp.statusText) + foreignApiHint(data, rawText));
+          }
+          var dial = data.dial || {};
+          setStatus(
+            "已创建 call_id=" + data.call_id +
+            "\nstatus=" + data.status +
+            "\ncalled=" + (dial.called || withPrefix(phone)) +
+            "\ndisplay=" + (dial.display || el.display.value) +
+            "\n轮询中…"
+          );
+          pollCall(data.call_id);
+        } catch (err) {
+          setStatus(String(err.message || err), true);
+          el.callBtn.disabled = false;
+        }
+      });
+    })();
   </script>
 </body>
 </html>
