@@ -53,11 +53,30 @@ def build_sdp(src_ip: str, rtp_port: int) -> str:
     return "\r\n".join(lines)
 
 
-def parse_sip_messages(buf: bytes) -> list[str]:
-  """Split TCP buffer into SIP messages (header ends with \\r\\n\\r\\n)."""
-  text = buf.decode("utf-8", "replace")
-  parts = re.split(r"(?<=\r\n\r\n)", text)
-  return [p for p in parts if p.strip()]
+def pop_sip_message(buf: str) -> tuple[str | None, str]:
+    """Parse one complete SIP message from TCP buffer (respect Content-Length)."""
+    sep = buf.find("\r\n\r\n")
+    if sep < 0:
+        return None, buf
+    headers = buf[:sep]
+    rest = buf[sep + 4 :]
+    cl_m = re.search(r"(?im)^Content-Length:\s*(\d+)\s*$", headers)
+    body_len = int(cl_m.group(1)) if cl_m else 0
+    if len(rest) < body_len:
+        return None, buf
+    body = rest[:body_len]
+    remainder = rest[body_len:]
+    return headers + "\r\n\r\n" + body, remainder
+
+
+def drain_sip_messages(buf: str) -> tuple[list[str], str]:
+    messages: list[str] = []
+    while True:
+        msg, buf = pop_sip_message(buf)
+        if msg is None:
+            break
+        messages.append(msg)
+    return messages, buf
 
 
 def parse_sdp_rtp(sdp: str) -> tuple[str, int] | None:
@@ -265,8 +284,7 @@ def run_call(args: argparse.Namespace) -> int:
     tcp.settimeout(args.ring_timeout)
     tcp.sendall(invite.encode("utf-8"))
 
-    buf = b""
-    parsed_last: dict[str, Any] = {}
+    buf = ""
     to_uri = f"sip:{called}@{args.dst}"
     contact = None
     to_tag = None
@@ -274,64 +292,88 @@ def run_call(args: argparse.Namespace) -> int:
     remote_rtp: tuple[str, int] | None = None
     answered = False
 
+    def handle_message(msg: str) -> str | None:
+        """Process one SIP message. Return 'answered', 'failed', 'bye', or None."""
+        nonlocal contact, to_tag, record_routes, remote_rtp, answered
+
+        if msg.startswith("BYE "):
+            print("[SIP] received BYE, sending 200 OK")
+            via = re.findall(r"^(Via: .+)$", msg, re.M)
+            from_h = re.search(r"^(From: .+)$", msg, re.M)
+            to_h = re.search(r"^(To: .+)$", msg, re.M)
+            cseq_m = re.search(r"^(CSeq: .+)$", msg, re.M)
+            if from_h and to_h and cseq_m:
+                resp = build_bye_200(
+                    via,
+                    to_h.group(1),
+                    from_h.group(1),
+                    call_id,
+                    cseq_m.group(1),
+                )
+                tcp.sendall(resp.encode("utf-8"))
+            return "bye"
+
+        if not msg.startswith("SIP/2.0"):
+            return None
+
+        status_line = msg.split("\r\n", 1)[0]
+        print(status_line)
+
+        p = parse_response(msg)
+        if p["to_tag"]:
+            to_tag = p["to_tag"]
+        if p["contact"]:
+            contact = p["contact"]
+        if p["record_routes"]:
+            record_routes = p["record_routes"]
+        if p["sdp"]:
+            rtp = parse_sdp_rtp(p["sdp"])
+            if rtp:
+                remote_rtp = rtp
+        if p["servercallid"]:
+            print(f"[SIP] servercallid={p['servercallid']}")
+
+        st = p["status"]
+        if st and st.startswith(("4", "5")) and st != "491":
+            reason = re.search(r"^Reason: (.+)$", msg, re.M)
+            extra = f" ({reason.group(1)})" if reason else ""
+            print(f"[SIP] call failed: {st}{extra}")
+            print(
+                "[hint] 404=被叫路由不到(号码/前缀/白名单); "
+                "403=sipNumber错; 480=缺SDP或不可用. "
+                "确认测试号已加白、被叫格式 a1+手机号."
+            )
+            return "failed"
+
+        if st == "200":
+            answered = True
+            return "answered"
+        return None
+
     deadline = time.time() + args.ring_timeout
     while time.time() < deadline:
         try:
             chunk = tcp.recv(65535)
             if not chunk:
                 break
-            buf += chunk
+            buf += chunk.decode("utf-8", "replace")
         except socket.timeout:
             if answered:
                 break
             continue
 
-        for msg in parse_sip_messages(buf):
-            if not msg.startswith("SIP/2.0") and not msg.startswith("BYE "):
-                continue
-
-            if msg.startswith("BYE "):
-                print("[SIP] received BYE, sending 200 OK")
-                via = re.findall(r"^(Via: .+)$", msg, re.M)
-                from_h = re.search(r"^(From: .+)$", msg, re.M)
-                to_h = re.search(r"^(To: .+)$", msg, re.M)
-                cseq_m = re.search(r"^(CSeq: .+)$", msg, re.M)
-                if from_h and to_h and cseq_m:
-                    # Swap From/To in response
-                    resp = build_bye_200(
-                        via,
-                        to_h.group(1),
-                        from_h.group(1),
-                        call_id,
-                        cseq_m.group(1),
-                    )
-                    tcp.sendall(resp.encode("utf-8"))
-                return 0
-
-            status_line = msg.split("\r\n", 1)[0]
-            print(status_line)
-
-            p = parse_response(msg)
-            if p["to_tag"]:
-                to_tag = p["to_tag"]
-            if p["contact"]:
-                contact = p["contact"]
-            if p["record_routes"]:
-                record_routes = p["record_routes"]
-            if p["sdp"]:
-                remote_rtp = parse_sdp_rtp(p["sdp"])
-            if p["servercallid"]:
-                print(f"[SIP] servercallid={p['servercallid']}")
-
-            if p["status"] == "200":
-                answered = True
+        messages, buf = drain_sip_messages(buf)
+        for msg in messages:
+            result = handle_message(msg)
+            if result == "failed":
+                tcp.close()
+                return 2
+            if result == "answered":
                 break
-
+            if result == "bye":
+                return 0
         if answered:
             break
-        # keep only incomplete tail
-        if b"\r\n\r\n" in buf:
-            buf = buf[buf.rfind(b"\r\n\r\n") + 4 :]
 
     if not answered or not contact or not to_tag:
         print("[SIP] no 200 OK / missing Contact or To tag")
@@ -377,23 +419,13 @@ def run_call(args: argparse.Namespace) -> int:
                 chunk = tcp.recv(65535)
                 if not chunk:
                     break
-                text = chunk.decode("utf-8", "replace")
-                if text.startswith("BYE "):
-                    print("[SIP] BYE during call")
-                    via = re.findall(r"^(Via: .+)$", text, re.M)
-                    from_h = re.search(r"^(From: .+)$", text, re.M)
-                    to_h = re.search(r"^(To: .+)$", text, re.M)
-                    cseq_m = re.search(r"^(CSeq: .+)$", text, re.M)
-                    if from_h and to_h and cseq_m:
-                        resp = build_bye_200(
-                            via,
-                            to_h.group(1),
-                            from_h.group(1),
-                            call_id,
-                            cseq_m.group(1),
-                        )
-                        tcp.sendall(resp.encode("utf-8"))
-                    break
+                buf += chunk.decode("utf-8", "replace")
+                messages, buf = drain_sip_messages(buf)
+                for msg in messages:
+                    if msg.startswith("BYE "):
+                        handle_message(msg)
+                        end = 0
+                        break
             except socket.timeout:
                 continue
     finally:
