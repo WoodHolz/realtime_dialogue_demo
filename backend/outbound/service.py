@@ -1,5 +1,8 @@
 # -*- coding: utf-8 -*-
-"""Outbound call orchestration: partner request → RLCC → AI scenario → result callback."""
+"""Outbound call orchestration: partner request → telephony → AI scenario → result callback.
+
+Telephony backend is selected by TELEPHONY_MODE (sip | rlcc); scenarios only supply prompts.
+"""
 from __future__ import annotations
 
 import logging
@@ -125,7 +128,10 @@ async def create_outbound_call(
         )
         return task
 
-    await _dispatch_to_rlcc(task, store)
+    # TELEPHONY_MODE=sip (default) | rlcc — see backend/sip/dialer.py
+    from backend.sip.dialer import dispatch_outbound_call
+
+    await dispatch_outbound_call(task, store)
     return store.get(task.call_id) or task
 
 
