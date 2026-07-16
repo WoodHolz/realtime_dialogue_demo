@@ -132,7 +132,7 @@
 </head>
 <body>
   <main>
-    <a class="back" href="/">← 返回首页</a>
+    <a class="back" href="../">← 返回首页</a>
     <h1>SIP 外呼测试</h1>
     <p class="lead">选择外显号、填写被测手机号，发起催授权外呼。被叫会自动加 <code>a1</code> 前缀。</p>
 
@@ -168,7 +168,11 @@
   <script type="application/json" id="sip-call-boot"><!--__SIP_CALL_BOOT_JSON__--></script>
   <script>
     (function () {
-      var API_BASE = "/outbound/v1";
+      // Match nginx: /s2s/* -> 127.0.0.1:7998/*  (same as /s2s/demo, /s2s/voice)
+      var pathPrefix = location.pathname.indexOf("/s2s/") === 0 || location.pathname === "/s2s"
+        ? "/s2s"
+        : "";
+      var API_BASE = pathPrefix + "/outbound/v1";
       var bootEl = document.getElementById("sip-call-boot");
       var boot = {};
       try {
@@ -219,7 +223,7 @@
         return (
           "\n\n当前页: " + window.location.href +
           "\n请求: " + API_BASE +
-          "\n返回体像其它网关。请确认打开 http://<主机>:7998/sip-call"
+          "\n返回体像其它网关。请用 https://dev.gameday.tech/s2s/sip-call 或 http://<主机>:7998/sip-call"
         );
       }
 
