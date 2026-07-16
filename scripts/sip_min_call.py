@@ -85,8 +85,9 @@ def main() -> None:
     print("[SIP] ACK sent, call established")
     if result.remote_rtp:
         rip, rport = result.remote_rtp
+        local_port = (result.meta or {}).get("rtp_port", args.rtp_port)
         print(
-            f"[RTP] remote={rip}:{rport} local={args.bind_ip}:{args.rtp_port} "
+            f"[RTP] remote={rip}:{rport} local={args.bind_ip}:{local_port} "
             f"(advertised in SDP: {args.src_ip})"
         )
 

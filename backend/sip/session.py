@@ -12,7 +12,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from backend.sip.config import SipConfig
-from backend.sip.rtp import RtpSession
+from backend.sip.rtp import RtpSession, allocate_rtp_socket
 from backend.sip.signaling import (
     build_ack,
     build_bye,
@@ -74,6 +74,8 @@ class SipCallSession:
         self._cseq = 1
         self._sip_reader: threading.Thread | None = None
         self._on_pcmu: Callable[[bytes], None] | None = None
+        self._rtp_sock: socket.socket | None = None
+        self._local_rtp_port: int = 0
 
     @property
     def result(self) -> SipCallResult:
@@ -86,6 +88,15 @@ class SipCallSession:
     def enqueue_pcmu(self, payload: bytes) -> None:
         if self.rtp:
             self.rtp.enqueue_pcmu(payload)
+
+    def _release_prebound_rtp(self) -> None:
+        sock = self._rtp_sock
+        self._rtp_sock = None
+        if sock and not self.rtp:
+            try:
+                sock.close()
+            except OSError:
+                pass
 
     def dial(
         self,
@@ -100,7 +111,25 @@ class SipCallSession:
         self._on_pcmu = on_pcmu
         called = normalize_called(phone, cfg.called_prefix)
         self._called = called
-        rtp_port = int(rtp_port or cfg.rtp_port)
+        preferred = int(rtp_port or cfg.rtp_port)
+
+        # Bind RTP *before* INVITE so SDP port matches an owned socket.
+        try:
+            self._rtp_sock, rtp_port = allocate_rtp_socket(
+                cfg.bind_ip,
+                preferred,
+                port_count=cfg.rtp_port_count,
+            )
+            self._local_rtp_port = rtp_port
+        except OSError as exc:
+            self._result = SipCallResult(
+                ok=False,
+                called=called,
+                error=f"RTP bind failed: {exc}",
+            )
+            self._done.set()
+            return self._result
+
         sdp = build_sdp(cfg.src_ip, rtp_port)
         branch = f"z9hG4bK{int(time.time() * 1000)}"
         self._from_tag = f"tag{int(time.time())}"
@@ -120,10 +149,18 @@ class SipCallSession:
             sdp=sdp,
         )
 
-        LOG.info("SIP INVITE -> %s@%s:%s", called, cfg.dst_host, cfg.dst_port)
+        LOG.info(
+            "SIP INVITE -> %s@%s:%s (rtp local %s:%s)",
+            called,
+            cfg.dst_host,
+            cfg.dst_port,
+            cfg.bind_ip,
+            rtp_port,
+        )
         try:
             tcp = socket.create_connection((cfg.dst_host, cfg.dst_port), timeout=10)
         except OSError as exc:
+            self._release_prebound_rtp()
             self._result = SipCallResult(ok=False, called=called, error=f"connect failed: {exc}")
             self._done.set()
             return self._result
@@ -167,6 +204,7 @@ class SipCallSession:
                 error=err,
                 servercallid=self._result.servercallid,
             )
+            self._release_prebound_rtp()
             self._close_tcp()
             self._done.set()
             return self._result
@@ -195,6 +233,7 @@ class SipCallSession:
                 error="no remote SDP",
                 servercallid=self._result.servercallid,
             )
+            self._release_prebound_rtp()
             self._close_tcp()
             self._done.set()
             return self._result
@@ -208,13 +247,16 @@ class SipCallSession:
             rtp_port,
             cfg.src_ip,
         )
+        assert self._rtp_sock is not None
         self.rtp = RtpSession(
             rtp_port,
             rip,
             rport,
             bind_ip=cfg.bind_ip,
+            sock=self._rtp_sock,
             on_payload=self._on_pcmu,
         )
+        self._rtp_sock = None  # owned by RtpSession now
         self.rtp.start()
         self._result = SipCallResult(
             ok=True,

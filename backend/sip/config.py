@@ -43,7 +43,9 @@ class SipConfig:
     # Local RTP bind (cloud EIP often cannot bind; use 0.0.0.0).
     bind_ip: str = "0.0.0.0"
     src_sip_port: int = 5070
+    # Preferred RTP port; if busy, try the next rtp_port_count ports before INVITE.
     rtp_port: int = 10000
+    rtp_port_count: int = 50
     from_user: str = DEFAULT_ANI
     called_prefix: str = DEFAULT_CALLED_PREFIX
     ring_timeout_sec: float = 45.0
@@ -59,7 +61,12 @@ class SipConfig:
 def load_sip_config() -> SipConfig:
     """Load SIP settings; fall back to RLCC_ANI / RLCC_CALLED_PREFIX when set."""
     ani = _env("SIP_FROM_USER") or _env("RLCC_ANI") or DEFAULT_ANI
+    # Strip inline comments if someone wrote: SIP_FROM_USER=xxx  # comment
+    if "#" in ani:
+        ani = ani.split("#", 1)[0].strip()
     prefix = _env("SIP_CALLED_PREFIX") or _env("RLCC_CALLED_PREFIX") or DEFAULT_CALLED_PREFIX
+    if "#" in prefix:
+        prefix = prefix.split("#", 1)[0].strip()
     return SipConfig(
         dst_host=_env("SIP_DST_HOST", "124.70.154.200"),
         dst_port=_env_int("SIP_DST_PORT", 5060),
@@ -67,6 +74,7 @@ def load_sip_config() -> SipConfig:
         bind_ip=_env("SIP_BIND_IP", "0.0.0.0"),
         src_sip_port=_env_int("SIP_SRC_PORT", 5070),
         rtp_port=_env_int("SIP_RTP_PORT", 10000),
+        rtp_port_count=_env_int("SIP_RTP_PORT_COUNT", 50),
         from_user=ani,
         called_prefix=prefix,
         ring_timeout_sec=_env_float("SIP_RING_TIMEOUT", 45.0),

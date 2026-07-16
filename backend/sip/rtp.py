@@ -22,6 +22,44 @@ def rtp_packet(seq: int, ts: int, ssrc: int, payload: bytes, *, marker: bool = F
     return header + payload
 
 
+def allocate_rtp_socket(
+    bind_ip: str,
+    preferred_port: int,
+    *,
+    port_count: int = 50,
+) -> tuple[socket.socket, int]:
+    """
+    Bind a UDP socket before SDP/INVITE so the advertised port is actually ours.
+
+    Tries preferred_port .. preferred_port+port_count-1 (even ports preferred for RTP).
+    """
+    if preferred_port <= 0:
+        preferred_port = 10000
+    if port_count < 1:
+        port_count = 1
+    last_err: OSError | None = None
+    for offset in range(port_count):
+        port = preferred_port + offset
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        try:
+            # Do not set SO_REUSEADDR: on Linux UDP it can "succeed" while another
+            # process holds the port, and RTP packets would be split/lost.
+            sock.bind((bind_ip, port))
+            sock.settimeout(0.5)
+            if offset:
+                LOG.info("RTP preferred port busy; bound %s:%s instead", bind_ip, port)
+            return sock, port
+        except OSError as exc:
+            last_err = exc
+            try:
+                sock.close()
+            except OSError:
+                pass
+    raise OSError(
+        f"cannot bind RTP on {bind_ip}:{preferred_port}+{port_count - 1}: {last_err}"
+    ) from last_err
+
+
 class RtpSession:
     """
     Bidirectional PCMU RTP.
@@ -37,12 +75,15 @@ class RtpSession:
         remote_port: int,
         *,
         bind_ip: str = "0.0.0.0",
+        sock: socket.socket | None = None,
         on_payload: Callable[[bytes], None] | None = None,
         ssrc: int = 0xA1C411,
     ) -> None:
-        self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        self.sock.bind((bind_ip, local_port))
-        self.sock.settimeout(0.5)
+        if sock is not None:
+            self.sock = sock
+            self.local_port = int(self.sock.getsockname()[1])
+        else:
+            self.sock, self.local_port = allocate_rtp_socket(bind_ip, local_port, port_count=1)
         self.remote = (remote_ip, remote_port)
         self.seq = 0
         self.ts = 0
