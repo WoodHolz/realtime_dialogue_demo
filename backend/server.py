@@ -598,7 +598,31 @@ async def sip_call_page():
     path = _frontend_dir() / "sip_call.html"
     if not path.exists():
         return HTMLResponse("<p>sip_call.html not found</p>", status_code=404)
-    return FileResponse(path)
+    raw = path.read_text(encoding="utf-8")
+    try:
+        from backend.outbound.dial import load_dial_settings
+
+        cfg = load_dial_settings()
+        boot = {
+            "called_prefix": cfg.called_prefix,
+            "ani": cfg.ani,
+            "default_display": cfg.default_display,
+            "display_numbers": list(cfg.display_numbers),
+            "scenario": "urge_auth",
+        }
+    except Exception as exc:  # noqa: BLE001
+        LOG.warning("sip-call boot config failed: %s", exc)
+        boot = {
+            "called_prefix": "a1",
+            "ani": "",
+            "default_display": "",
+            "display_numbers": [],
+            "scenario": "urge_auth",
+            "error": str(exc),
+        }
+    boot_json = json.dumps(boot, ensure_ascii=False).replace("</", "<\\/")
+    raw = raw.replace("/*__SIP_CALL_BOOT__*/null", boot_json, 1)
+    return HTMLResponse(raw, media_type="text/html; charset=utf-8")
 
 
 @app.get("/voice")
