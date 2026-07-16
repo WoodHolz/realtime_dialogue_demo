@@ -145,7 +145,6 @@
 
       <label for="phone">被测手机号</label>
       <input id="phone" type="tel" inputmode="numeric" placeholder="例如 18324133080" required autocomplete="tel" />
-      <p class="hint">实际拨打：<code id="calledPreview">a1…</code></p>
 
       <div class="row">
         <div>
@@ -186,7 +185,6 @@
         candidate: document.getElementById("candidate"),
         client: document.getElementById("client"),
         apiKey: document.getElementById("apiKey"),
-        calledPreview: document.getElementById("calledPreview"),
         status: document.getElementById("status"),
         form: document.getElementById("form"),
         callBtn: document.getElementById("callBtn"),
@@ -208,11 +206,6 @@
         if (!p) return "";
         if (p.toLowerCase().indexOf(calledPrefix.toLowerCase()) === 0) return p;
         return calledPrefix + p.replace(/^\+/, "");
-      }
-
-      function updatePreview() {
-        var called = withPrefix(el.phone.value);
-        el.calledPreview.textContent = called || (calledPrefix + "…");
       }
 
       function setStatus(text, isErr) {
@@ -256,9 +249,6 @@
           } catch (e) { /* keep polling */ }
         }, 2000);
       }
-
-      el.phone.addEventListener("input", updatePreview);
-      updatePreview();
 
       el.form.addEventListener("submit", async function (e) {
         e.preventDefault();
