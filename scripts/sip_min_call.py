@@ -214,9 +214,17 @@ def rtp_packet(seq: int, ts: int, ssrc: int, payload: bytes) -> bytes:
 
 
 class RtpSession:
-    def __init__(self, local_port: int, remote_ip: str, remote_port: int, src_ip: str) -> None:
+    def __init__(
+        self,
+        local_port: int,
+        remote_ip: str,
+        remote_port: int,
+        *,
+        bind_ip: str = "0.0.0.0",
+    ) -> None:
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        self.sock.bind((src_ip, local_port))
+        # 云主机公网 IP 往往不在本机网卡上：bind 用 0.0.0.0，SDP 里仍写 --src-ip
+        self.sock.bind((bind_ip, local_port))
         self.sock.settimeout(0.5)
         self.remote = (remote_ip, remote_port)
         self.seq = 0
@@ -402,10 +410,10 @@ def run_call(args: argparse.Namespace) -> int:
         return 1
 
     rip, rport = remote_rtp
-    print(f"[RTP] remote={rip}:{rport} local={src_ip}:{args.rtp_port}")
+    print(f"[RTP] remote={rip}:{rport} local={args.bind_ip}:{args.rtp_port} (advertised in SDP: {src_ip})")
 
     # 安全组需放行 UDP rtp_port 入站
-    rtp = RtpSession(args.rtp_port, rip, rport, src_ip)
+    rtp = RtpSession(args.rtp_port, rip, rport, bind_ip=args.bind_ip)
     t_tx = threading.Thread(target=rtp.send_silence_loop, daemon=True)
     t_rx = threading.Thread(target=rtp.recv_loop, daemon=True)
     t_tx.start()
@@ -443,7 +451,16 @@ def main() -> None:
     ap.add_argument("--prefix", default=DEFAULT_CALLED_PREFIX)
     ap.add_argument("--dst", default=DEFAULT_DST)
     ap.add_argument("--dst-port", type=int, default=DEFAULT_DST_PORT)
-    ap.add_argument("--src-ip", default=DEFAULT_SRC_IP)
+    ap.add_argument(
+        "--src-ip",
+        default=DEFAULT_SRC_IP,
+        help="写入 SDP/Contact 的公网 IP（容联看到的媒体地址）",
+    )
+    ap.add_argument(
+        "--bind-ip",
+        default="0.0.0.0",
+        help="本机 RTP socket 绑定地址，云主机一般用 0.0.0.0",
+    )
     ap.add_argument("--src-port", type=int, default=DEFAULT_SRC_SIP_PORT)
     ap.add_argument("--rtp-port", type=int, default=DEFAULT_RTP_PORT)
     ap.add_argument("--from-user", default=DEFAULT_FROM_USER)
