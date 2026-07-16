@@ -16,6 +16,7 @@ from backend.outbound.service import (
     create_outbound_call,
     verify_partner_api_key,
 )
+from backend.outbound.dial import load_dial_settings, normalize_phone
 from backend.outbound.store import get_call_store
 
 LOG = logging.getLogger(__name__)
@@ -72,6 +73,20 @@ async def list_scenarios(x_api_key: str | None = Header(default=None, alias="X-A
     }
 
 
+@router.get("/dial-options")
+async def dial_options(x_api_key: str | None = Header(default=None, alias="X-API-Key")) -> dict[str, Any]:
+    """Web / 联调页：外显号池与默认值（来自 config.json outbound + env）。"""
+    _auth(x_api_key)
+    cfg = load_dial_settings()
+    return {
+        "called_prefix": cfg.called_prefix,
+        "ani": cfg.ani,
+        "default_display": cfg.default_display,
+        "display_numbers": list(cfg.display_numbers),
+        "scenario": "urge_auth",
+    }
+
+
 @router.post("/calls")
 async def create_call(
     req: CreateCallRequest,
@@ -79,6 +94,14 @@ async def create_call(
 ) -> dict[str, Any]:
     """合作方发起一通 AI 外呼。立即返回 call_id；结束后通过轮询或 callback_url 取结果。"""
     _auth(x_api_key)
+    display = normalize_phone(req.display)
+    if display:
+        pool = {normalize_phone(x) for x in load_dial_settings().display_numbers}
+        if display not in pool:
+            raise HTTPException(
+                status_code=400,
+                detail=f"display must be one of config outbound.display_numbers; got {display}",
+            )
     payload = {
         "candidate_name": req.candidate_name,
         "client_name": req.client_name,
@@ -96,7 +119,7 @@ async def create_call(
             callback_url=req.callback_url,
             payload=payload,
             dry_run=req.dry_run,
-            display=req.display,
+            display=display,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

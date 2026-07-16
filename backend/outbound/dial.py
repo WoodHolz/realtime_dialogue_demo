@@ -2,9 +2,11 @@
 """容联直连外呼拨号规则：被叫前缀 a1、主叫 ANI、外显号池（与 SIP 媒体无关）。"""
 from __future__ import annotations
 
+import json
 import os
 import re
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Sequence
 
 
@@ -61,25 +63,49 @@ def _env(name: str, default: str = "") -> str:
     return (os.environ.get(name, default) or default).strip()
 
 
+def _load_outbound_from_config() -> dict:
+    try:
+        root = Path(__file__).resolve().parent.parent.parent
+        cfg_path = root / "config.json"
+        if not cfg_path.exists():
+            return {}
+        with cfg_path.open("r", encoding="utf-8") as f:
+            data = json.load(f)
+        outbound = data.get("outbound") or {}
+        return outbound if isinstance(outbound, dict) else {}
+    except Exception:
+        return {}
+
+
 def load_dial_settings() -> DialSettings:
-    """Env: SIP_* preferred; legacy RLCC_* accepted as fallback."""
+    """Priority: env SIP_* → config.json outbound → defaults."""
+    file_cfg = _load_outbound_from_config()
     ani = _env("SIP_FROM_USER") or _env("RLCC_ANI") or DEFAULT_ANI
     if "#" in ani:
         ani = ani.split("#", 1)[0].strip()
     prefix = _env("SIP_CALLED_PREFIX") or _env("RLCC_CALLED_PREFIX") or DEFAULT_CALLED_PREFIX
     if "#" in prefix:
         prefix = prefix.split("#", 1)[0].strip()
-    default_display = _env("SIP_DEFAULT_DISPLAY") or _env("RLCC_DEFAULT_DISPLAY")
+
+    default_display = (
+        _env("SIP_DEFAULT_DISPLAY")
+        or _env("RLCC_DEFAULT_DISPLAY")
+        or str(file_cfg.get("default_display") or "")
+    )
     pool_raw = _env("SIP_DISPLAY_NUMBERS") or _env("RLCC_DISPLAY_NUMBERS")
     if pool_raw:
         pool = tuple(x.strip() for x in pool_raw.split(",") if x.strip())
     else:
-        pool = DEFAULT_DISPLAY_POOL
+        cfg_pool = file_cfg.get("display_numbers")
+        if isinstance(cfg_pool, list) and cfg_pool:
+            pool = tuple(str(x).strip() for x in cfg_pool if str(x).strip())
+        else:
+            pool = DEFAULT_DISPLAY_POOL
     mode = _env("SIP_CALLER_MODE") or _env("RLCC_CALLER_MODE") or "display"
     return DialSettings(
         called_prefix=prefix,
         ani=ani,
-        default_display=default_display,
+        default_display=default_display or (pool[0] if pool else ""),
         display_numbers=pool,
         caller_mode=mode,
     )

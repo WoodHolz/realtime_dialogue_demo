@@ -101,6 +101,20 @@
   "outbound": {
     "description": "Partner API POST /api/v1/calls → SIP INVITE/RTP + Duplex Agent. Scenario urge_auth uses config/urge_auth_prompt.py. Set SIP_* / PARTNER_API_KEY / OUTBOUND_DRY_RUN in .env.",
     "default_scenario": "urge_auth",
-    "telephony": "sip"
+    "telephony": "sip",
+    "default_display": "02180639544",
+    "display_numbers": [
+      "02180639544",
+      "02180639545",
+      "02180639546",
+      "02180639547",
+      "02180639548",
+      "02160602083",
+      "02160602066",
+      "02160602067",
+      "02160602068",
+      "02160602069",
+      "02160602112"
+    ]
   }
 }

@@ -592,6 +592,15 @@ async def root():
     return FileResponse(_frontend_dir() / "index.html")
 
 
+@app.get("/sip-call")
+async def sip_call_page():
+    """SIP 外呼联调页：选外显号 + 测试手机号。"""
+    path = _frontend_dir() / "sip_call.html"
+    if not path.exists():
+        return HTMLResponse("<p>sip_call.html not found</p>", status_code=404)
+    return FileResponse(path)
+
+
 @app.get("/voice")
 async def voice_page():
     path = _frontend_dir() / "voice.html"
