@@ -167,9 +167,9 @@
     </form>
   </main>
 
-  <script>
-    // Server injects config.json dial options here (avoids depending on /api/v1/dial-options).
+    // Server injects config.json dial options here.
     const SIP_CALL_BOOT = /*__SIP_CALL_BOOT__*/null;
+    const API_BASE = "/outbound/v1";
 
     const prefixDefault = "a1";
     let calledPrefix = prefixDefault;
@@ -216,6 +216,17 @@
       el.status.classList.toggle("err", !!isErr);
     }
 
+    function foreignApiHint(data, rawText) {
+      const looksForeign = (data && data.code === 404 && data.msg) || /"msg"\s*:\s*"Not Found"/.test(rawText || "");
+      if (!looksForeign) return "";
+      return (
+        "\n\n当前页: " + window.location.href +
+        "\n请求: " + API_BASE +
+        "\n返回体像容联/其它网关，不是本服务。请用 http://<主机>:7998/sip-call 打开，并确认 curl " +
+        window.location.origin + API_BASE + "/dial-options 能返回 display_numbers。"
+      );
+    }
+
     function applyBoot(data) {
       calledPrefix = data.called_prefix || prefixDefault;
       const nums = data.display_numbers || [];
@@ -232,7 +243,10 @@
         throw new Error("config.json 未配置 outbound.display_numbers");
       }
       updatePreview();
-      setStatus("已加载 " + nums.length + " 个外显号。主叫 ANI=" + (data.ani || "-"));
+      setStatus(
+        "已加载 " + nums.length + " 个外显号。主叫 ANI=" + (data.ani || "-") +
+        "\nAPI=" + window.location.origin + API_BASE
+      );
     }
 
     async function loadOptions() {
@@ -240,18 +254,12 @@
         applyBoot(SIP_CALL_BOOT);
         return;
       }
-      const resp = await fetch("/api/v1/dial-options", { headers: headers() });
+      const resp = await fetch(API_BASE + "/dial-options", { headers: headers() });
       const rawText = await resp.text();
       let data = {};
       try { data = JSON.parse(rawText); } catch (_) { data = {}; }
       if (!resp.ok) {
-        const looksForeign = data && data.code === 404 && data.msg;
-        throw new Error(
-          "加载外显号池失败: " + resp.status + " " + rawText +
-          (looksForeign
-            ? "\n（这不是本服务的 FastAPI 响应。请确认打开的是 http://<主机>:7998/sip-call ，并已重启 run.py）"
-            : "")
-        );
+        throw new Error("加载外显号池失败: " + resp.status + " " + rawText + foreignApiHint(data, rawText));
       }
       applyBoot(data);
     }
@@ -260,7 +268,7 @@
       if (pollTimer) clearInterval(pollTimer);
       pollTimer = setInterval(async () => {
         try {
-          const resp = await fetch("/api/v1/calls/" + callId, { headers: headers() });
+          const resp = await fetch(API_BASE + "/calls/" + callId, { headers: headers() });
           if (!resp.ok) return;
           const data = await resp.json();
           const dial = data.telephony && data.telephony.dial;
@@ -292,9 +300,9 @@
         return;
       }
       el.callBtn.disabled = true;
-      setStatus("正在发起外呼…\n实际被叫 " + withPrefix(phone));
+      setStatus("正在发起外呼…\n实际被叫 " + withPrefix(phone) + "\nPOST " + API_BASE + "/calls");
       try {
-        const resp = await fetch("/api/v1/calls", {
+        const resp = await fetch(API_BASE + "/calls", {
           method: "POST",
           headers: headers(),
           body: JSON.stringify({
@@ -305,12 +313,12 @@
             client_name: el.client.value.trim() || "测试公司",
           }),
         });
-        const data = await resp.json().catch(() => ({}));
+        const rawText = await resp.text();
+        let data = {};
+        try { data = JSON.parse(rawText); } catch (_) { data = {}; }
         if (!resp.ok) {
-          const looksForeign = data && data.code === 404 && data.msg;
           throw new Error(
-            (data.detail || JSON.stringify(data) || resp.statusText) +
-            (looksForeign ? "\n请确认 API 打到 :7998（本服务），不是 :8000。" : "")
+            (data.detail || rawText || resp.statusText) + foreignApiHint(data, rawText)
           );
         }
         const dial = data.dial || {};

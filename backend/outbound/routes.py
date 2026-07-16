@@ -21,7 +21,7 @@ from backend.outbound.store import get_call_store
 
 LOG = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/api/v1", tags=["partner-outbound"])
+router = APIRouter(prefix="/outbound/v1", tags=["partner-outbound"])
 
 
 class CreateCallRequest(BaseModel):
@@ -132,7 +132,7 @@ async def create_call(
         "external_id": task.external_id or None,
         "dry_run": task.dry_run,
         "dial": dial,
-        "poll_url": f"/api/v1/calls/{task.call_id}",
+        "poll_url": f"/outbound/v1/calls/{task.call_id}",
         "message": (
             "任务已创建（dry_run，未真实外呼）。查看 dial 字段确认 a1/外显；可用 POST .../complete 模拟结果。"
             if task.dry_run

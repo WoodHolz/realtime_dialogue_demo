@@ -34,13 +34,13 @@
 
 ### 4.1 发起通话
 
-- `POST /api/v1/calls`
+- `POST /outbound/v1/calls`
 - 核心入参（示意）：`phone`、`scenario=urge_auth`、`candidate_name`、`client_name`、`external_id`、`callback_url`（可选）及催授权所需业务字段
 - 立即返回：`call_id`、`status`
 
 ### 4.2 获取结果
 
-- **轮询**：`GET /api/v1/calls/{call_id}`
+- **轮询**：`GET /outbound/v1/calls/{call_id}`
 - **回调**（若传入 `callback_url`）：通话结束后 `POST` 结构化结果
 
 ### 4.3 结果内容（最小集）
@@ -78,7 +78,7 @@
 - 产品形态：**SIP 直连外呼**（TCP 5060 INVITE）+ 本进程 RTP（PCMU）↔ Voice Agent；非 CONNECTOR / WebRTC 软话机 / forkstream
 - 我方提供给容联：外呼源公网 IP、RTP UDP 端口段（如 10000–10049）
 - 容联提供给我方：SIP 对端、主叫 ANI、被叫前缀、测试号白名单
-- 联调脚本：`scripts/sip_min_call.py`；业务入口：`POST /api/v1/calls`
+- 联调脚本：`scripts/sip_min_call.py`；业务入口：`POST /outbound/v1/calls`
 - **号码池（已开通示意）**
   - 主叫（ANI）可送：`01080435740`
   - 被叫前缀：`a1`（例：`138xxxx` → API 被叫 `a1138xxxx`）

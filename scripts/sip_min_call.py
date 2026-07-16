@@ -8,7 +8,7 @@
   python3 scripts/sip_min_call.py --called a118324133080 --duration 30
 
 媒体层已抽到 backend/sip/；本脚本仅做静音保活联调（不含 Voice Agent）。
-完整 AI 通话请走 POST /api/v1/calls（SIP + Voice Agent）。
+完整 AI 通话请走 POST /outbound/v1/calls（SIP + Voice Agent）。
 """
 from __future__ import annotations
 
