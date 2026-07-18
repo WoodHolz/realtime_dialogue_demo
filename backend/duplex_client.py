@@ -252,6 +252,7 @@ class DuplexVoiceClient:
         input_mod: str,
         end_smooth_window_ms: int = 1500,
         server_vad: bool = False,
+        recv_timeout: int = 10,
     ) -> dict[str, Any]:
         base = DEFAULT_EXTENSION
         asr_extra = {
@@ -261,7 +262,11 @@ class DuplexVoiceClient:
         if server_vad:
             # Duplex 3.0 server-side endpointing (semantic VAD); disable client custom VAD.
             asr_extra["enable_custom_vad"] = False
-        dialog_extra = {**base["dialog"]["extra"], "input_mod": input_mod}
+        dialog_extra = {
+            **base["dialog"]["extra"],
+            "input_mod": input_mod,
+            "recv_timeout": int(recv_timeout),
+        }
         return {
             "asr": {**base["asr"], "extra": asr_extra},
             "tts": base["tts"],
@@ -292,6 +297,7 @@ class DuplexVoiceClient:
         input_mod: str = "audio",
         server_vad: bool = False,
         end_smooth_window_ms: int = 1500,
+        recv_timeout: int = 10,
     ) -> str:
         if not self._ws or self._ws_is_closed():
             raise RuntimeError("Not connected")
@@ -319,6 +325,7 @@ class DuplexVoiceClient:
             input_mod=resolved_input_mod,
             end_smooth_window_ms=end_smooth_window_ms,
             server_vad=server_vad,
+            recv_timeout=recv_timeout,
         )
         session = {
             "id": session_id,

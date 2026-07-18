@@ -139,6 +139,7 @@ class SipAgentBridge:
             on_asr=self._on_asr,
             on_asr_ended=self._on_asr_ended,
             on_tts_audio=self._on_tts_audio,
+            on_tts_end=self._on_tts_end,
             on_chat_response=self._on_chat_delta,
             on_chat_ended=self._on_chat_ended,
             on_error=lambda m: LOG.warning("agent error call_id=%s: %s", self.call_id, m),
@@ -146,9 +147,11 @@ class SipAgentBridge:
         self._client = client
 
         outcome_error = ""
+        keepalive_task: asyncio.Task | None = None
         try:
             await client.connect()
             client.start_receive_loop()
+            # Phone calls idle between turns; default recv_timeout=10 would drop the dialog.
             sid = await client.start_session(
                 self.system_role,
                 self.speaking_style,
@@ -156,6 +159,7 @@ class SipAgentBridge:
                 dialog_id=self.call_id,
                 input_mod="audio",
                 server_vad=True,
+                recv_timeout=120,
             )
             self._emit("agent_started", session_id=sid)
 
@@ -165,17 +169,32 @@ class SipAgentBridge:
                 await client.send_text_query(self.opening_nudge)
 
             uplink_task = asyncio.create_task(self._uplink_loop(client))
+            keepalive_task = asyncio.create_task(self._silence_keepalive_watchdog(client, session))
             try:
                 await asyncio.to_thread(session.wait_until_done, self.max_call_sec)
                 if not session.is_done:
                     session.hangup(reason="max_duration")
                     outcome_error = "max call duration reached"
+                else:
+                    LOG.info(
+                        "SIP call ended call_id=%s hangup_reason=%s rx=%s tx=%s",
+                        self.call_id,
+                        session.result.hangup_reason,
+                        session.result.rx_packets,
+                        session.result.tx_packets,
+                    )
             finally:
                 self._enqueue_uplink(None)
-                try:
-                    await asyncio.wait_for(uplink_task, timeout=2.0)
-                except (asyncio.TimeoutError, asyncio.CancelledError):
-                    uplink_task.cancel()
+                for task in (keepalive_task, uplink_task):
+                    if task and not task.done():
+                        task.cancel()
+                for task in (keepalive_task, uplink_task):
+                    if not task:
+                        continue
+                    try:
+                        await asyncio.wait_for(task, timeout=2.0)
+                    except (asyncio.TimeoutError, asyncio.CancelledError):
+                        pass
         except Exception as exc:
             LOG.exception("agent bridge failed call_id=%s", self.call_id)
             outcome_error = str(exc)
@@ -235,6 +254,28 @@ class SipAgentBridge:
                 LOG.debug("uplink send_audio failed", exc_info=True)
                 break
 
+    async def _silence_keepalive_watchdog(
+        self,
+        client: DuplexVoiceClient,
+        session: SipCallSession,
+    ) -> None:
+        """
+        Duplex stops silence keepalive after first real mic/RTP audio.
+        On phone calls, gaps between turns exceed recv_timeout and the dialog dies.
+        Restart keepalive whenever it is not running.
+        """
+        try:
+            while not session.is_done:
+                task = getattr(client, "_silence_keepalive_task", None)
+                if task is None or task.done():
+                    try:
+                        await client.start_silence_keepalive()
+                    except Exception:
+                        LOG.debug("restart duplex silence keepalive failed", exc_info=True)
+                await asyncio.sleep(3.0)
+        except asyncio.CancelledError:
+            raise
+
     def _on_asr(self, text: str, is_interim: bool) -> None:
         if is_interim or not text:
             return
@@ -255,6 +296,18 @@ class SipAgentBridge:
         self._assistant_buf = ""
         if text:
             self._transcript.append({"role": "assistant", "text": text})
+
+    def _on_tts_end(self, _meta: dict) -> None:
+        client = self._client
+        if not client:
+            return
+        # After AI finishes speaking, ensure duplex keepalive is running again.
+        try:
+            loop = self._loop
+            if loop and loop.is_running():
+                loop.create_task(client.start_silence_keepalive())
+        except Exception:
+            LOG.debug("tts_end restart keepalive failed", exc_info=True)
 
     def _on_tts_audio(self, pcm24k: bytes) -> None:
         if not pcm24k or not self._session:

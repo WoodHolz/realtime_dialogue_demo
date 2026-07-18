@@ -362,28 +362,78 @@ class SipCallSession:
         return None, remote_rtp
 
     def _read_sip_loop(self) -> None:
+        """Read SIP TCP; send CRLF keepalives so middleboxes don't drop the dialog."""
         tcp = self._tcp
         if not tcp:
             return
         tcp.settimeout(1.0)
+        last_ka = time.time()
+        ka_interval = float(getattr(self.cfg, "sip_keepalive_sec", 10.0) or 10.0)
         while not self._done.is_set():
             try:
+                now = time.time()
+                if now - last_ka >= ka_interval:
+                    try:
+                        # RFC 5626-style double-CRLF keepalive on the SIP TCP flow.
+                        tcp.sendall(b"\r\n\r\n")
+                        last_ka = now
+                        LOG.debug("SIP TCP keepalive sent")
+                    except OSError:
+                        self._finish(hangup_reason="tcp_keepalive_failed")
+                        break
                 chunk = tcp.recv(65535)
                 if not chunk:
                     self._finish(hangup_reason="tcp_closed")
                     break
                 self._buf += chunk.decode("utf-8", "replace")
+                # Peer may echo CRLF keepalives; strip before SIP framing.
+                while self._buf.startswith("\r\n"):
+                    self._buf = self._buf[2:]
                 messages, self._buf = drain_sip_messages(self._buf)
                 for msg in messages:
+                    if not msg.strip():
+                        continue
                     if msg.startswith("BYE "):
                         self._answer_bye(msg)
                         self._finish(hangup_reason="remote_bye")
                         return
+                    if msg.startswith("OPTIONS "):
+                        self._answer_options(msg)
+                        continue
             except socket.timeout:
                 continue
             except OSError:
                 self._finish(hangup_reason="tcp_error")
                 break
+
+    def _answer_options(self, msg: str) -> None:
+        tcp = self._tcp
+        if not tcp:
+            return
+        via = re.findall(r"^(Via: .+)$", msg, re.M)
+        from_h = re.search(r"^(From: .+)$", msg, re.M)
+        to_h = re.search(r"^(To: .+)$", msg, re.M)
+        call_id_m = re.search(r"^(Call-ID: .+)$", msg, re.M)
+        cseq_m = re.search(r"^(CSeq: .+)$", msg, re.M)
+        if not (from_h and to_h and call_id_m and cseq_m):
+            return
+        lines = ["SIP/2.0 200 OK"]
+        lines.extend(via)
+        lines.extend(
+            [
+                from_h.group(1),
+                to_h.group(1),
+                call_id_m.group(1),
+                cseq_m.group(1),
+                "Content-Length: 0",
+                "",
+            ]
+        )
+        try:
+            tcp.sendall("\r\n".join(lines).encode("utf-8"))
+        except OSError:
+            pass
+        LOG.debug("SIP answered OPTIONS with 200 OK")
 
     def _answer_bye(self, msg: str) -> None:
         tcp = self._tcp
