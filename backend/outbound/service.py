@@ -177,7 +177,8 @@ async def complete_call(
     *,
     result: str,
     result_summary: str = "",
-    transcript: list[dict[str, str]] | None = None,
+    transcript: list[dict[str, Any]] | None = None,
+    turn_timings: list[dict[str, Any]] | None = None,
     telephony: dict[str, Any] | None = None,
     error: str = "",
 ) -> CallTask | None:
@@ -199,6 +200,8 @@ async def complete_call(
     }
     if transcript is not None:
         fields["transcript"] = transcript
+    if turn_timings is not None:
+        fields["turn_timings"] = turn_timings
     if error:
         fields["error"] = error
         fields["status"] = STATUS_FAILED

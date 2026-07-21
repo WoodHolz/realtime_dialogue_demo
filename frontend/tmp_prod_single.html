@@ -14,6 +14,9 @@
       --accent-soft: #e7f2ed;
       --card: #ffffff;
       --danger: #9b2c2c;
+      --user: #0f766e;
+      --ai: #b45309;
+      --lat: #1d4ed8;
     }
     * { box-sizing: border-box; }
     body {
@@ -25,7 +28,7 @@
         var(--bg);
       min-height: 100vh;
     }
-    main { width: min(1080px, calc(100% - 2rem)); margin: 2rem auto 3rem; }
+    main { width: min(1180px, calc(100% - 2rem)); margin: 2rem auto 3rem; }
     h1 { margin: 0 0 0.35rem; font-size: 1.6rem; }
     .lead { color: var(--muted); margin: 0 0 1.25rem; line-height: 1.5; }
     .nav {
@@ -36,11 +39,11 @@
     .nav a:hover { text-decoration: underline; }
     .layout {
       display: grid;
-      grid-template-columns: minmax(0, 1fr) minmax(280px, 420px);
+      grid-template-columns: minmax(0, 1fr) minmax(320px, 480px);
       gap: 1rem;
       align-items: start;
     }
-    @media (max-width: 900px) {
+    @media (max-width: 960px) {
       .layout { grid-template-columns: 1fr; }
     }
     .panel {
@@ -63,7 +66,6 @@
       font: inherit; width: 100%;
       border: 1px solid var(--line); border-radius: 8px; padding: 0.6rem 0.75rem;
     }
-    textarea { min-height: 4.5rem; resize: vertical; line-height: 1.45; }
     button {
       background: var(--accent); color: #fff; border: 0; font-weight: 600;
       cursor: pointer; margin-top: 0.85rem;
@@ -94,26 +96,49 @@
       line-height: 1.5;
       white-space: pre-wrap;
     }
-    .ttfs-wrap {
-      border-radius: 10px;
-      overflow: hidden;
-      border: 1px solid #1c2230;
-      background: #0f1218;
-      min-height: 520px;
+    .lat-big {
+      font-size: 1.8rem; font-weight: 700; font-variant-numeric: tabular-nums;
+      color: var(--lat); margin: 0.25rem 0 0.5rem;
     }
-    .ttfs-wrap iframe {
-      display: block;
-      width: 100%;
-      height: 560px;
-      border: 0;
-      background: #0f1218;
+    .lat-list { list-style: none; padding: 0; margin: 0.5rem 0 0; }
+    .lat-list li {
+      font-size: 0.82rem; padding: 0.45rem 0.55rem; border-bottom: 1px solid var(--line);
+      display: flex; justify-content: space-between; gap: 0.5rem;
     }
-    .latency-note {
-      margin-top: 0.55rem;
-      font-size: 0.78rem;
-      color: var(--muted);
-      line-height: 1.45;
+    .lat-list .ms { font-weight: 700; color: var(--lat); white-space: nowrap; }
+    .lat-list .skip { color: var(--muted); font-weight: 600; }
+    canvas#latCanvas {
+      display: block; width: 100%; height: 120px;
+      background: #0f1218; border-radius: 8px; border: 1px solid #1c2230; margin-top: 0.5rem;
     }
+    audio { width: 100%; margin-top: 0.5rem; }
+    .tx {
+      max-height: 420px; overflow: auto; margin-top: 0.5rem;
+      border: 1px solid var(--line); border-radius: 8px; background: #fafcfb;
+    }
+    .tx-item {
+      padding: 0.65rem 0.75rem; border-bottom: 1px solid var(--line);
+      font-size: 0.84rem; line-height: 1.45;
+    }
+    .tx-item:last-child { border-bottom: 0; }
+    .tx-meta {
+      display: flex; flex-wrap: wrap; gap: 0.35rem 0.55rem;
+      font-size: 0.72rem; color: var(--muted); margin-bottom: 0.25rem;
+    }
+    .badge {
+      display: inline-block; padding: 0.05rem 0.4rem; border-radius: 999px;
+      font-weight: 700; font-size: 0.68rem; letter-spacing: 0.02em;
+    }
+    .badge.user { background: #ccfbf1; color: var(--user); }
+    .badge.ai { background: #ffedd5; color: var(--ai); }
+    .badge.opening { background: #e0e7ff; color: #3730a3; }
+    .badge.lat { background: #dbeafe; color: var(--lat); }
+    .interim {
+      margin-top: 0.5rem; padding: 0.55rem 0.7rem; border-radius: 8px;
+      background: #fffbeb; border: 1px dashed #f59e0b;
+      font-size: 0.82rem; color: #92400e; min-height: 1.4rem;
+    }
+    .empty { color: var(--muted); font-size: 0.82rem; padding: 0.75rem; }
   </style>
 </head>
 <body>
@@ -124,7 +149,7 @@
     </nav>
     <h1>tmp-prod · 单人测试</h1>
     <p class="lead">
-      用 tmp-prod 剧本（芝麻背调）打一通外呼验证话术；右侧嵌入既有 TTFS 对话延迟可视化（浏览器麦/扬声器声学链路，与 SIP 手机通路独立）。
+      用 tmp-prod 剧本（芝麻背调）打一通 SIP 外呼。右侧展示<strong>通话轮次延迟</strong>（人说完 → AI 开说；开场白 AI 先说不计入该指标）、双声道录音回放，以及 ASR / AI 转写。
     </p>
 
     <div class="layout">
@@ -147,7 +172,7 @@
           </div>
 
           <label for="employer">用人单位</label>
-          <input id="employer" type="text" value="比赛日科技" />
+          <input id="employer" type="text" value="陕西榆林能源集团有限公司" />
 
           <div class="row">
             <div>
@@ -166,7 +191,7 @@
 
           <h2 style="margin-top:1.1rem;">开场白预览</h2>
           <div class="preview" id="openingPreview">填写槽位后自动预览…</div>
-          <p class="hint">方案 A：系统只预播「确认本人」；合规开场由模型在确认后说。</p>
+          <p class="hint">方案 A：系统只预播「确认本人」；合规开场由模型在确认后说。开场为 AI 先说，不算 user→AI 延迟。</p>
 
           <button type="submit" id="callBtn">发起单人外呼</button>
           <button type="button" class="secondary" id="previewBtn">刷新预览</button>
@@ -176,14 +201,31 @@
 
       <aside>
         <section class="panel">
-          <h2>对话延迟可视化（TTFS）</h2>
+          <h2>SIP 轮次延迟（人说完 → AI 开说）</h2>
           <p class="hint" style="margin-top:0;">
-            与 <code>/t2sbg-voice</code> 同源组件：本机 Mic → Playback 声学端到端延迟。测 SIP 电话本身请看左侧通话状态/录音。
+            事件口径：Duplex <code>ASR ended</code> → 下一次 <code>TTS start</code>。开场白 AI speak-first 单独标记，不计入该项。
           </p>
-          <div class="ttfs-wrap">
-            <iframe id="ttfsFrame" title="TTFS latency" src="about:blank" allow="microphone"></iframe>
+          <div class="lat-big" id="latLatest">—</div>
+          <p class="hint" id="latHint">接通后轮询更新；挂机后保留本通结果。</p>
+          <canvas id="latCanvas" width="900" height="120"></canvas>
+          <ul class="lat-list" id="latList"><li class="empty">尚无轮次</li></ul>
+        </section>
+
+        <section class="panel">
+          <h2>双声道录音（L=用户 · R=AI）</h2>
+          <audio id="stereoPlayer" controls preload="none"></audio>
+          <p class="hint" id="recHint">通话结束后可播放 / 下载 stereo.wav。</p>
+          <div class="row">
+            <button type="button" class="secondary" id="btnStereo" disabled>加载 stereo</button>
+            <button type="button" class="secondary" id="btnUser" disabled>加载 user</button>
           </div>
-          <p class="latency-note" id="ttfsStatus">等待 TTFS 就绪…</p>
+          <button type="button" class="secondary" id="btnAi" disabled>加载 ai</button>
+        </section>
+
+        <section class="panel">
+          <h2>ASR / AI 转写</h2>
+          <div class="interim" id="asrInterim">实时 ASR interim：—</div>
+          <div class="tx" id="txBox"><div class="empty">通话开始后显示转写</div></div>
         </section>
       </aside>
     </div>
@@ -210,11 +252,11 @@
       var calledPrefix = boot.called_prefix || "a1";
       document.getElementById("prefixHint").textContent = calledPrefix;
 
-      var ttfsFrame = document.getElementById("ttfsFrame");
-      ttfsFrame.src = pathPrefix + "/embed.html";
-
       var pollTimer = null;
       var previewTimer = null;
+      var activeCallId = null;
+      var lastRecordingUrls = null;
+
       var el = {
         phone: document.getElementById("phone"),
         candidate: document.getElementById("candidate"),
@@ -227,11 +269,22 @@
         form: document.getElementById("form"),
         callBtn: document.getElementById("callBtn"),
         previewBtn: document.getElementById("previewBtn"),
-        ttfsStatus: document.getElementById("ttfsStatus"),
+        latLatest: document.getElementById("latLatest"),
+        latHint: document.getElementById("latHint"),
+        latList: document.getElementById("latList"),
+        latCanvas: document.getElementById("latCanvas"),
+        stereoPlayer: document.getElementById("stereoPlayer"),
+        recHint: document.getElementById("recHint"),
+        btnStereo: document.getElementById("btnStereo"),
+        btnUser: document.getElementById("btnUser"),
+        btnAi: document.getElementById("btnAi"),
+        asrInterim: document.getElementById("asrInterim"),
+        txBox: document.getElementById("txBox"),
       };
 
-      function headers() {
-        var h = { "Content-Type": "application/json" };
+      function headers(json) {
+        var h = {};
+        if (json !== false) h["Content-Type"] = "application/json";
         var key = (el.apiKey.value || "").trim();
         if (key) h["X-API-Key"] = key;
         return h;
@@ -248,6 +301,22 @@
       function setStatus(text, isErr) {
         el.status.textContent = text;
         el.status.classList.toggle("err", !!isErr);
+      }
+      function authQuery() {
+        var key = (el.apiKey.value || "").trim();
+        return key ? ("?api_key=" + encodeURIComponent(key)) : "";
+      }
+      function recordingUrl(rel) {
+        if (!rel) return "";
+        // API returns absolute path starting with /outbound/...
+        if (rel.indexOf("http") === 0) return rel;
+        return pathPrefix + rel + ((el.apiKey.value || "").trim() ? "" : "");
+      }
+      async function fetchRecordingBlob(rel) {
+        var url = pathPrefix + rel;
+        var resp = await fetch(url, { headers: headers(false) });
+        if (!resp.ok) throw new Error("录音加载失败 " + resp.status);
+        return URL.createObjectURL(await resp.blob());
       }
       function payloadFromForm() {
         var body = {
@@ -296,41 +365,192 @@
         return (
           "\n\n当前页: " + window.location.href +
           "\n请求: " + API_BASE +
-          "\n请用 https://dev.gameday.tech/s2s/tmp-prod/single 或 http://<主机>:7998/tmp-prod/single"
+          "\n请用 https://dev.gameday.tech/s2s/tmp-prod/single"
         );
       }
+
+      function renderLatency(timings) {
+        timings = timings || [];
+        var turns = timings.filter(function (t) { return t && t.kind === "turn" && t.latency_ms != null; });
+        var opening = timings.find(function (t) { return t && t.kind === "opening"; });
+        if (turns.length) {
+          el.latLatest.textContent = turns[turns.length - 1].latency_ms + " ms";
+          el.latHint.textContent = "最近一轮 user→AI；共 " + turns.length + " 轮（开场已排除）";
+        } else if (opening) {
+          el.latLatest.textContent = "开场中";
+          el.latHint.textContent = "AI 先说开场白，不计 user→AI 延迟" +
+            (opening.ai_speech_start_ms != null ? (" · opening TTS @" + opening.ai_speech_start_ms + " ms") : "");
+        } else {
+          el.latLatest.textContent = "—";
+          el.latHint.textContent = "接通后轮询更新；挂机后保留本通结果。";
+        }
+        el.latList.innerHTML = "";
+        if (!timings.length) {
+          el.latList.innerHTML = "<li class='empty'>尚无轮次</li>";
+        } else {
+          timings.forEach(function (t, i) {
+            var li = document.createElement("li");
+            if (t.kind === "opening") {
+              li.innerHTML = "<span>#" + (i + 1) + " 开场（AI first）</span><span class='skip'>skip</span>";
+            } else {
+              li.innerHTML =
+                "<span>#" + (i + 1) + " user@" + (t.user_speech_end_ms ?? "?") +
+                " → ai@" + (t.ai_speech_start_ms ?? "?") + "</span>" +
+                "<span class='ms'>" + (t.latency_ms ?? "—") + " ms</span>";
+            }
+            el.latList.appendChild(li);
+          });
+        }
+        drawLatencyCanvas(timings);
+      }
+
+      function drawLatencyCanvas(timings) {
+        var c = el.latCanvas;
+        var g = c.getContext("2d");
+        var w = c.width, h = c.height;
+        g.fillStyle = "#0f1218";
+        g.fillRect(0, 0, w, h);
+        var turns = (timings || []).filter(function (t) { return t && t.kind === "turn" && t.latency_ms != null; });
+        g.fillStyle = "#8b93a7";
+        g.font = "12px ui-monospace, monospace";
+        if (!turns.length) {
+          g.fillText("waiting for user→AI turns…", 16, h / 2);
+          return;
+        }
+        var maxLat = Math.max(400, Math.max.apply(null, turns.map(function (t) { return t.latency_ms; })));
+        var pad = 28;
+        var barW = (w - pad * 2) / turns.length;
+        turns.forEach(function (t, i) {
+          var bh = Math.max(4, (t.latency_ms / maxLat) * (h - 40));
+          var x = pad + i * barW + 6;
+          var y = h - 20 - bh;
+          g.fillStyle = "#3b82f6";
+          g.fillRect(x, y, Math.max(8, barW - 12), bh);
+          g.fillStyle = "#e8ecf4";
+          g.fillText(String(t.latency_ms), x, y - 4);
+        });
+        g.strokeStyle = "#2a3142";
+        g.beginPath();
+        g.moveTo(pad, h - 20);
+        g.lineTo(w - pad, h - 20);
+        g.stroke();
+      }
+
+      function renderTranscript(rows, interim) {
+        el.asrInterim.textContent = "实时 ASR interim：" + (interim || "—");
+        rows = rows || [];
+        if (!rows.length) {
+          el.txBox.innerHTML = "<div class='empty'>通话开始后显示转写</div>";
+          return;
+        }
+        el.txBox.innerHTML = "";
+        rows.forEach(function (r) {
+          var div = document.createElement("div");
+          div.className = "tx-item";
+          var role = r.role === "user" ? "user" : "ai";
+          var badges = "";
+          if (r.kind === "opening") {
+            badges += "<span class='badge opening'>开场</span>";
+          } else if (role === "user") {
+            badges += "<span class='badge user'>ASR</span>";
+          } else {
+            badges += "<span class='badge ai'>AI / STT</span>";
+          }
+          if (r.source) badges += "<span class='badge'>" + r.source + "</span>";
+          if (r.latency_ms != null) badges += "<span class='badge lat'>" + r.latency_ms + " ms</span>";
+          if (r.t_ms != null) badges += "<span>" + r.t_ms + " ms</span>";
+          div.innerHTML =
+            "<div class='tx-meta'>" + badges + "</div>" +
+            "<div>" + escapeHtml(r.text || "") + "</div>";
+          el.txBox.appendChild(div);
+        });
+        el.txBox.scrollTop = el.txBox.scrollHeight;
+      }
+
+      function escapeHtml(s) {
+        return String(s)
+          .replace(/&/g, "&amp;")
+          .replace(/</g, "&lt;")
+          .replace(/>/g, "&gt;")
+          .replace(/"/g, "&quot;");
+      }
+
+      function setRecordingButtons(urls) {
+        lastRecordingUrls = urls || null;
+        var has = !!(urls && urls.stereo);
+        el.btnStereo.disabled = !has;
+        el.btnUser.disabled = !(urls && urls.user);
+        el.btnAi.disabled = !(urls && urls.ai);
+        if (has) {
+          el.recHint.textContent = "可加载 stereo（L=用户 R=AI）回放。";
+        } else {
+          el.recHint.textContent = "通话结束后可播放 / 下载 stereo.wav。";
+        }
+      }
+
+      async function loadKind(kind) {
+        if (!lastRecordingUrls || !lastRecordingUrls[kind]) return;
+        try {
+          var blobUrl = await fetchRecordingBlob(lastRecordingUrls[kind]);
+          el.stereoPlayer.src = blobUrl;
+          el.stereoPlayer.play().catch(function () {});
+          el.recHint.textContent = "正在播放 " + kind + ".wav";
+        } catch (err) {
+          el.recHint.textContent = String(err.message || err);
+        }
+      }
+
+      function applyCallSnapshot(data) {
+        renderLatency(data.turn_timings || []);
+        renderTranscript(data.transcript || [], data.asr_interim || "");
+        if (data.recording_urls) setRecordingButtons(data.recording_urls);
+        var dial = data.telephony && data.telephony.dial;
+        var sip = data.telephony && data.telephony.sip;
+        var line =
+          "call_id=" + data.call_id +
+          "\nstatus=" + data.status +
+          (data.result ? ("\nresult=" + data.result) : "") +
+          (dial ? ("\ncalled=" + dial.called + " display=" + dial.display) : "");
+        if (sip && sip.status) line += "\nsip_status=" + sip.status;
+        if (sip && sip.error) line += "\nsip=" + sip.error;
+        if (data.error) line += "\nerror=" + data.error;
+        if (data.result_summary) line += "\n" + data.result_summary;
+        var turns = (data.turn_timings || []).filter(function (t) { return t.kind === "turn"; });
+        if (turns.length) {
+          line += "\nlast_latency_ms=" + turns[turns.length - 1].latency_ms;
+        }
+        setStatus(line, data.status === "failed");
+      }
+
       function pollCall(callId) {
+        activeCallId = callId;
         if (pollTimer) clearInterval(pollTimer);
         pollTimer = setInterval(async function () {
           try {
-            var resp = await fetch(API_BASE + "/calls/" + callId, { headers: headers() });
+            var resp = await fetch(API_BASE + "/calls/" + callId, { headers: headers(false) });
             if (!resp.ok) return;
             var data = await resp.json();
-            var dial = data.telephony && data.telephony.dial;
-            var sip = data.telephony && data.telephony.sip;
-            var line =
-              "call_id=" + data.call_id +
-              "\nstatus=" + data.status +
-              (data.result ? ("\nresult=" + data.result) : "") +
-              (dial ? ("\ncalled=" + dial.called + " display=" + dial.display) : "");
-            if (sip && sip.status) line += "\nsip_status=" + sip.status;
-            if (sip && sip.error) line += "\nsip=" + sip.error;
-            if (data.error) line += "\nerror=" + data.error;
-            if (data.result_summary) line += "\n" + data.result_summary;
-            setStatus(line, data.status === "failed");
+            applyCallSnapshot(data);
             if (data.status === "completed" || data.status === "failed") {
               clearInterval(pollTimer);
               pollTimer = null;
               el.callBtn.disabled = false;
+              if (data.recording_urls && data.recording_urls.stereo) {
+                // Auto-load stereo for convenience
+                loadKind("stereo").catch(function () {});
+              }
             }
           } catch (e) { /* keep polling */ }
-        }, 2000);
+        }, 1500);
       }
 
       ["candidate", "gender", "employer", "phone"].forEach(function (id) {
         el[id].addEventListener("input", schedulePreview);
       });
       el.previewBtn.addEventListener("click", refreshOpeningPreview);
+      el.btnStereo.addEventListener("click", function () { loadKind("stereo"); });
+      el.btnUser.addEventListener("click", function () { loadKind("user"); });
+      el.btnAi.addEventListener("click", function () { loadKind("ai"); });
 
       el.form.addEventListener("submit", async function (e) {
         e.preventDefault();
@@ -340,6 +560,9 @@
           return;
         }
         el.callBtn.disabled = true;
+        setRecordingButtons(null);
+        renderLatency([]);
+        renderTranscript([], "");
         var body = payloadFromForm();
         body.phone = phone;
         setStatus("正在发起外呼…\n实际被叫 " + withPrefix(phone) + "\nPOST " + API_BASE + "/calls");
@@ -363,23 +586,12 @@
             "\ncalled=" + (dial.called || withPrefix(phone)) +
             "\ndisplay=" + (dial.display || "(服务端自动分配)") +
             (data.opening_line ? ("\n\n开场白：\n" + data.opening_line) : "") +
-            "\n\n轮询中…"
+            "\n\n轮询中（含转写 / 延迟）…"
           );
           pollCall(data.call_id);
         } catch (err) {
           setStatus(String(err.message || err), true);
           el.callBtn.disabled = false;
-        }
-      });
-
-      window.addEventListener("message", function (ev) {
-        if (!ev.data || ev.data.source !== "ttfs-embed") return;
-        if (ev.data.type === "ttfs-mic-ready") {
-          el.ttfsStatus.textContent = "TTFS Mic 已就绪（可在面板内测声学延迟）";
-        } else if (ev.data.type === "ttfs-latency-ms") {
-          el.ttfsStatus.textContent = "上次延迟 ~ " + ev.data.ms + " ms";
-        } else if (ev.data.type === "ttfs-mic-stopped") {
-          el.ttfsStatus.textContent = "TTFS 已停止";
         }
       });
 

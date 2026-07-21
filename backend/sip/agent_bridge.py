@@ -12,11 +12,13 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
 from backend.duplex_client import DuplexVoiceClient
+from backend.latency_logger import LatencyLogger
 from backend.sip.codec import (
     AGENT_IN_RATE,
     AGENT_TTS_RATE,
@@ -35,8 +37,9 @@ LOG = logging.getLogger(__name__)
 @dataclass
 class BridgeOutcome:
     sip: SipCallResult
-    transcript: list[dict[str, str]] = field(default_factory=list)
+    transcript: list[dict[str, Any]] = field(default_factory=list)
     recordings: dict[str, str] = field(default_factory=dict)
+    turn_timings: list[dict[str, Any]] = field(default_factory=list)
     error: str = ""
     agent_session_id: str = ""
 
@@ -90,7 +93,7 @@ class SipAgentBridge:
         self._loop: asyncio.AbstractEventLoop | None = None
         self._uplink_q: asyncio.Queue[bytes | None] | None = None
         self._pcmu_tx_buf = PcmuFrameBuffer()
-        self._transcript: list[dict[str, str]] = []
+        self._transcript: list[dict[str, Any]] = []
         self._assistant_buf = ""
         self._recorder: CallRecorder | None = None
         self._session: SipCallSession | None = None
@@ -100,6 +103,15 @@ class SipAgentBridge:
         self._opening_tts_done: asyncio.Event | None = None
         self._opening_uplink_pending = False
         self._opening_part_pcm24_bytes = 0
+        # SIP turn latency: user speech end → AI speech start (opening is AI-first, skipped).
+        self._t0: float | None = None
+        self._latency = LatencyLogger()
+        self._turn_timings: list[dict[str, Any]] = []
+        self._opening_active = False
+        self._opening_tts_start_ms: int | None = None
+        self._pending_user_end_ms: int | None = None
+        self._pending_turn_latency_ms: float | None = None
+        self._asr_interim = ""
 
     def _emit(self, status: str, **extra: Any) -> None:
         if self.on_status:
@@ -107,6 +119,19 @@ class SipAgentBridge:
                 self.on_status(status, extra)
             except Exception:
                 LOG.debug("on_status failed", exc_info=True)
+
+    def _rel_ms(self) -> int:
+        if self._t0 is None:
+            return 0
+        return max(0, int((time.perf_counter() - self._t0) * 1000))
+
+    def _publish_transcript(self) -> None:
+        self._emit(
+            "transcript_update",
+            transcript=list(self._transcript),
+            turn_timings=list(self._turn_timings),
+            asr_interim=self._asr_interim,
+        )
 
     async def run(self, phone: str) -> BridgeOutcome:
         api_key, app_id, access_key = _doubao_creds()
@@ -155,6 +180,7 @@ class SipAgentBridge:
             servercallid=sip_result.servercallid,
             remote_rtp=sip_result.remote_rtp,
         )
+        self._t0 = time.perf_counter()
 
         session_ready = asyncio.Event()
 
@@ -184,6 +210,7 @@ class SipAgentBridge:
             client.start_receive_loop()
             opening_first = bool(self.opening_parts and self.sip_config.ai_speak_first)
             self._opening_uplink_pending = opening_first
+            self._opening_active = opening_first
             sid = await client.start_session(
                 self.system_role,
                 self.speaking_style,
@@ -215,9 +242,28 @@ class SipAgentBridge:
                     text_len=len(self.opening_line),
                     parts=len(self.opening_parts),
                 )
-                self._transcript.append({"role": "assistant", "text": self.opening_line})
+                self._transcript.append(
+                    {
+                        "role": "assistant",
+                        "text": self.opening_line,
+                        "kind": "opening",
+                        "source": "say_hello",
+                        "t_ms": self._opening_tts_start_ms if self._opening_tts_start_ms is not None else self._rel_ms(),
+                    }
+                )
+                self._turn_timings.append(
+                    {
+                        "kind": "opening",
+                        "ai_speech_start_ms": self._opening_tts_start_ms,
+                        "skipped_user_latency": True,
+                        "note": "AI speak-first opening; no user→AI turn latency",
+                    }
+                )
+                self._opening_active = False
+                self._publish_transcript()
             else:
                 self._accept_uplink = True
+                self._opening_active = False
 
             uplink_task = asyncio.create_task(self._uplink_loop(client))
             keepalive_task = asyncio.create_task(self._silence_keepalive_watchdog(client, session))
@@ -273,6 +319,7 @@ class SipAgentBridge:
             sip=sip_final,
             transcript=list(self._transcript),
             recordings=recordings,
+            turn_timings=list(self._turn_timings),
             error=outcome_error or sip_final.error,
             agent_session_id=self.call_id,
         )
@@ -377,15 +424,32 @@ class SipAgentBridge:
             raise
 
     def _on_asr(self, text: str, is_interim: bool) -> None:
-        if is_interim or not text:
+        text = (text or "").strip()
+        if not text:
             return
-        # Finals also come via on_asr_ended; avoid double if both fire with finals.
-        pass
+        if is_interim:
+            self._asr_interim = text
+            self._emit("asr_interim", text=text)
+            return
+        # Finals also come via on_asr_ended; avoid double-append.
 
     def _on_asr_ended(self, text: str) -> None:
         text = (text or "").strip()
-        if text:
-            self._transcript.append({"role": "user", "text": text})
+        if not text:
+            return
+        self._latency.user_speech_end()
+        self._pending_user_end_ms = self._rel_ms()
+        self._asr_interim = ""
+        self._transcript.append(
+            {
+                "role": "user",
+                "text": text,
+                "kind": "user",
+                "source": "asr",
+                "t_ms": self._pending_user_end_ms,
+            }
+        )
+        self._publish_transcript()
 
     def _on_chat_delta(self, delta: str, _item_id: str, _reply_id: str) -> None:
         if delta:
@@ -394,12 +458,51 @@ class SipAgentBridge:
     def _on_chat_ended(self, _item_id: str, _reply_id: str) -> None:
         text = self._assistant_buf.strip()
         self._assistant_buf = ""
-        if text:
-            self._transcript.append({"role": "assistant", "text": text})
+        if not text:
+            return
+        entry: dict[str, Any] = {
+            "role": "assistant",
+            "text": text,
+            "kind": "reply",
+            "source": "stt_chat",
+            "t_ms": self._rel_ms(),
+        }
+        if self._pending_turn_latency_ms is not None:
+            entry["latency_ms"] = int(round(self._pending_turn_latency_ms))
+            self._pending_turn_latency_ms = None
+        self._transcript.append(entry)
+        self._publish_transcript()
 
     def _on_tts_start(self, _meta: dict) -> None:
         if self._opening_tts_started and not self._opening_tts_started.is_set():
             self._opening_tts_started.set()
+        if self._opening_active or self._opening_uplink_pending:
+            if self._opening_tts_start_ms is None:
+                self._opening_tts_start_ms = self._rel_ms()
+            return
+        # Normal turn: user finished → AI TTS starts = SIP turn latency.
+        self._latency.tts_start()
+        lat = self._latency.get_last_total_latency_ms()
+        if lat is not None:
+            self._pending_turn_latency_ms = lat
+            self._turn_timings.append(
+                {
+                    "kind": "turn",
+                    "user_speech_end_ms": self._pending_user_end_ms,
+                    "ai_speech_start_ms": self._rel_ms(),
+                    "latency_ms": int(round(lat)),
+                }
+            )
+            self._emit(
+                "turn_latency",
+                latency_ms=int(round(lat)),
+                turn_timings=list(self._turn_timings),
+            )
+            LOG.info(
+                "SIP turn latency call_id=%s latency_ms=%.0f",
+                self.call_id,
+                lat,
+            )
 
     def _on_tts_end(self, _meta: dict) -> None:
         if self._opening_uplink_pending and self._opening_tts_done and not self._opening_tts_done.is_set():
@@ -423,6 +526,8 @@ class SipAgentBridge:
             self._opening_part_pcm24_bytes += len(pcm24k)
         if self._opening_tts_started and not self._opening_tts_started.is_set():
             self._opening_tts_started.set()
+        if (self._opening_active or self._opening_uplink_pending) and self._opening_tts_start_ms is None:
+            self._opening_tts_start_ms = self._rel_ms()
         # Record AI at 16k for consistent mixed track rate.
         if self._recorder:
             pcm16 = resample_pcm16(pcm24k, AGENT_TTS_RATE, AGENT_IN_RATE)

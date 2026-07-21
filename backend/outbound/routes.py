@@ -7,6 +7,7 @@ import os
 from typing import Any
 
 from fastapi import APIRouter, Header, HTTPException
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
 from backend.outbound.models import RESULT_ALREADY_DONE, STATUS_COMPLETED
@@ -257,6 +258,37 @@ async def get_call(
     if not task:
         raise HTTPException(status_code=404, detail="call_id not found")
     return task.to_public_dict()
+
+
+@router.get("/calls/{call_id}/recording/{kind}")
+async def get_call_recording(
+    call_id: str,
+    kind: str,
+    x_api_key: str | None = Header(default=None, alias="X-API-Key"),
+) -> FileResponse:
+    """下载本通录音：stereo（L=用户 R=AI）/ user / ai。"""
+    _auth(x_api_key)
+    kind = (kind or "").strip().lower().removesuffix(".wav")
+    if kind not in {"stereo", "user", "ai"}:
+        raise HTTPException(status_code=400, detail="kind must be stereo|user|ai")
+    task = get_call_store().get(call_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="call_id not found")
+    sip = ((task.telephony or {}).get("sip") or {})
+    recordings = sip.get("recordings") or {}
+    path = str(recordings.get(kind) or "").strip()
+    if not path:
+        raise HTTPException(status_code=404, detail=f"recording '{kind}' not available")
+    from pathlib import Path
+
+    file_path = Path(path)
+    if not file_path.is_file():
+        raise HTTPException(status_code=404, detail=f"recording file missing: {kind}")
+    return FileResponse(
+        file_path,
+        media_type="audio/wav",
+        filename=f"{call_id}_{kind}.wav",
+    )
 
 
 @router.get("/calls")

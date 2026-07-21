@@ -47,7 +47,8 @@ class CallTask:
     telephony: dict[str, Any] = field(default_factory=dict)
     result: str | None = None
     result_summary: str = ""
-    transcript: list[dict[str, str]] = field(default_factory=list)
+    transcript: list[dict[str, Any]] = field(default_factory=list)
+    turn_timings: list[dict[str, Any]] = field(default_factory=list)
     error: str = ""
     dry_run: bool = False
     created_at: str = field(default_factory=_utcnow)
@@ -59,6 +60,16 @@ class CallTask:
 
     def to_public_dict(self) -> dict[str, Any]:
         """Shape returned to partner (poll / webhook)."""
+        sip = ((self.telephony or {}).get("sip") or {}) if self.telephony else {}
+        recordings = sip.get("recordings") or {}
+        recording_urls: dict[str, str] | None = None
+        if isinstance(recordings, dict) and recordings:
+            base = f"/outbound/v1/calls/{self.call_id}/recording"
+            recording_urls = {
+                kind: f"{base}/{kind}"
+                for kind in ("stereo", "user", "ai")
+                if recordings.get(kind)
+            }
         return {
             "call_id": self.call_id,
             "external_id": self.external_id or None,
@@ -68,6 +79,9 @@ class CallTask:
             "result": self.result,
             "result_summary": self.result_summary or None,
             "transcript": self.transcript,
+            "turn_timings": self.turn_timings,
+            "asr_interim": sip.get("asr_interim") or None,
+            "recording_urls": recording_urls,
             "telephony": self.telephony or None,
             "error": self.error or None,
             "dry_run": self.dry_run,

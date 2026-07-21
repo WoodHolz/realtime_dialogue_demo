@@ -127,10 +127,27 @@ async def _run_sip_bridged_call(
         phone = str(dial.get("called") or task.phone)
 
         def on_status(status: str, extra: dict[str, Any]) -> None:
-            tel = dict((store.get(call_id) or task).telephony or {})
-            tel["sip"] = {**(tel.get("sip") or {}), "status": status, **extra}
+            cur = store.get(call_id) or task
+            tel = dict(cur.telephony or {})
+            sip_meta = {**(tel.get("sip") or {}), "status": status, **{
+                k: v for k, v in extra.items()
+                if k not in {"transcript", "turn_timings"}
+            }}
+            fields: dict[str, Any] = {}
+            if status == "asr_interim":
+                sip_meta["asr_interim"] = str(extra.get("text") or "")
+            if status in {"transcript_update", "turn_latency"}:
+                if "transcript" in extra:
+                    fields["transcript"] = list(extra.get("transcript") or [])
+                if "turn_timings" in extra:
+                    fields["turn_timings"] = list(extra.get("turn_timings") or [])
+                if "asr_interim" in extra:
+                    sip_meta["asr_interim"] = str(extra.get("asr_interim") or "")
+                elif status == "transcript_update":
+                    sip_meta["asr_interim"] = ""
+            tel["sip"] = sip_meta
             tel["sip_peer"] = {"host": peer_host, "port": peer_port}
-            fields: dict[str, Any] = {"telephony": tel}
+            fields["telephony"] = tel
             if status == "answered":
                 fields["status"] = STATUS_IN_CALL
             elif status == "dialing":
@@ -214,6 +231,7 @@ async def _run_sip_bridged_call(
                 ),
                 result_summary=sip.error or outcome.error or "SIP dial failed",
                 transcript=outcome.transcript,
+                turn_timings=outcome.turn_timings,
                 telephony=tel,
                 error=sip.error or outcome.error,
             )
@@ -221,12 +239,13 @@ async def _run_sip_bridged_call(
 
         summary = "通话结束"
         if outcome.transcript:
-            summary = f"通话结束，共 {len(outcome.transcript)} 轮用户发言"
+            summary = f"通话结束，共 {len(outcome.transcript)} 条转写"
         await complete_call(
             call_id,
             result="completed",
             result_summary=summary,
             transcript=outcome.transcript,
+            turn_timings=outcome.turn_timings,
             telephony=tel,
             error="",
         )
