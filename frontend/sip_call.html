@@ -27,7 +27,7 @@
         var(--bg);
     }
     main {
-      width: min(560px, calc(100% - 2rem));
+      width: min(720px, calc(100% - 2rem));
       margin: 2.5rem auto 3rem;
     }
     h1 {
@@ -36,6 +36,14 @@
       font-size: clamp(1.6rem, 4vw, 2rem);
       margin: 0 0 0.35rem;
       letter-spacing: -0.02em;
+    }
+    h2 {
+      font-size: 0.95rem;
+      margin: 1.25rem 0 0.6rem;
+      color: var(--muted);
+      font-weight: 600;
+      letter-spacing: 0.02em;
+      text-transform: uppercase;
     }
     .lead {
       color: var(--muted);
@@ -56,18 +64,23 @@
       margin: 0.85rem 0 0.35rem;
     }
     label:first-of-type { margin-top: 0; }
-    input, select, button {
+    input, select, button, textarea {
       font: inherit;
       width: 100%;
     }
-    input, select {
+    input, select, textarea {
       border: 1px solid var(--line);
       border-radius: 8px;
       padding: 0.65rem 0.75rem;
       background: #fff;
       color: var(--ink);
     }
-    input:focus, select:focus {
+    textarea {
+      min-height: 5.5rem;
+      resize: vertical;
+      line-height: 1.45;
+    }
+    input:focus, select:focus, textarea:focus {
       outline: 2px solid var(--accent-soft);
       border-color: var(--accent);
     }
@@ -87,8 +100,24 @@
       grid-template-columns: 1fr 1fr;
       gap: 0.75rem;
     }
-    @media (max-width: 520px) {
-      .row { grid-template-columns: 1fr; }
+    .row-3 {
+      display: grid;
+      grid-template-columns: 1fr 1fr 1fr;
+      gap: 0.75rem;
+    }
+    @media (max-width: 640px) {
+      .row, .row-3 { grid-template-columns: 1fr; }
+    }
+    .check {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      margin-top: 0.85rem;
+      font-size: 0.86rem;
+    }
+    .check input {
+      width: auto;
+      margin: 0;
     }
     button#callBtn {
       margin-top: 1.15rem;
@@ -120,6 +149,16 @@
       min-height: 3.2rem;
     }
     .status.err { border-color: #e8b4b4; background: #fff5f5; color: var(--danger); }
+    .preview {
+      margin-top: 0.5rem;
+      padding: 0.75rem 0.85rem;
+      border-radius: 10px;
+      background: var(--accent-soft);
+      border: 1px solid #b8d9ce;
+      font-size: 0.86rem;
+      line-height: 1.5;
+      color: var(--ink);
+    }
     .back {
       display: inline-block;
       margin-bottom: 1rem;
@@ -134,28 +173,82 @@
   <main>
     <a class="back" href="../">← 返回首页</a>
     <h1>SIP 外呼测试</h1>
-    <p class="lead">选择外显号、填写被测手机号，发起催授权外呼。被叫会自动加 <code>a1</code> 前缀。</p>
+    <p class="lead">催授权场景联调：配置剧本槽位、预览开场白，发起 SIP 外呼。被叫自动加 <code>a1</code> 前缀。</p>
 
     <form class="panel" id="form">
+      <h2>拨号</h2>
       <label for="display">外显号</label>
       <select id="display" name="display" required>
         <!--__DISPLAY_OPTIONS__-->
       </select>
-      <p class="hint">号池来自 <code>config.json → outbound.display_numbers</code></p>
 
       <label for="phone">被测手机号</label>
       <input id="phone" type="tel" inputmode="numeric" placeholder="例如 18324133080" required autocomplete="tel" />
 
+      <h2>剧本槽位（催授权）</h2>
       <div class="row">
         <div>
           <label for="candidate">候选人称呼</label>
           <input id="candidate" type="text" value="张先生" />
         </div>
         <div>
-          <label for="client">委托方</label>
+          <label for="client">委托方 / 自称品牌</label>
           <input id="client" type="text" value="测试公司" />
         </div>
       </div>
+
+      <div class="row">
+        <div>
+          <label for="identityMode">身份模式</label>
+          <select id="identityMode">
+            <option value="CLIENT_IDENTITY">CLIENT_IDENTITY（客户白标）</option>
+            <option value="CHANNEL_BRAND">CHANNEL_BRAND（渠道白标）</option>
+            <option value="BRAND_SELF">BRAND_SELF（芝麻背调自称+受托）</option>
+          </select>
+        </div>
+        <div>
+          <label for="ourBrand">我方品牌（BRAND_SELF）</label>
+          <input id="ourBrand" type="text" value="芝麻背调" />
+        </div>
+      </div>
+
+      <label for="channelBrand">渠道品牌名（CHANNEL_BRAND，可覆盖委托方）</label>
+      <input id="channelBrand" type="text" placeholder="仅 CHANNEL_BRAND 时填写" />
+
+      <div class="row">
+        <div>
+          <label for="inviteSubject">邀请主题</label>
+          <input id="inviteSubject" type="text" value="背调采集邀请" />
+        </div>
+        <div>
+          <label for="inviteChannel">发送渠道</label>
+          <input id="inviteChannel" type="text" value="短信" placeholder="短信 / 短信和邮箱" />
+        </div>
+      </div>
+
+      <div class="row-3">
+        <div>
+          <label for="phoneTail">手机尾号</label>
+          <input id="phoneTail" type="text" placeholder="四位，如 3080" maxlength="4" />
+        </div>
+        <div>
+          <label for="deadline">完成时限</label>
+          <input id="deadline" type="text" value="一个工作日内" />
+        </div>
+        <div>
+          <label for="sendTime">发送时间锚点</label>
+          <input id="sendTime" type="text" placeholder="如 今天上午" />
+        </div>
+      </div>
+
+      <label class="check">
+        <input id="hasEmail" type="checkbox" />
+        已配置邮件渠道（开场白用「短信或邮件」）
+      </label>
+
+      <h2>开场白预览</h2>
+      <div class="preview" id="openingPreview">填写上方槽位后自动预览…</div>
+      <p class="hint">接通后 AI 将按此文案开场（方案2）。槽位与 <code>POST /outbound/v1/calls</code> 一致。</p>
 
       <label for="apiKey">X-API-Key（可选）</label>
       <input id="apiKey" type="password" placeholder="PARTNER_API_KEY 为空时可留空" autocomplete="off" />
@@ -168,7 +261,6 @@
   <script type="application/json" id="sip-call-boot"><!--__SIP_CALL_BOOT_JSON__--></script>
   <script>
     (function () {
-      // Match nginx: /s2s/* -> 127.0.0.1:7998/*  (same as /s2s/demo, /s2s/voice)
       var pathPrefix = location.pathname.indexOf("/s2s/") === 0 || location.pathname === "/s2s"
         ? "/s2s"
         : "";
@@ -182,12 +274,23 @@
       }
       var calledPrefix = boot.called_prefix || "a1";
       var pollTimer = null;
+      var previewTimer = null;
 
       var el = {
         display: document.getElementById("display"),
         phone: document.getElementById("phone"),
         candidate: document.getElementById("candidate"),
         client: document.getElementById("client"),
+        identityMode: document.getElementById("identityMode"),
+        ourBrand: document.getElementById("ourBrand"),
+        channelBrand: document.getElementById("channelBrand"),
+        inviteSubject: document.getElementById("inviteSubject"),
+        inviteChannel: document.getElementById("inviteChannel"),
+        phoneTail: document.getElementById("phoneTail"),
+        deadline: document.getElementById("deadline"),
+        sendTime: document.getElementById("sendTime"),
+        hasEmail: document.getElementById("hasEmail"),
+        openingPreview: document.getElementById("openingPreview"),
         apiKey: document.getElementById("apiKey"),
         status: document.getElementById("status"),
         form: document.getElementById("form"),
@@ -217,6 +320,52 @@
         el.status.classList.toggle("err", !!isErr);
       }
 
+      function payloadFromForm() {
+        var body = {
+          phone: normalizePhone(el.phone.value) || "13800000000",
+          scenario: "urge_auth",
+          display: el.display.value,
+          candidate_name: (el.candidate.value || "").trim() || "张先生",
+          client_name: (el.client.value || "").trim() || "测试公司",
+          identity_mode: el.identityMode.value,
+          our_brand_name: (el.ourBrand.value || "").trim() || "芝麻背调",
+          channel_brand_name: (el.channelBrand.value || "").trim(),
+          invite_subject: (el.inviteSubject.value || "").trim() || "背调采集邀请",
+          invite_channel: (el.inviteChannel.value || "").trim() || "短信",
+          phone_tail: (el.phoneTail.value || "").trim(),
+          deadline: (el.deadline.value || "").trim() || "一个工作日内",
+          send_time: (el.sendTime.value || "").trim(),
+          has_email: !!el.hasEmail.checked,
+        };
+        return body;
+      }
+
+      function schedulePreview() {
+        if (previewTimer) clearTimeout(previewTimer);
+        previewTimer = setTimeout(refreshOpeningPreview, 350);
+      }
+
+      async function refreshOpeningPreview() {
+        el.openingPreview.textContent = "预览生成中…";
+        try {
+          var resp = await fetch(API_BASE + "/preview-opening", {
+            method: "POST",
+            headers: headers(),
+            body: JSON.stringify(payloadFromForm()),
+          });
+          var raw = await resp.text();
+          var data = {};
+          try { data = JSON.parse(raw); } catch (e) { data = {}; }
+          if (!resp.ok) {
+            el.openingPreview.textContent = data.detail || raw || "预览失败";
+            return;
+          }
+          el.openingPreview.textContent = data.opening_line || "（空）";
+        } catch (err) {
+          el.openingPreview.textContent = String(err.message || err);
+        }
+      }
+
       function foreignApiHint(data, rawText) {
         var looksForeign = (data && data.code === 404 && data.msg) || /"msg"\s*:\s*"Not Found"/.test(rawText || "");
         if (!looksForeign) return "";
@@ -241,6 +390,7 @@
               "\nstatus=" + data.status +
               (data.result ? ("\nresult=" + data.result) : "") +
               (dial ? ("\ncalled=" + dial.called + " display=" + dial.display) : "");
+            if (sip && sip.status) line += "\nsip_status=" + sip.status;
             if (sip && sip.error) line += "\nsip=" + sip.error;
             if (data.error) line += "\nerror=" + data.error;
             if (data.result_summary) line += "\n" + data.result_summary;
@@ -254,6 +404,16 @@
         }, 2000);
       }
 
+      [
+        "candidate", "client", "identityMode", "ourBrand", "channelBrand",
+        "inviteSubject", "inviteChannel", "phoneTail", "deadline", "sendTime", "hasEmail"
+      ].forEach(function (id) {
+        var node = el[id];
+        if (!node) return;
+        node.addEventListener("input", schedulePreview);
+        node.addEventListener("change", schedulePreview);
+      });
+
       el.form.addEventListener("submit", async function (e) {
         e.preventDefault();
         var phone = normalizePhone(el.phone.value);
@@ -266,18 +426,14 @@
           return;
         }
         el.callBtn.disabled = true;
+        var body = payloadFromForm();
+        body.phone = phone;
         setStatus("正在发起外呼…\n实际被叫 " + withPrefix(phone) + "\nPOST " + API_BASE + "/calls");
         try {
           var resp = await fetch(API_BASE + "/calls", {
             method: "POST",
             headers: headers(),
-            body: JSON.stringify({
-              phone: phone,
-              scenario: "urge_auth",
-              display: el.display.value,
-              candidate_name: (el.candidate.value || "").trim() || "张先生",
-              client_name: (el.client.value || "").trim() || "测试公司",
-            }),
+            body: JSON.stringify(body),
           });
           var rawText = await resp.text();
           var data = {};
@@ -291,7 +447,8 @@
             "\nstatus=" + data.status +
             "\ncalled=" + (dial.called || withPrefix(phone)) +
             "\ndisplay=" + (dial.display || el.display.value) +
-            "\n轮询中…"
+            (data.opening_line ? ("\n\n开场白：\n" + data.opening_line) : "") +
+            "\n\n轮询中…"
           );
           pollCall(data.call_id);
         } catch (err) {
@@ -299,6 +456,8 @@
           el.callBtn.disabled = false;
         }
       });
+
+      refreshOpeningPreview();
     })();
   </script>
 </body>

@@ -40,6 +40,7 @@ TYPE_INPUT_AUDIO_BUFFER_COMMIT = "input_audio_buffer.commit"
 TYPE_CONVERSATION_ITEM_CREATE = "conversation.item.create"
 TYPE_CONVERSATION_ITEM_UPDATE = "conversation.item.update"
 TYPE_RESPONSE_CANCEL = "response.cancel"
+TYPE_RESPONSE_CREATE = "response.create"
 
 TYPE_SESSION_CREATED = "session.created"
 TYPE_SESSION_CLOSED = "session.closed"
@@ -456,6 +457,26 @@ class DuplexVoiceClient:
                 "items": self._qa_pair_items(text),
             }
         )
+
+    async def create_response(self) -> None:
+        """Trigger model TTS response after conversation.item.create (proactive speak-first)."""
+        if not self._ws or self._ws_is_closed() or not self._session_id:
+            return
+        await self._send_event(
+            {
+                "type": TYPE_RESPONSE_CREATE,
+                "event_id": self._new_event_id(),
+            }
+        )
+
+    async def speak_opening_script(self, opening_line: str) -> None:
+        """Proactive opening: inject exact script as assistant turn + response.create."""
+        text = (opening_line or "").strip().strip("「」").strip()
+        if not text:
+            return
+        await self.conversation_create(role="assistant", text=text)
+        await self.create_response()
+        LOG.info("speak_opening_script queued len=%d", len(text))
 
     async def conversation_update(self, *, item_id: str, text: str) -> None:
         if not self._ws or self._ws_is_closed() or not self._session_id:

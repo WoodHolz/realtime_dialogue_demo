@@ -12,6 +12,7 @@ from pydantic import BaseModel, Field
 from backend.outbound.models import RESULT_ALREADY_DONE, STATUS_COMPLETED
 from backend.outbound.service import (
     SUPPORTED_SCENARIOS,
+    build_scenario_prompt,
     complete_call,
     create_outbound_call,
     verify_partner_api_key,
@@ -110,6 +111,45 @@ async def dial_options(x_api_key: str | None = Header(default=None, alias="X-API
     }
 
 
+@router.post("/preview-opening")
+async def preview_opening(
+    req: CreateCallRequest,
+    x_api_key: str | None = Header(default=None, alias="X-API-Key"),
+) -> dict[str, Any]:
+    """联调：根据剧本槽位预览本通开场白（不落库、不外呼）。"""
+    _auth(x_api_key)
+    payload: dict[str, Any] = {
+        "candidate_name": req.candidate_name,
+        "client_name": req.client_name,
+        "identity_mode": req.identity_mode,
+        "our_brand_name": req.our_brand_name,
+        "channel_brand_name": req.channel_brand_name,
+        "invite_channel": req.send_channel or req.invite_channel,
+        "send_channel": req.send_channel or req.invite_channel,
+        "invite_subject": req.invite_subject,
+        "send_time": req.send_time,
+        "phone_tail": req.phone_tail,
+        "reserved_email": req.reserved_email,
+        "deadline": req.deadline,
+        "hotline": req.hotline,
+        "work_hours": req.work_hours,
+        "ticket_id": req.ticket_id,
+        "extra_note": req.extra_note,
+        "fallback_sms_body": req.fallback_sms_body,
+        "mp_name": req.mp_name,
+        "resend_channel": req.resend_channel,
+    }
+    if req.has_email is not None:
+        payload["has_email"] = req.has_email
+    if req.has_fallback_sms is not None:
+        payload["has_fallback_sms"] = req.has_fallback_sms
+    try:
+        _role, _style, opening = build_scenario_prompt(req.scenario, payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"scenario": req.scenario, "opening_line": opening}
+
+
 @router.post("/calls")
 async def create_call(
     req: CreateCallRequest,
@@ -164,12 +204,14 @@ async def create_call(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     dial = (task.telephony or {}).get("dial")
+    opening_line = getattr(task, "opening_line", "") or ""
     return {
         "call_id": task.call_id,
         "status": task.status,
         "scenario": task.scenario,
         "external_id": task.external_id or None,
         "dry_run": task.dry_run,
+        "opening_line": opening_line or None,
         "dial": dial,
         "poll_url": f"/outbound/v1/calls/{task.call_id}",
         "message": (
@@ -249,6 +291,7 @@ async def get_call_prompt(
         "scenario": task.scenario,
         "system_role": task.system_role,
         "speaking_style": task.speaking_style,
+        "opening_line": getattr(task, "opening_line", "") or "",
         "supported_scenarios": sorted(SUPPORTED_SCENARIOS),
         "status": task.status if task.status != STATUS_COMPLETED else task.status,
     }

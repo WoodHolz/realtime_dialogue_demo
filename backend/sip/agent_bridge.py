@@ -25,7 +25,7 @@ from backend.sip.codec import (
     resample_pcm16,
     telephony_rx_to_agent,
 )
-from backend.sip.config import SipConfig, wrap_opening_as_speak_query
+from backend.sip.config import SipConfig
 from backend.sip.recording import CallRecorder
 from backend.sip.session import SipCallResult, SipCallSession
 
@@ -186,7 +186,7 @@ class SipAgentBridge:
             )
             self._emit("agent_started", session_id=sid)
 
-            speak_query = wrap_opening_as_speak_query(self.opening_line)
+            speak_query = self.opening_line
             if speak_query and self.sip_config.ai_speak_first:
                 try:
                     await asyncio.wait_for(session_ready.wait(), timeout=5.0)
@@ -196,7 +196,7 @@ class SipAgentBridge:
                         self.call_id,
                     )
                 await asyncio.sleep(0.2)
-                await client.send_text_query(speak_query)
+                await client.speak_opening_script(speak_query)
                 LOG.info(
                     "opening_line sent call_id=%s chars=%d",
                     self.call_id,
@@ -272,18 +272,41 @@ class SipAgentBridge:
 
     async def _promote_to_audio_after_opening(self, client: DuplexVoiceClient) -> None:
         """
-        Wait briefly for opening TTS to start, then switch to audio+server_vad.
-        Never blocks more than ~3s (unlike previous 20s TTS-complete wait).
+        Wait for opening TTS to start, then switch to audio+server_vad.
+        Retry response.create once if no TTS within 6s; cap total wait at 12s.
         """
         assert self._opening_tts_started is not None
+        deadline = asyncio.get_running_loop().time() + 12.0
+        retried = False
         try:
-            await asyncio.wait_for(self._opening_tts_started.wait(), timeout=3.0)
-            LOG.info("opening TTS started call_id=%s; promoting to audio", self.call_id)
-        except asyncio.TimeoutError:
-            LOG.warning(
-                "opening TTS not observed within 3s call_id=%s; promoting to audio anyway",
-                self.call_id,
-            )
+            while asyncio.get_running_loop().time() < deadline:
+                remaining = deadline - asyncio.get_running_loop().time()
+                if remaining <= 0:
+                    break
+                try:
+                    await asyncio.wait_for(
+                        self._opening_tts_started.wait(),
+                        timeout=min(6.0, remaining),
+                    )
+                    LOG.info("opening TTS started call_id=%s; promoting to audio", self.call_id)
+                    break
+                except asyncio.TimeoutError:
+                    if not retried:
+                        retried = True
+                        LOG.warning(
+                            "opening TTS not observed call_id=%s; retry response.create",
+                            self.call_id,
+                        )
+                        try:
+                            await client.create_response()
+                        except Exception:
+                            LOG.debug("opening response.create retry failed", exc_info=True)
+                        continue
+                    LOG.warning(
+                        "opening TTS not observed call_id=%s; promoting to audio anyway",
+                        self.call_id,
+                    )
+                    break
         except asyncio.CancelledError:
             raise
         try:

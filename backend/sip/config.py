@@ -43,14 +43,8 @@ DEFAULT_OPENING_NUDGE = ""
 
 
 def wrap_opening_as_speak_query(opening_line: str) -> str:
-    """Build text query that asks Duplex to speak the exact opening script."""
-    text = (opening_line or "").strip().strip("「」").strip()
-    if not text:
-        return ""
-    return (
-        "电话已接通。请立刻完整说出下面这段开场白，不要改写、不要添加其他内容：\n"
-        f"{text}"
-    )
+    """Deprecated: opening is triggered via DuplexVoiceClient.speak_opening_script."""
+    return (opening_line or "").strip().strip("「」").strip()
 
 
 @dataclass(frozen=True)
