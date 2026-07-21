@@ -50,6 +50,49 @@ def render_tmp_prod_page() -> HTMLResponse:
     return HTMLResponse(path.read_text(encoding="utf-8"), media_type="text/html; charset=utf-8")
 
 
+def render_tmp_prod_single_page() -> HTMLResponse:
+    """单人外呼联调页：tmp-prod 剧本 + TTFS 延迟可视化。"""
+    import json
+
+    path = Path(__file__).resolve().parents[2] / "frontend" / "tmp_prod_single.html"
+    if not path.exists():
+        return HTMLResponse("<p>tmp_prod_single.html not found</p>", status_code=404)
+    raw = path.read_text(encoding="utf-8")
+    try:
+        from backend.outbound.dial import load_dial_settings
+
+        cfg = load_dial_settings()
+        boot = {
+            "called_prefix": cfg.called_prefix,
+            "ani": cfg.ani,
+            "default_display": cfg.default_display,
+            "display_numbers": list(cfg.display_numbers),
+            "scenario": "tmp_prod_auth_demo",
+        }
+    except Exception as exc:  # noqa: BLE001
+        LOG.warning("tmp-prod single boot config failed: %s", exc)
+        boot = {
+            "called_prefix": "a1",
+            "ani": "",
+            "default_display": "",
+            "display_numbers": [],
+            "scenario": "tmp_prod_auth_demo",
+            "error": str(exc),
+        }
+
+    nums = [str(n).strip() for n in (boot.get("display_numbers") or []) if str(n).strip()]
+    default = str(boot.get("default_display") or (nums[0] if nums else "")).strip()
+    status = (
+        f"外显号由服务端自动分配（默认 {default or '-'}，号池 {len(nums)} 个）。主叫 ANI={boot.get('ani') or '-'}"
+        if nums
+        else "未配置外显号池，请检查 config.json outbound.display_numbers / SIP_DEFAULT_DISPLAY"
+    )
+    raw = raw.replace("<!--__STATUS_BOOT__-->", status, 1)
+    boot_json = json.dumps(boot, ensure_ascii=False).replace("<", "\\u003c")
+    raw = raw.replace("<!--__TMP_PROD_SINGLE_BOOT_JSON__-->", boot_json, 1)
+    return HTMLResponse(raw, media_type="text/html; charset=utf-8")
+
+
 @router.post("/batches/upload")
 async def upload_batch(
     file: UploadFile = File(...),

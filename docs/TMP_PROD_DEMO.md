@@ -6,10 +6,14 @@
 
 服务启动后访问（与 `sip-call` 同挂载前缀）：
 
-- 本地：`http://localhost:7998/tmp-prod`
-- 线上：`https://dev.gameday.tech/s2s/tmp-prod`（注意是 **`/s2s/tmp-prod`**，不是站点根路径 `/tmp-prod`）
+- 本地批量：`http://localhost:7998/tmp-prod`
+- 本地单人：`http://localhost:7998/tmp-prod/single`（拨号 + TTFS 延迟可视化）
+- 线上批量：`https://dev.gameday.tech/s2s/tmp-prod`
+- 线上单人：`https://dev.gameday.tech/s2s/tmp-prod/single`
 
-`/tmp-prod` 与 `/tmp-prod/` 均直接返回页面，避免反代下 307 丢前缀。
+`/tmp-prod` 与 `/tmp-prod/`、`/tmp-prod/single` 与 `/tmp-prod/single/` 均直接返回页面，避免反代下 307 丢前缀。
+
+单人页走 `POST /outbound/v1/calls`（`scenario=tmp_prod_auth_demo`），右侧 iframe 同源嵌入 `/embed.html`（TTFS）。
 
 ## 流程
 

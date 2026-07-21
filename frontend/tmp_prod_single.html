@@ -1,0 +1,390 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>tmp-prod 单人测试</title>
+  <style>
+    :root {
+      --bg: #f2f4f3;
+      --ink: #1a1f1c;
+      --muted: #5c675f;
+      --line: #d5ddd7;
+      --accent: #0d5c45;
+      --accent-soft: #e7f2ed;
+      --card: #ffffff;
+      --danger: #9b2c2c;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: "IBM Plex Sans", "Noto Sans SC", system-ui, sans-serif;
+      color: var(--ink);
+      background:
+        radial-gradient(ellipse 70% 45% at 0% 0%, #dceee6 0%, transparent 55%),
+        var(--bg);
+      min-height: 100vh;
+    }
+    main { width: min(1080px, calc(100% - 2rem)); margin: 2rem auto 3rem; }
+    h1 { margin: 0 0 0.35rem; font-size: 1.6rem; }
+    .lead { color: var(--muted); margin: 0 0 1.25rem; line-height: 1.5; }
+    .nav {
+      display: flex; flex-wrap: wrap; gap: 0.75rem 1.1rem;
+      margin-bottom: 1rem; font-size: 0.9rem;
+    }
+    .nav a { color: var(--accent); text-decoration: none; }
+    .nav a:hover { text-decoration: underline; }
+    .layout {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(280px, 420px);
+      gap: 1rem;
+      align-items: start;
+    }
+    @media (max-width: 900px) {
+      .layout { grid-template-columns: 1fr; }
+    }
+    .panel {
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      padding: 1.1rem 1.2rem 1.25rem;
+      margin-bottom: 1rem;
+    }
+    .panel h2 {
+      margin: 0 0 0.65rem;
+      font-size: 0.95rem;
+      color: var(--muted);
+      letter-spacing: 0.02em;
+      text-transform: uppercase;
+    }
+    label { display: block; font-size: 0.85rem; font-weight: 600; margin: 0.7rem 0 0.3rem; }
+    label:first-of-type { margin-top: 0; }
+    input, button, select, textarea {
+      font: inherit; width: 100%;
+      border: 1px solid var(--line); border-radius: 8px; padding: 0.6rem 0.75rem;
+    }
+    textarea { min-height: 4.5rem; resize: vertical; line-height: 1.45; }
+    button {
+      background: var(--accent); color: #fff; border: 0; font-weight: 600;
+      cursor: pointer; margin-top: 0.85rem;
+    }
+    button.secondary { background: #2f3d36; }
+    button:disabled { opacity: 0.55; cursor: not-allowed; }
+    .row { display: grid; grid-template-columns: 1fr 1fr; gap: 0.75rem; }
+    @media (max-width: 700px) { .row { grid-template-columns: 1fr; } }
+    .hint { font-size: 0.8rem; color: var(--muted); margin-top: 0.35rem; line-height: 1.45; }
+    .hint code {
+      font-size: 0.85em; background: var(--accent-soft);
+      padding: 0.05rem 0.3rem; border-radius: 4px;
+    }
+    .status {
+      white-space: pre-wrap; font-size: 0.85rem; line-height: 1.45;
+      background: #f7faf8; border: 1px solid var(--line); border-radius: 8px;
+      padding: 0.75rem; min-height: 3rem; margin-top: 0.75rem;
+      word-break: break-word;
+    }
+    .status.err { color: var(--danger); background: #fff5f5; }
+    .preview {
+      margin-top: 0.35rem;
+      padding: 0.75rem 0.85rem;
+      border-radius: 8px;
+      background: var(--accent-soft);
+      border: 1px solid #b8d9ce;
+      font-size: 0.86rem;
+      line-height: 1.5;
+      white-space: pre-wrap;
+    }
+    .ttfs-wrap {
+      border-radius: 10px;
+      overflow: hidden;
+      border: 1px solid #1c2230;
+      background: #0f1218;
+      min-height: 520px;
+    }
+    .ttfs-wrap iframe {
+      display: block;
+      width: 100%;
+      height: 560px;
+      border: 0;
+      background: #0f1218;
+    }
+    .latency-note {
+      margin-top: 0.55rem;
+      font-size: 0.78rem;
+      color: var(--muted);
+      line-height: 1.45;
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <nav class="nav">
+      <a id="linkBatch" href="./">← 批量演示</a>
+      <a id="linkSip" href="../sip-call">催授权 SIP 联调</a>
+    </nav>
+    <h1>tmp-prod · 单人测试</h1>
+    <p class="lead">
+      用 tmp-prod 剧本（芝麻背调）打一通外呼验证话术；右侧嵌入既有 TTFS 对话延迟可视化（浏览器麦/扬声器声学链路，与 SIP 手机通路独立）。
+    </p>
+
+    <div class="layout">
+      <section>
+        <form class="panel" id="form">
+          <h2>拨号 · tmp_prod_auth_demo</h2>
+          <label for="phone">被测手机号</label>
+          <input id="phone" type="tel" inputmode="numeric" placeholder="例如 18324133080" required autocomplete="tel" />
+          <p class="hint">被叫自动加 <code id="prefixHint">a1</code>；外显号由服务端号池分配。</p>
+
+          <div class="row">
+            <div>
+              <label for="candidate">姓名</label>
+              <input id="candidate" type="text" value="张三" />
+            </div>
+            <div>
+              <label for="gender">性别</label>
+              <input id="gender" type="text" value="男" placeholder="可选" />
+            </div>
+          </div>
+
+          <label for="employer">用人单位</label>
+          <input id="employer" type="text" value="陕西榆林能源集团有限公司" />
+
+          <div class="row">
+            <div>
+              <label for="dryRun">模式</label>
+              <select id="dryRun">
+                <option value="">跟随 OUTBOUND_DRY_RUN</option>
+                <option value="false">真实外呼</option>
+                <option value="true">dry_run（不拨号）</option>
+              </select>
+            </div>
+            <div id="apiKeyWrap">
+              <label for="apiKey">X-API-Key（可选）</label>
+              <input id="apiKey" type="password" placeholder="PARTNER_API_KEY 为空可留空" autocomplete="off" />
+            </div>
+          </div>
+
+          <h2 style="margin-top:1.1rem;">开场白预览</h2>
+          <div class="preview" id="openingPreview">填写槽位后自动预览…</div>
+          <p class="hint">方案 A：系统只预播「确认本人」；合规开场由模型在确认后说。</p>
+
+          <button type="submit" id="callBtn">发起单人外呼</button>
+          <button type="button" class="secondary" id="previewBtn">刷新预览</button>
+          <div class="status" id="status"><!--__STATUS_BOOT__--></div>
+        </form>
+      </section>
+
+      <aside>
+        <section class="panel">
+          <h2>对话延迟可视化（TTFS）</h2>
+          <p class="hint" style="margin-top:0;">
+            与 <code>/t2sbg-voice</code> 同源组件：本机 Mic → Playback 声学端到端延迟。测 SIP 电话本身请看左侧通话状态/录音。
+          </p>
+          <div class="ttfs-wrap">
+            <iframe id="ttfsFrame" title="TTFS latency" src="about:blank" allow="microphone"></iframe>
+          </div>
+          <p class="latency-note" id="ttfsStatus">等待 TTFS 就绪…</p>
+        </section>
+      </aside>
+    </div>
+  </main>
+
+  <script type="application/json" id="single-boot"><!--__TMP_PROD_SINGLE_BOOT_JSON__--></script>
+  <script>
+    (function () {
+      var pathPrefix = location.pathname.indexOf("/s2s/") === 0 || location.pathname === "/s2s"
+        ? "/s2s"
+        : "";
+      var API_BASE = pathPrefix + "/outbound/v1";
+      var SCENARIO = "tmp_prod_auth_demo";
+
+      document.getElementById("linkBatch").href = pathPrefix + "/tmp-prod";
+      document.getElementById("linkSip").href = pathPrefix + "/sip-call";
+
+      var boot = {};
+      try {
+        boot = JSON.parse((document.getElementById("single-boot").textContent) || "{}");
+      } catch (e) {
+        boot = {};
+      }
+      var calledPrefix = boot.called_prefix || "a1";
+      document.getElementById("prefixHint").textContent = calledPrefix;
+
+      var ttfsFrame = document.getElementById("ttfsFrame");
+      ttfsFrame.src = pathPrefix + "/embed.html";
+
+      var pollTimer = null;
+      var previewTimer = null;
+      var el = {
+        phone: document.getElementById("phone"),
+        candidate: document.getElementById("candidate"),
+        gender: document.getElementById("gender"),
+        employer: document.getElementById("employer"),
+        dryRun: document.getElementById("dryRun"),
+        apiKey: document.getElementById("apiKey"),
+        openingPreview: document.getElementById("openingPreview"),
+        status: document.getElementById("status"),
+        form: document.getElementById("form"),
+        callBtn: document.getElementById("callBtn"),
+        previewBtn: document.getElementById("previewBtn"),
+        ttfsStatus: document.getElementById("ttfsStatus"),
+      };
+
+      function headers() {
+        var h = { "Content-Type": "application/json" };
+        var key = (el.apiKey.value || "").trim();
+        if (key) h["X-API-Key"] = key;
+        return h;
+      }
+      function normalizePhone(raw) {
+        return String(raw || "").replace(/[\s\-()]/g, "").trim();
+      }
+      function withPrefix(phone) {
+        var p = normalizePhone(phone);
+        if (!p) return "";
+        if (p.toLowerCase().indexOf(calledPrefix.toLowerCase()) === 0) return p;
+        return calledPrefix + p.replace(/^\+/, "");
+      }
+      function setStatus(text, isErr) {
+        el.status.textContent = text;
+        el.status.classList.toggle("err", !!isErr);
+      }
+      function payloadFromForm() {
+        var body = {
+          phone: normalizePhone(el.phone.value) || "13800000000",
+          scenario: SCENARIO,
+          candidate_name: (el.candidate.value || "").trim() || "张三",
+          gender: (el.gender.value || "").trim(),
+          employer: (el.employer.value || "").trim(),
+          client_name: (el.employer.value || "").trim(),
+        };
+        var dry = (el.dryRun.value || "").trim();
+        if (dry === "true") body.dry_run = true;
+        if (dry === "false") body.dry_run = false;
+        return body;
+      }
+      async function refreshOpeningPreview() {
+        el.openingPreview.textContent = "预览生成中…";
+        try {
+          var resp = await fetch(API_BASE + "/preview-opening", {
+            method: "POST",
+            headers: headers(),
+            body: JSON.stringify(payloadFromForm()),
+          });
+          var raw = await resp.text();
+          var data = {};
+          try { data = JSON.parse(raw); } catch (e) { data = {}; }
+          if (!resp.ok) {
+            el.openingPreview.textContent = data.detail || raw || "预览失败";
+            return;
+          }
+          el.openingPreview.textContent =
+            (data.opening_parts && data.opening_parts.length)
+              ? data.opening_parts.join("\n\n")
+              : (data.opening_line || "（空）");
+        } catch (err) {
+          el.openingPreview.textContent = String(err.message || err);
+        }
+      }
+      function schedulePreview() {
+        if (previewTimer) clearTimeout(previewTimer);
+        previewTimer = setTimeout(refreshOpeningPreview, 350);
+      }
+      function foreignApiHint(data, rawText) {
+        var looksForeign = (data && data.code === 404 && data.msg) || /"msg"\s*:\s*"Not Found"/.test(rawText || "");
+        if (!looksForeign) return "";
+        return (
+          "\n\n当前页: " + window.location.href +
+          "\n请求: " + API_BASE +
+          "\n请用 https://dev.gameday.tech/s2s/tmp-prod/single 或 http://<主机>:7998/tmp-prod/single"
+        );
+      }
+      function pollCall(callId) {
+        if (pollTimer) clearInterval(pollTimer);
+        pollTimer = setInterval(async function () {
+          try {
+            var resp = await fetch(API_BASE + "/calls/" + callId, { headers: headers() });
+            if (!resp.ok) return;
+            var data = await resp.json();
+            var dial = data.telephony && data.telephony.dial;
+            var sip = data.telephony && data.telephony.sip;
+            var line =
+              "call_id=" + data.call_id +
+              "\nstatus=" + data.status +
+              (data.result ? ("\nresult=" + data.result) : "") +
+              (dial ? ("\ncalled=" + dial.called + " display=" + dial.display) : "");
+            if (sip && sip.status) line += "\nsip_status=" + sip.status;
+            if (sip && sip.error) line += "\nsip=" + sip.error;
+            if (data.error) line += "\nerror=" + data.error;
+            if (data.result_summary) line += "\n" + data.result_summary;
+            setStatus(line, data.status === "failed");
+            if (data.status === "completed" || data.status === "failed") {
+              clearInterval(pollTimer);
+              pollTimer = null;
+              el.callBtn.disabled = false;
+            }
+          } catch (e) { /* keep polling */ }
+        }, 2000);
+      }
+
+      ["candidate", "gender", "employer", "phone"].forEach(function (id) {
+        el[id].addEventListener("input", schedulePreview);
+      });
+      el.previewBtn.addEventListener("click", refreshOpeningPreview);
+
+      el.form.addEventListener("submit", async function (e) {
+        e.preventDefault();
+        var phone = normalizePhone(el.phone.value);
+        if (!phone) {
+          setStatus("请填写手机号", true);
+          return;
+        }
+        el.callBtn.disabled = true;
+        var body = payloadFromForm();
+        body.phone = phone;
+        setStatus("正在发起外呼…\n实际被叫 " + withPrefix(phone) + "\nPOST " + API_BASE + "/calls");
+        try {
+          var resp = await fetch(API_BASE + "/calls", {
+            method: "POST",
+            headers: headers(),
+            body: JSON.stringify(body),
+          });
+          var rawText = await resp.text();
+          var data = {};
+          try { data = JSON.parse(rawText); } catch (err) { data = {}; }
+          if (!resp.ok) {
+            throw new Error((data.detail || rawText || resp.statusText) + foreignApiHint(data, rawText));
+          }
+          var dial = data.dial || {};
+          setStatus(
+            "已创建 call_id=" + data.call_id +
+            "\nstatus=" + data.status +
+            "\nscenario=" + (data.scenario || SCENARIO) +
+            "\ncalled=" + (dial.called || withPrefix(phone)) +
+            "\ndisplay=" + (dial.display || "(服务端自动分配)") +
+            (data.opening_line ? ("\n\n开场白：\n" + data.opening_line) : "") +
+            "\n\n轮询中…"
+          );
+          pollCall(data.call_id);
+        } catch (err) {
+          setStatus(String(err.message || err), true);
+          el.callBtn.disabled = false;
+        }
+      });
+
+      window.addEventListener("message", function (ev) {
+        if (!ev.data || ev.data.source !== "ttfs-embed") return;
+        if (ev.data.type === "ttfs-mic-ready") {
+          el.ttfsStatus.textContent = "TTFS Mic 已就绪（可在面板内测声学延迟）";
+        } else if (ev.data.type === "ttfs-latency-ms") {
+          el.ttfsStatus.textContent = "上次延迟 ~ " + ev.data.ms + " ms";
+        } else if (ev.data.type === "ttfs-mic-stopped") {
+          el.ttfsStatus.textContent = "TTFS 已停止";
+        }
+      });
+
+      refreshOpeningPreview();
+    })();
+  </script>
+</body>
+</html>

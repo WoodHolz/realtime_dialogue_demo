@@ -649,6 +649,15 @@ async def tmp_prod_page():
     return render_tmp_prod_page()
 
 
+@app.get("/tmp-prod/single")
+@app.get("/tmp-prod/single/")
+async def tmp_prod_single_page():
+    """tmp-prod 单人外呼联调 + TTFS 延迟可视化。"""
+    from backend.tmp_prod.routes import render_tmp_prod_single_page
+
+    return render_tmp_prod_single_page()
+
+
 @app.get("/voice")
 async def voice_page():
     path = _frontend_dir() / "voice.html"
