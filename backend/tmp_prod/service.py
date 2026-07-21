@@ -20,6 +20,38 @@ CALL_MAX_SEC = 900  # 15 min
 POLL_SEC = 2.0
 
 
+def batch_max_concurrent() -> int:
+    """How many contacts to dial at once in a tmp-prod batch."""
+    raw = (os.environ.get("TMP_PROD_MAX_CONCURRENT") or "").strip()
+    if raw:
+        try:
+            return max(1, int(raw))
+        except ValueError:
+            pass
+    from backend.sip.traffic import max_concurrent
+
+    return max(1, max_concurrent())
+
+
+def batch_concurrency_limit(override: int | None = None) -> int:
+    """How many contacts to dial in parallel within one batch."""
+    if override is not None and override > 0:
+        return override
+    raw = (os.environ.get("TMP_PROD_BATCH_CONCURRENT") or "").strip()
+    if raw:
+        try:
+            return max(1, int(raw))
+        except ValueError:
+            pass
+    # Fall back to global SIP outbound cap (default 60).
+    try:
+        from backend.sip.traffic import max_concurrent
+
+        return max(1, int(max_concurrent()))
+    except Exception:
+        return 60
+
+
 def ensure_tmp_prod_env() -> Path:
     """Ensure recordings land under data/tmp_prod/recordings."""
     root = Path(os.environ.get("TMP_PROD_ROOT", "data/tmp_prod"))
@@ -118,15 +150,20 @@ async def dial_one_contact(
     tel = dict(getattr(finished, "telephony", None) or {})
     sip = dict(tel.get("sip") or {})
     recordings = dict(sip.get("recordings") or {})
-    recording_dir = ""
-    if recordings:
-        # parent of any track
-        sample = next(iter(recordings.values()))
-        recording_dir = str(Path(sample).parent)
+    stereo_path, recording_dir, recordings = _align_contact_recording(
+        batch_id, contact, finished.call_id if finished else task.call_id, recordings
+    )
 
     # Persist transcript sidecar
     if finished:
         _persist_artifacts(batch_id, contact.contact_id, finished.call_id, transcript, recordings)
+
+    rec_fields = {
+        "transcript": transcript,
+        "recordings": recordings,
+        "recording_dir": recording_dir,
+        "stereo_path": stereo_path,
+    }
 
     if _is_no_answer(finished):
         if attempt < MAX_ATTEMPTS:
@@ -138,10 +175,8 @@ async def dial_one_contact(
                 result="no_answer",
                 result_summary=getattr(finished, "result_summary", "") or "未接通，将重试",
                 fail_reason="",
-                transcript=transcript,
-                recordings=recordings,
-                recording_dir=recording_dir,
                 next_retry_at=retry_at.isoformat(),
+                **rec_fields,
             )
             asyncio.create_task(
                 _retry_later(batch_id, contact.contact_id, RETRY_DELAY_SEC),
@@ -155,10 +190,8 @@ async def dial_one_contact(
                 result="no_answer",
                 result_summary="2次尝试仍未接通",
                 fail_reason="未接通",
-                transcript=transcript,
-                recordings=recordings,
-                recording_dir=recording_dir,
                 next_retry_at="",
+                **rec_fields,
             )
     else:
         result = getattr(finished, "result", None) or "completed"
@@ -171,10 +204,8 @@ async def dial_one_contact(
             result=result,
             result_summary=getattr(finished, "result_summary", "") or "",
             fail_reason=err if status == "failed" else "",
-            transcript=transcript,
-            recordings=recordings,
-            recording_dir=recording_dir,
             next_retry_at="",
+            **rec_fields,
         )
 
     batch = store.get(batch_id)
@@ -183,6 +214,88 @@ async def dial_one_contact(
         if c.contact_id == contact.contact_id:
             return c
     return contact
+
+
+def _resolve_stereo_path(recordings: dict[str, str], recording_dir: str = "") -> str:
+    stereo = str((recordings or {}).get("stereo") or "").strip()
+    if stereo and Path(stereo).is_file():
+        return stereo
+    if recording_dir:
+        candidate = Path(recording_dir) / "stereo.wav"
+        if candidate.is_file():
+            return str(candidate)
+    # Fallback: any path's sibling stereo.wav
+    for p in (recordings or {}).values():
+        sib = Path(p).with_name("stereo.wav")
+        if sib.is_file():
+            return str(sib)
+    return stereo
+
+
+def _align_contact_recording(
+    batch_id: str,
+    contact: ContactJob,
+    call_id: str,
+    recordings: dict[str, str],
+) -> tuple[str, str, dict[str, str]]:
+    """
+    Align one contact's dual-channel recording under the batch tree:
+
+      data/tmp_prod/{batch_id}/contacts/{contact_id}/{call_id}/stereo.wav
+
+    Copies stereo (+ mono if present) so each contact has a stable path.
+    """
+    import shutil
+
+    root = Path(os.environ.get("TMP_PROD_ROOT", "data/tmp_prod"))
+    dest_dir = root / batch_id / "contacts" / contact.contact_id / call_id
+    dest_dir.mkdir(parents=True, exist_ok=True)
+
+    recording_dir = ""
+    if recordings:
+        sample = next(iter(recordings.values()))
+        recording_dir = str(Path(sample).parent)
+
+    stereo_src = _resolve_stereo_path(recordings, recording_dir)
+    aligned: dict[str, str] = dict(recordings or {})
+    stereo_dest = dest_dir / "stereo.wav"
+
+    if stereo_src and Path(stereo_src).is_file():
+        try:
+            shutil.copy2(stereo_src, stereo_dest)
+        except Exception:
+            LOG.exception("copy stereo failed call_id=%s", call_id)
+            stereo_dest = Path(stereo_src)
+    elif recording_dir:
+        # Best-effort: copy whatever exists in SIP record dir
+        for name in ("stereo.wav", "user.wav", "ai.wav", "mixed.wav"):
+            src = Path(recording_dir) / name
+            if src.is_file():
+                try:
+                    shutil.copy2(src, dest_dir / name)
+                except Exception:
+                    LOG.debug("copy %s failed", name, exc_info=True)
+
+    for key, src_path in list(aligned.items()):
+        if key == "stereo":
+            continue
+        src = Path(src_path)
+        if src.is_file():
+            try:
+                dst = dest_dir / src.name
+                if not dst.exists():
+                    shutil.copy2(src, dst)
+                aligned[key] = str(dst)
+            except Exception:
+                LOG.debug("align copy %s failed", key, exc_info=True)
+
+    if stereo_dest.is_file():
+        aligned["stereo"] = str(stereo_dest)
+        return str(stereo_dest), str(dest_dir), aligned
+    if stereo_src:
+        aligned["stereo"] = stereo_src
+        return stereo_src, recording_dir or str(dest_dir), aligned
+    return "", recording_dir or str(dest_dir), aligned
 
 
 def _persist_artifacts(
@@ -238,9 +351,10 @@ async def run_batch(
     batch_id: str,
     *,
     dry_run: bool | None = None,
-    stagger_sec: float = 2.0,
+    stagger_sec: float = 0.5,
+    max_concurrent: int | None = None,
 ) -> Batch:
-    """Sequentially dial contacts (simple traffic-friendly). Retries scheduled async."""
+    """Dial batch contacts concurrently (capped); SIP traffic gate still applies."""
     ensure_tmp_prod_env()
     store = get_batch_store()
     batch = store.get(batch_id)
@@ -249,26 +363,47 @@ async def run_batch(
     batch.status = "running"
     store.save(batch)
 
-    for contact in list(batch.contacts):
-        # refresh
-        batch = store.get(batch_id) or batch
-        contact = next(c for c in batch.contacts if c.contact_id == contact.contact_id)
+    limit = max(1, int(max_concurrent if max_concurrent is not None else batch_max_concurrent()))
+    sem = asyncio.Semaphore(limit)
+    LOG.info(
+        "tmp-prod batch start batch_id=%s contacts=%s max_concurrent=%s",
+        batch_id,
+        len(batch.contacts),
+        limit,
+    )
+
+    async def _one(contact_id: str) -> None:
+        async with sem:
+            batch_now = store.get(batch_id)
+            if not batch_now:
+                return
+            contact = next((c for c in batch_now.contacts if c.contact_id == contact_id), None)
+            if not contact or contact.status in {"completed", "failed", "waiting_retry"}:
+                return
+            try:
+                await dial_one_contact(batch_id, contact, store=store, dry_run=dry_run)
+            except Exception as exc:
+                LOG.exception("tmp-prod dial error contact=%s", contact_id)
+                store.update_contact(
+                    batch_id,
+                    contact_id,
+                    status="failed",
+                    result="call_failed",
+                    fail_reason=str(exc),
+                    result_summary=str(exc),
+                )
+
+    tasks: list[asyncio.Task] = []
+    for i, contact in enumerate(list(batch.contacts)):
         if contact.status in {"completed", "failed", "waiting_retry"}:
             continue
-        try:
-            await dial_one_contact(batch_id, contact, store=store, dry_run=dry_run)
-        except Exception as exc:
-            LOG.exception("tmp-prod dial error contact=%s", contact.contact_id)
-            store.update_contact(
-                batch_id,
-                contact.contact_id,
-                status="failed",
-                result="call_failed",
-                fail_reason=str(exc),
-                result_summary=str(exc),
-            )
-        if stagger_sec > 0:
+        tasks.append(asyncio.create_task(_one(contact.contact_id), name=f"tmp-prod-{contact.contact_id}"))
+        # Small launch stagger only (not wait-for-hangup); keeps SIP INVITE from thundering herd.
+        if stagger_sec > 0 and i + 1 < len(batch.contacts):
             await asyncio.sleep(stagger_sec)
+
+    if tasks:
+        await asyncio.gather(*tasks, return_exceptions=True)
 
     _maybe_mark_batch_done(batch_id, store)
     out = store.get(batch_id)

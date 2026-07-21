@@ -1,5 +1,8 @@
 # -*- coding: utf-8 -*-
-"""国投临时演示剧本（tmp-prod）— 硬编码话术 + 外呼触发时刻（北京时间）注入。"""
+"""国投临时演示剧本（tmp-prod）— 硬编码话术 + 外呼触发时刻（北京时间）注入。
+
+开场方案 A（临时）：系统只预播「确认本人」；合规开场等对方确认后再由模型说。
+"""
 from __future__ import annotations
 
 from datetime import datetime
@@ -64,18 +67,19 @@ def build_guotou_demo_opening(*, candidate_name: str, employer: str = "", **_ign
     return f"您好，请问是{name}本人吗？"
 
 
-def build_guotou_demo_opening_parts(*, candidate_name: str, employer: str = "", **_ignored: Any) -> list[str]:
-    """两段开场：先确认本人，再合规说明（接通后 AI 先说第一段）。"""
-    name = (candidate_name or "候选人").strip()
+def build_guotou_demo_compliance_opening(*, candidate_name: str = "", employer: str = "", **_ignored: Any) -> str:
+    """确认本人后的合规开场（不预播，由模型在对方确认后说）。"""
     emp = (employer or EMPLOYER_DEFAULT).strip() or EMPLOYER_DEFAULT
-    return [
-        f"您好，请问是{name}本人吗？",
-        (
-            f"您好，我是{BRAND}的 AI 语音助手，正在协助办理您在{emp}的入职背景调查。"
-            f"为保证服务质量，本次通话将会录音。今天联系您，是想确认一下您是否收到此前发送的背调授权短信，"
-            f"大约占用您两分钟，现在方便吗？"
-        ),
-    ]
+    return (
+        f"您好，我是{BRAND}的 AI 语音助手，正在协助办理您在{emp}的入职背景调查。"
+        f"为保证服务质量，本次通话将会录音。今天联系您，是想确认一下您是否收到此前发送的背调授权短信，"
+        f"大约占用您两分钟，现在方便吗？"
+    )
+
+
+def build_guotou_demo_opening_parts(*, candidate_name: str, employer: str = "", **_ignored: Any) -> list[str]:
+    """方案 A：系统只预播「确认本人」一句。"""
+    return [build_guotou_demo_opening(candidate_name=candidate_name, employer=employer)]
 
 
 def build_guotou_demo_system_role(
@@ -97,13 +101,21 @@ def build_guotou_demo_system_role(
     deadline = format_deadline_today_18(trigger)
     trigger_str = trigger.strftime("%Y-%m-%d %H:%M:%S")
     trigger_day = format_trigger_day(trigger)
-    parts = build_guotou_demo_opening_parts(candidate_name=name, employer=emp)
+    identity_ask = build_guotou_demo_opening(candidate_name=name, employer=emp)
+    compliance = build_guotou_demo_compliance_opening(candidate_name=name, employer=emp)
 
-    preplayed_note = (
-        "【开场已由系统先播】上面两段开场白已对用户播放过，不要整段重念；确认本人后从「是否方便/是否收到短信」继续。"
-        if opening_preplayed
-        else "【开场】接通后按 opening 顺序说：先问是否本人；确认本人后再说第二段合规开场。"
-    )
+    if opening_preplayed:
+        preplayed_note = f"""【开场已由系统先播（方案 A）】
+系统只播过一句：「{identity_ask}」
+- 禁止再问「是不是本人 / 请问是{name}本人吗」整句复读。
+- 对方确认本人后，立刻说合规开场（下面完整台词，只说一次）：
+「{compliance}」
+- 对方否认本人 / 不是本人：礼貌结束，勿播合规开场。
+- 对方已直接说方便/收到短信等：可跳过合规里「现在方便吗」的追问，顺势进主流程。"""
+    else:
+        preplayed_note = f"""【开场】
+1）先说：「{identity_ask}」
+2）确认本人后再说合规开场：「{compliance}」"""
 
     return f"""【角色设定】
 你是「{BRAND}」的 AI 语音助手，正在给候选人打电话，确认背调授权短信是否收到并推动当天完成授权。
@@ -122,9 +134,6 @@ def build_guotou_demo_system_role(
 - 用人单位：{emp}
 
 {preplayed_note}
-开场参考：
-1）{parts[0]}
-2）{parts[1]}
 
 【全局规则】
 1. 单问推进：一次只问一件事，等对方回应。
@@ -132,12 +141,13 @@ def build_guotou_demo_system_role(
 3. 收尾后请对方先挂机：「那先这样，您先挂机就可以，再见。」我们侧也可随后挂断。
 4. 不要承诺当场发短信/邮件；邮箱路径只登记，说明稍后会发。
 5. 禁止威胁施压、禁止复读同一整句。
+6. 合规开场（AI 身份 + 录音 + 是否收到短信 + 方便吗）整段只说一次，禁止开场复读。
 
 【主流程】
 
 ■ 确认本人
 - 不是本人 / 无法接通本人：礼貌结束，不要向第三方透露背调细节。
-- 确认本人 → 播合规开场（若未预播）→ 问现在方便吗。
+- 确认本人 → 说合规开场（若系统已预播确认本人句，则不要再问本人）→ 等对方是否方便/是否收到。
 - 不方便：快速约定晚点再联系并收线（本演示不做复杂改约调度）。
 
 ■ 已收到授权短信

@@ -63,17 +63,13 @@
 <body>
   <main>
     <h1>tmp-prod · 国投催授权演示</h1>
-    <p class="lead">上传 Excel（用人单位 / 姓名 / 性别 / 手机号）→ 批量外呼 → 查看结果并下载 xlsx。未接通 30 分钟后自动重试一次；2 次失败记为「未接通」。单通最长 15 分钟。</p>
+    <p class="lead">上传 Excel（用人单位 / 姓名 / 性别 / 手机号）→ <b>并发</b>批量外呼 → 查看结果并下载 xlsx。未接通 30 分钟后自动重试一次；2 次失败记为「未接通」。单通最长 15 分钟。</p>
 
     <section class="panel">
       <h2 style="margin:0 0 0.5rem;font-size:1rem;">1. 上传并外呼</h2>
       <label for="file">Excel 文件</label>
       <input id="file" type="file" accept=".xlsx,.xlsm" />
       <div class="row">
-        <div>
-          <label for="apiKey">X-API-Key（可选）</label>
-          <input id="apiKey" type="password" placeholder="PARTNER_API_KEY 为空可留空" autocomplete="off" />
-        </div>
         <div>
           <label for="dryRun">模式</label>
           <select id="dryRun">
@@ -82,6 +78,11 @@
             <option value="true">dry_run（不拨号）</option>
           </select>
         </div>
+      </div>
+      <!-- API Key 字段默认隐藏；需要鉴权时再在页面显示 #apiKeyWrap -->
+      <div id="apiKeyWrap" style="display:none">
+        <label for="apiKey">X-API-Key（可选）</label>
+        <input id="apiKey" type="password" placeholder="PARTNER_API_KEY 为空可留空" autocomplete="off" />
       </div>
       <button id="uploadBtn" type="button">上传 Excel</button>
       <button id="startBtn" class="secondary" type="button" disabled>开始外呼</button>
@@ -106,7 +107,7 @@
           <thead>
             <tr>
               <th>用人单位</th><th>姓名</th><th>性别</th><th>手机</th>
-              <th>状态</th><th>结果</th><th>尝试</th><th>失败原因</th><th>call_id</th>
+              <th>状态</th><th>结果</th><th>尝试</th><th>失败原因</th><th>call_id</th><th>双声道录音</th>
             </tr>
           </thead>
           <tbody id="tbody"></tbody>
@@ -158,7 +159,10 @@
             "<td>" + (c.result || "") + "</td>" +
             "<td>" + (c.attempt || 0) + "</td>" +
             "<td>" + (c.fail_reason || "") + "</td>" +
-            "<td>" + (c.last_call_id || "") + "</td>";
+            "<td>" + (c.last_call_id || "") + "</td>" +
+            "<td style='max-width:220px;word-break:break-all;font-size:0.75rem'>" +
+              (c.stereo_path || (c.recordings && c.recordings.stereo) || "") +
+            "</td>";
           el.tbody.appendChild(tr);
         });
       }
@@ -218,7 +222,7 @@
         if (!id) return;
         el.startBtn.disabled = true;
         try {
-          var body = { stagger_sec: 2 };
+          var body = { stagger_sec: 0.5 };
           if (el.dryRun.value === "true") body.dry_run = true;
           if (el.dryRun.value === "false") body.dry_run = false;
           var resp = await fetch(API + "/batches/" + id + "/start", {

@@ -108,6 +108,7 @@ def write_results_xlsx(rows: list[dict[str, Any]]) -> bytes:
         "登记邮箱",
         "最近call_id",
         "转写摘要",
+        "双声道录音(L用户/R AI)",
         "录音目录",
         "更新时间",
     ]
@@ -122,6 +123,11 @@ def write_results_xlsx(rows: list[dict[str, Any]]) -> bytes:
                 text = t.get("text", "")
                 bits.append(f"{role}:{text}")
             summary = " | ".join(bits)[:2000]
+        stereo = r.get("stereo_path") or ""
+        if not stereo:
+            recs = r.get("recordings") or {}
+            if isinstance(recs, dict):
+                stereo = str(recs.get("stereo") or "")
         ws.append(
             [
                 r.get("employer", ""),
@@ -137,6 +143,7 @@ def write_results_xlsx(rows: list[dict[str, Any]]) -> bytes:
                 r.get("email", ""),
                 r.get("last_call_id", ""),
                 summary,
+                stereo,
                 r.get("recording_dir", ""),
                 r.get("updated_at", ""),
             ]

@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import threading
 import uuid
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, fields
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -37,6 +37,7 @@ class ContactJob:
     transcript: list[dict[str, str]] = field(default_factory=list)
     recordings: dict[str, str] = field(default_factory=dict)
     recording_dir: str = ""
+    stereo_path: str = ""  # L=user R=AI dual-channel WAV (aligned under batch)
     promised_time: str = ""
     email: str = ""
     next_retry_at: str = ""
@@ -45,6 +46,11 @@ class ContactJob:
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
+
+
+def contact_from_dict(data: dict[str, Any]) -> ContactJob:
+    known = {f.name for f in fields(ContactJob)}
+    return ContactJob(**{k: v for k, v in (data or {}).items() if k in known})
 
 
 @dataclass
@@ -90,7 +96,7 @@ class BatchStore:
         for p in self.root.glob("*/batch.json"):
             try:
                 data = json.loads(p.read_text(encoding="utf-8"))
-                contacts = [ContactJob(**c) for c in data.get("contacts") or []]
+                contacts = [contact_from_dict(c) for c in data.get("contacts") or []]
                 b = Batch(
                     batch_id=data["batch_id"],
                     source_name=data.get("source_name") or "",

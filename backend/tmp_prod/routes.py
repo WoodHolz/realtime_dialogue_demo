@@ -28,7 +28,18 @@ def _auth(x_api_key: str | None) -> None:
 
 class StartBody(BaseModel):
     dry_run: bool | None = Field(default=None, description="覆盖 OUTBOUND_DRY_RUN")
-    stagger_sec: float = Field(default=2.0, ge=0, le=60)
+    stagger_sec: float = Field(
+        default=0.5,
+        ge=0,
+        le=60,
+        description="仅启动间隔（秒），不是等上一通挂机；默认 0.5",
+    )
+    max_concurrent: int | None = Field(
+        default=None,
+        ge=1,
+        le=200,
+        description="本批次同时外呼上限；空则 TMP_PROD_MAX_CONCURRENT / OUTBOUND_MAX_CONCURRENT",
+    )
 
 
 def render_tmp_prod_page() -> HTMLResponse:
@@ -91,10 +102,21 @@ async def start_batch(
         raise HTTPException(status_code=404, detail="batch not found")
     body = body or StartBody()
     asyncio.create_task(
-        run_batch(batch_id, dry_run=body.dry_run, stagger_sec=body.stagger_sec),
+        run_batch(
+            batch_id,
+            dry_run=body.dry_run,
+            stagger_sec=body.stagger_sec,
+            max_concurrent=body.max_concurrent,
+        ),
         name=f"tmp-prod-batch-{batch_id}",
     )
-    return {"batch_id": batch_id, "status": "running", "message": "已开始外呼任务（后台执行）"}
+    return {
+        "batch_id": batch_id,
+        "status": "running",
+        "message": "已开始外呼任务（后台并发执行）",
+        "stagger_sec": body.stagger_sec,
+        "max_concurrent": body.max_concurrent,
+    }
 
 
 @router.get("/batches")
