@@ -148,6 +148,12 @@ class DuplexVoiceClient:
         self._server_vad = False
         self._silence_keepalive_task: asyncio.Task | None = None
         self._user_audio_sent = False
+        self._session_system_role = ""
+        self._session_speaking_style = ""
+        self._session_bot_name = ""
+        self._session_dialog_id = ""
+        self._session_end_smooth_window_ms = 1500
+        self._session_recv_timeout = 10
 
     def _new_event_id(self) -> str:
         self._event_id += 1
@@ -349,8 +355,64 @@ class DuplexVoiceClient:
         )
         self._session_id = session_id
         self._user_audio_sent = False
+        self._session_system_role = role
+        self._session_speaking_style = style
+        self._session_bot_name = bot_name
+        self._session_dialog_id = dialog_id or session_id
+        self._session_end_smooth_window_ms = end_smooth_window_ms
+        self._session_recv_timeout = recv_timeout
         await self.start_silence_keepalive()
         return session_id
+
+    async def update_session(
+        self,
+        *,
+        input_mod: str = "audio",
+        server_vad: bool = False,
+        end_smooth_window_ms: int | None = None,
+        recv_timeout: int | None = None,
+    ) -> None:
+        """Update duplex dialog extension (e.g. keep_alive → audio after opening)."""
+        if not self._ws or self._ws_is_closed() or not self._session_id:
+            return
+        if server_vad:
+            resolved_input_mod = "audio"
+        elif input_mod == "text":
+            resolved_input_mod = "keep_alive"
+        else:
+            resolved_input_mod = input_mod
+        self._input_mod = resolved_input_mod
+        self._server_vad = server_vad
+        smooth_ms = (
+            end_smooth_window_ms
+            if end_smooth_window_ms is not None
+            else self._session_end_smooth_window_ms
+        )
+        timeout = recv_timeout if recv_timeout is not None else self._session_recv_timeout
+        extension = self._build_extension(
+            system_role=self._session_system_role,
+            speaking_style=self._session_speaking_style,
+            bot_name=self._session_bot_name,
+            dialog_id=self._session_dialog_id,
+            input_mod=resolved_input_mod,
+            end_smooth_window_ms=smooth_ms,
+            server_vad=server_vad,
+            recv_timeout=timeout,
+        )
+        await self._send_event(
+            {
+                "type": TYPE_SESSION_UPDATE,
+                "event_id": self._new_event_id(),
+                "session": {"id": self._session_id},
+                "extension": extension,
+            }
+        )
+        LOG.info(
+            "Duplex session.update input_mod=%s server_vad=%s recv_timeout=%s",
+            resolved_input_mod,
+            server_vad,
+            timeout,
+        )
 
     async def send_audio(self, pcm_chunk: bytes) -> None:
         if not self._ws or self._ws_is_closed() or not self._session_id:
