@@ -43,7 +43,7 @@ DEFAULT_OPENING_NUDGE = ""
 
 
 def wrap_opening_as_speak_query(opening_line: str) -> str:
-    """Deprecated: opening is triggered via DuplexVoiceClient.speak_opening_script."""
+    """Deprecated: opening uses DuplexVoiceClient.say_hello (SayHello event)."""
     return (opening_line or "").strip().strip("「」").strip()
 
 

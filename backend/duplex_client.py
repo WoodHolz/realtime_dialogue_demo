@@ -40,7 +40,8 @@ TYPE_INPUT_AUDIO_BUFFER_COMMIT = "input_audio_buffer.commit"
 TYPE_CONVERSATION_ITEM_CREATE = "conversation.item.create"
 TYPE_CONVERSATION_ITEM_UPDATE = "conversation.item.update"
 TYPE_RESPONSE_CANCEL = "response.cancel"
-TYPE_RESPONSE_CREATE = "response.create"
+# Binary SayHello (event 300, payload {"content": "..."}) maps to this JSON event with `text`.
+TYPE_SPEECH_TEXT_BUFFER_COMMIT = "speech_text_buffer.commit"
 
 TYPE_SESSION_CREATED = "session.created"
 TYPE_SESSION_CLOSED = "session.closed"
@@ -458,25 +459,29 @@ class DuplexVoiceClient:
             }
         )
 
-    async def create_response(self) -> None:
-        """Trigger model TTS response after conversation.item.create (proactive speak-first)."""
+    async def say_hello(self, content: str) -> None:
+        """Proactive opening TTS (SayHello / event 300).
+
+        Binary API: event 300, payload ``{"content": "..."}``.
+        Duplex 3.0 JSON wire: ``speech_text_buffer.commit`` with ``text``.
+        """
         if not self._ws or self._ws_is_closed() or not self._session_id:
+            return
+        text = (content or "").strip().strip("「」").strip()
+        if not text:
             return
         await self._send_event(
             {
-                "type": TYPE_RESPONSE_CREATE,
+                "type": TYPE_SPEECH_TEXT_BUFFER_COMMIT,
                 "event_id": self._new_event_id(),
+                "text": text,
             }
         )
+        LOG.info("SayHello sent (speech_text_buffer.commit) len=%d", len(text))
 
     async def speak_opening_script(self, opening_line: str) -> None:
-        """Proactive opening: inject exact script as assistant turn + response.create."""
-        text = (opening_line or "").strip().strip("「」").strip()
-        if not text:
-            return
-        await self.conversation_create(role="assistant", text=text)
-        await self.create_response()
-        LOG.info("speak_opening_script queued len=%d", len(text))
+        """Alias for SIP opening; sends SayHello with exact opening script."""
+        await self.say_hello(opening_line)
 
     async def conversation_update(self, *, item_id: str, text: str) -> None:
         if not self._ws or self._ws_is_closed() or not self._session_id:

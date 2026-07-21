@@ -90,7 +90,6 @@ class SipAgentBridge:
         self._client: DuplexVoiceClient | None = None
         self._accept_uplink = False
         self._opening_tts_started: asyncio.Event | None = None
-        self._promoted_to_audio = False
 
     def _emit(self, status: str, **extra: Any) -> None:
         if self.on_status:
@@ -173,44 +172,40 @@ class SipAgentBridge:
         try:
             await client.connect()
             client.start_receive_loop()
-            # keep_alive so text query can trigger TTS (same path as t2s).
-            # Promote to audio+server_vad after opening TTS starts (non-blocking).
+            opening_first = bool(self.opening_line and self.sip_config.ai_speak_first)
             sid = await client.start_session(
                 self.system_role,
                 self.speaking_style,
                 bot_name=self.bot_name,
                 dialog_id=self.call_id,
-                input_mod="text",
-                server_vad=False,
+                input_mod="audio",
+                server_vad=True,
                 recv_timeout=120,
             )
             self._emit("agent_started", session_id=sid)
 
-            speak_query = self.opening_line
-            if speak_query and self.sip_config.ai_speak_first:
+            if opening_first:
                 try:
                     await asyncio.wait_for(session_ready.wait(), timeout=5.0)
                 except asyncio.TimeoutError:
                     LOG.warning(
-                        "session.created timeout call_id=%s; sending opening anyway",
+                        "session.created timeout call_id=%s; sending SayHello anyway",
                         self.call_id,
                     )
-                await asyncio.sleep(0.2)
-                await client.speak_opening_script(speak_query)
+                await client.say_hello(self.opening_line)
                 LOG.info(
-                    "opening_line sent call_id=%s chars=%d",
+                    "SayHello opening call_id=%s chars=%d",
                     self.call_id,
                     len(self.opening_line),
                 )
+                self._transcript.append({"role": "assistant", "text": self.opening_line})
                 self._emit("opening_line_sent", text_len=len(self.opening_line))
                 promote_task = asyncio.create_task(
-                    self._promote_to_audio_after_opening(client),
-                    name=f"sip-promote-{self.call_id}",
+                    self._enable_uplink_after_opening(),
+                    name=f"sip-opening-{self.call_id}",
                 )
             else:
-                await client.update_session(input_mod="audio", server_vad=True, recv_timeout=120)
                 self._accept_uplink = True
-                self._promoted_to_audio = True
 
             uplink_task = asyncio.create_task(self._uplink_loop(client))
             keepalive_task = asyncio.create_task(self._silence_keepalive_watchdog(client, session))
@@ -270,52 +265,24 @@ class SipAgentBridge:
             agent_session_id=self.call_id,
         )
 
-    async def _promote_to_audio_after_opening(self, client: DuplexVoiceClient) -> None:
-        """
-        Wait for opening TTS to start, then switch to audio+server_vad.
-        Retry response.create once if no TTS within 6s; cap total wait at 12s.
-        """
+    async def _enable_uplink_after_opening(self) -> None:
+        """Gate RTP uplink until opening TTS starts (or timeout)."""
         assert self._opening_tts_started is not None
-        deadline = asyncio.get_running_loop().time() + 12.0
-        retried = False
         try:
-            while asyncio.get_running_loop().time() < deadline:
-                remaining = deadline - asyncio.get_running_loop().time()
-                if remaining <= 0:
-                    break
-                try:
-                    await asyncio.wait_for(
-                        self._opening_tts_started.wait(),
-                        timeout=min(6.0, remaining),
-                    )
-                    LOG.info("opening TTS started call_id=%s; promoting to audio", self.call_id)
-                    break
-                except asyncio.TimeoutError:
-                    if not retried:
-                        retried = True
-                        LOG.warning(
-                            "opening TTS not observed call_id=%s; retry response.create",
-                            self.call_id,
-                        )
-                        try:
-                            await client.create_response()
-                        except Exception:
-                            LOG.debug("opening response.create retry failed", exc_info=True)
-                        continue
-                    LOG.warning(
-                        "opening TTS not observed call_id=%s; promoting to audio anyway",
-                        self.call_id,
-                    )
-                    break
-        except asyncio.CancelledError:
-            raise
-        try:
-            await client.update_session(input_mod="audio", server_vad=True, recv_timeout=120)
-            self._promoted_to_audio = True
+            try:
+                await asyncio.wait_for(self._opening_tts_started.wait(), timeout=8.0)
+                LOG.info("opening TTS started call_id=%s; enabling uplink", self.call_id)
+            except asyncio.TimeoutError:
+                LOG.warning(
+                    "opening TTS not observed within 8s call_id=%s; enabling uplink anyway",
+                    self.call_id,
+                )
             self._accept_uplink = True
             self._emit("audio_mode_ready")
+        except asyncio.CancelledError:
+            raise
         except Exception:
-            LOG.exception("promote to audio failed call_id=%s", self.call_id)
+            LOG.exception("enable uplink after opening failed call_id=%s", self.call_id)
             self._accept_uplink = True
 
     def _enqueue_uplink(self, item: bytes | None) -> None:
