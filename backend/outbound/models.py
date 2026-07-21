@@ -41,6 +41,8 @@ class CallTask:
     payload: dict[str, Any] = field(default_factory=dict)
     system_role: str = ""
     speaking_style: str = ""
+    # Explicit spoken opener for AI-speak-first (方案2); empty = disabled / fallback.
+    opening_line: str = ""
     telephony: dict[str, Any] = field(default_factory=dict)
     result: str | None = None
     result_summary: str = ""

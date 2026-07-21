@@ -80,12 +80,14 @@ async def _run_sip_bridged_call(call_id: str, store: CallStore) -> None:
             fields["status"] = STATUS_DIALING
         store.update(call_id, **fields)
 
+    opening = (getattr(task, "opening_line", None) or "").strip()
     bridge = SipAgentBridge(
         cfg,
         system_role=task.system_role,
         speaking_style=task.speaking_style,
         call_id=call_id,
         bot_name="催授权助手" if task.scenario == "urge_auth" else "语音助手",
+        opening_line=opening,
         on_status=on_status,
     )
 

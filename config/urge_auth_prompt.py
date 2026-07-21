@@ -38,6 +38,36 @@ def _norm_identity(mode: str) -> str:
     return IDENTITY_CLIENT
 
 
+def build_urge_auth_opening(
+    *,
+    candidate_name: str = "",
+    client_name: str = "",
+    our_brand_name: str = "芝麻背调",
+    identity_mode: str = IDENTITY_CLIENT,
+    has_email: bool | str = False,
+    **_ignored: Any,
+) -> str:
+    """Return spoken opening line (no 「」 quotes) for AI-speak-first."""
+    name = (candidate_name or "候选人").strip()
+    brand_or_client = (client_name or "用人单位").strip()
+    our_brand = (our_brand_name or "芝麻背调").strip()
+    white = _norm_identity(identity_mode) in _WHITE_LABEL
+    with_email = _truthy(has_email, default=False)
+    channel_bit = "短信或邮件" if with_email else "短信"
+    if white:
+        self_name = brand_or_client
+        return (
+            f"您好，请问是{name}吗？您好！我是{self_name}的 AI 语音助手，为您办理入职背景调查。"
+            f"为保证服务质量，本次通话将会录音。今天联系您是想确认一下您是否有收到授权"
+            f"{channel_bit}，大概占用您两分钟，现在方便吗？"
+        )
+    return (
+        f"您好，请问是{name}吗？您好！我是{our_brand}的 AI 语音助手，受{brand_or_client}委托，"
+        f"协助您完成入职背景调查。为保证服务质量，本次通话将会录音。"
+        f"今天联系您是想确认一下您是否有收到授权{channel_bit}，大概占用您两分钟，现在方便吗？"
+    )
+
+
 def build_urge_auth_system_role(
     *,
     candidate_name: str = "",
@@ -85,17 +115,21 @@ def build_urge_auth_system_role(
     mp = (mp_name or "").strip()
     resend = (resend_channel or "短信").strip() or "短信"
 
+    opening_spoken = build_urge_auth_opening(
+        candidate_name=name,
+        client_name=brand_or_client,
+        our_brand_name=our_brand,
+        identity_mode=mode,
+        has_email=with_email,
+    )
+    opening = f"「{opening_spoken}」"
+
     # --- identity-dependent lines ---
     if white:
         self_name = brand_or_client
         role_line = (
             f"你是「{self_name}」的 AI 语音助手，正在以{self_name}名义给候选人打电话，"
             f"办理入职前背景调查授权确认。话术中禁止出现第三方背调机构名称，禁止说「受某某委托」。"
-        )
-        opening = (
-            f"「您好，请问是{name}吗？您好！我是{self_name}的 AI 语音助手，为您办理入职背景调查。"
-            f"为保证服务质量，本次通话将会录音。今天联系您是想确认一下您是否有收到授权"
-            f"{'短信或邮件' if with_email else '短信'}，大概占用您两分钟，现在方便吗？」"
         )
         assistant_bridge = f"「{self_name}招聘，关于{name}的入职背景调查，请转接本人。」"
         trust_verify = (
@@ -124,12 +158,6 @@ def build_urge_auth_system_role(
         role_line = (
             f"你是「{self_name}」的 AI 语音助手，受「{brand_or_client}」委托，"
             f"正在给候选人打电话确认入职前背调授权。必须说明受托关系。"
-        )
-        opening = (
-            f"「您好，请问是{name}吗？您好！我是{self_name}的 AI 语音助手，受{brand_or_client}委托，"
-            f"协助您完成入职背景调查。为保证服务质量，本次通话将会录音。"
-            f"今天联系您是想确认一下您是否有收到授权"
-            f"{'短信或邮件' if with_email else '短信'}，大概占用您两分钟，现在方便吗？」"
         )
         assistant_bridge = f"「{self_name}背调，关于{name}的入职背景调查，请转接本人。」"
         trust_verify = (

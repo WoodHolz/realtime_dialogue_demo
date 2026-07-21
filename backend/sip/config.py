@@ -39,7 +39,18 @@ def _env_bool(name: str, default: bool) -> bool:
     return raw.lower() in {"1", "true", "yes", "on"}
 
 
-DEFAULT_OPENING_NUDGE = "（电话已接通，请按系统角色中的开场要求开始说话）"
+DEFAULT_OPENING_NUDGE = ""
+
+
+def wrap_opening_as_speak_query(opening_line: str) -> str:
+    """Build text query that asks Duplex to speak the exact opening script."""
+    text = (opening_line or "").strip().strip("「」").strip()
+    if not text:
+        return ""
+    return (
+        "电话已接通。请立刻完整说出下面这段开场白，不要改写、不要添加其他内容：\n"
+        f"{text}"
+    )
 
 
 @dataclass(frozen=True)
@@ -65,8 +76,9 @@ class SipConfig:
     sip_keepalive_sec: float = 10.0
     # Optional recording directory; empty = disabled.
     record_dir: str = ""
-    # After answer, inject opening_nudge via Duplex text query so AI speaks first.
+    # After answer, speak explicit opening_line (scenario) via Duplex text query.
     ai_speak_first: bool = True
+    # Fallback only; urge_auth prefers CallTask.opening_line from prompt builder.
     opening_nudge: str = DEFAULT_OPENING_NUDGE
 
     def is_configured(self) -> bool:

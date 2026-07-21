@@ -25,7 +25,7 @@ from backend.sip.codec import (
     resample_pcm16,
     telephony_rx_to_agent,
 )
-from backend.sip.config import SipConfig
+from backend.sip.config import SipConfig, wrap_opening_as_speak_query
 from backend.sip.recording import CallRecorder
 from backend.sip.session import SipCallResult, SipCallSession
 
@@ -61,6 +61,7 @@ class SipAgentBridge:
         call_id: str = "",
         bot_name: str = "语音助手",
         max_call_sec: float | None = None,
+        opening_line: str | None = None,
         opening_nudge: str | None = None,
         on_status: Callable[[str, dict[str, Any]], None] | None = None,
     ) -> None:
@@ -70,8 +71,14 @@ class SipAgentBridge:
         self.call_id = call_id or "anon"
         self.bot_name = bot_name
         self.max_call_sec = max_call_sec if max_call_sec is not None else sip_config.max_call_sec
-        resolved_nudge = sip_config.opening_nudge if opening_nudge is None else opening_nudge
-        self.opening_nudge = (resolved_nudge or "").strip()
+        # 方案2: prefer explicit opening_line; fallback to config / legacy nudge.
+        if opening_line is not None:
+            line = opening_line
+        elif opening_nudge is not None:
+            line = opening_nudge
+        else:
+            line = sip_config.opening_nudge
+        self.opening_line = (line or "").strip()
         self.on_status = on_status
         self._loop: asyncio.AbstractEventLoop | None = None
         self._uplink_q: asyncio.Queue[bytes | None] | None = None
@@ -81,6 +88,9 @@ class SipAgentBridge:
         self._recorder: CallRecorder | None = None
         self._session: SipCallSession | None = None
         self._client: DuplexVoiceClient | None = None
+        self._accept_uplink = False
+        self._opening_tts_started: asyncio.Event | None = None
+        self._promoted_to_audio = False
 
     def _emit(self, status: str, **extra: Any) -> None:
         if self.on_status:
@@ -102,11 +112,14 @@ class SipAgentBridge:
 
         self._loop = asyncio.get_running_loop()
         self._uplink_q = asyncio.Queue(maxsize=200)
+        self._opening_tts_started = asyncio.Event()
 
         session = SipCallSession(self.sip_config)
         self._session = session
 
         def on_pcmu(payload: bytes) -> None:
+            if not self._accept_uplink:
+                return
             try:
                 pcm16 = telephony_rx_to_agent(payload)
             except Exception:
@@ -145,6 +158,7 @@ class SipAgentBridge:
             on_asr=self._on_asr,
             on_asr_ended=self._on_asr_ended,
             on_tts_audio=self._on_tts_audio,
+            on_tts_start=self._on_tts_start,
             on_tts_end=self._on_tts_end,
             on_chat_response=self._on_chat_delta,
             on_chat_ended=self._on_chat_ended,
@@ -155,38 +169,48 @@ class SipAgentBridge:
 
         outcome_error = ""
         keepalive_task: asyncio.Task | None = None
+        promote_task: asyncio.Task | None = None
         try:
             await client.connect()
             client.start_receive_loop()
-            # Phone calls idle between turns; default recv_timeout=10 would drop the dialog.
+            # keep_alive so text query can trigger TTS (same path as t2s).
+            # Promote to audio+server_vad after opening TTS starts (non-blocking).
             sid = await client.start_session(
                 self.system_role,
                 self.speaking_style,
                 bot_name=self.bot_name,
                 dialog_id=self.call_id,
-                input_mod="audio",
-                server_vad=True,
+                input_mod="text",
+                server_vad=False,
                 recv_timeout=120,
             )
             self._emit("agent_started", session_id=sid)
 
-            # Phone calls need AI to speak first; nudge is scenario-agnostic text.
-            if self.opening_nudge:
+            speak_query = wrap_opening_as_speak_query(self.opening_line)
+            if speak_query and self.sip_config.ai_speak_first:
                 try:
                     await asyncio.wait_for(session_ready.wait(), timeout=5.0)
                 except asyncio.TimeoutError:
                     LOG.warning(
-                        "session.created timeout call_id=%s; sending opening_nudge anyway",
+                        "session.created timeout call_id=%s; sending opening anyway",
                         self.call_id,
                     )
-                await asyncio.sleep(0.25)
-                await client.send_text_query(self.opening_nudge)
+                await asyncio.sleep(0.2)
+                await client.send_text_query(speak_query)
                 LOG.info(
-                    "opening_nudge sent call_id=%s len=%d",
+                    "opening_line sent call_id=%s chars=%d",
                     self.call_id,
-                    len(self.opening_nudge),
+                    len(self.opening_line),
                 )
-                self._emit("opening_nudge_sent", text_len=len(self.opening_nudge))
+                self._emit("opening_line_sent", text_len=len(self.opening_line))
+                promote_task = asyncio.create_task(
+                    self._promote_to_audio_after_opening(client),
+                    name=f"sip-promote-{self.call_id}",
+                )
+            else:
+                await client.update_session(input_mod="audio", server_vad=True, recv_timeout=120)
+                self._accept_uplink = True
+                self._promoted_to_audio = True
 
             uplink_task = asyncio.create_task(self._uplink_loop(client))
             keepalive_task = asyncio.create_task(self._silence_keepalive_watchdog(client, session))
@@ -205,10 +229,10 @@ class SipAgentBridge:
                     )
             finally:
                 self._enqueue_uplink(None)
-                for task in (keepalive_task, uplink_task):
+                for task in (promote_task, keepalive_task, uplink_task):
                     if task and not task.done():
                         task.cancel()
-                for task in (keepalive_task, uplink_task):
+                for task in (promote_task, keepalive_task, uplink_task):
                     if not task:
                         continue
                     try:
@@ -245,6 +269,31 @@ class SipAgentBridge:
             error=outcome_error or sip_final.error,
             agent_session_id=self.call_id,
         )
+
+    async def _promote_to_audio_after_opening(self, client: DuplexVoiceClient) -> None:
+        """
+        Wait briefly for opening TTS to start, then switch to audio+server_vad.
+        Never blocks more than ~3s (unlike previous 20s TTS-complete wait).
+        """
+        assert self._opening_tts_started is not None
+        try:
+            await asyncio.wait_for(self._opening_tts_started.wait(), timeout=3.0)
+            LOG.info("opening TTS started call_id=%s; promoting to audio", self.call_id)
+        except asyncio.TimeoutError:
+            LOG.warning(
+                "opening TTS not observed within 3s call_id=%s; promoting to audio anyway",
+                self.call_id,
+            )
+        except asyncio.CancelledError:
+            raise
+        try:
+            await client.update_session(input_mod="audio", server_vad=True, recv_timeout=120)
+            self._promoted_to_audio = True
+            self._accept_uplink = True
+            self._emit("audio_mode_ready")
+        except Exception:
+            LOG.exception("promote to audio failed call_id=%s", self.call_id)
+            self._accept_uplink = True
 
     def _enqueue_uplink(self, item: bytes | None) -> None:
         q = self._uplink_q
@@ -317,6 +366,10 @@ class SipAgentBridge:
         if text:
             self._transcript.append({"role": "assistant", "text": text})
 
+    def _on_tts_start(self, _meta: dict) -> None:
+        if self._opening_tts_started and not self._opening_tts_started.is_set():
+            self._opening_tts_started.set()
+
     def _on_tts_end(self, _meta: dict) -> None:
         client = self._client
         if not client:
@@ -332,6 +385,8 @@ class SipAgentBridge:
     def _on_tts_audio(self, pcm24k: bytes) -> None:
         if not pcm24k or not self._session:
             return
+        if self._opening_tts_started and not self._opening_tts_started.is_set():
+            self._opening_tts_started.set()
         # Record AI at 16k for consistent mixed track rate.
         if self._recorder:
             pcm16 = resample_pcm16(pcm24k, AGENT_TTS_RATE, AGENT_IN_RATE)
