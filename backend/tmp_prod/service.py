@@ -112,7 +112,7 @@ async def dial_one_contact(
 
     payload = {
         "candidate_name": contact.name,
-        "employer": contact.employer or "陕西榆林能源集团有限公司",
+        "employer": contact.employer or "比赛日科技",
         "gender": contact.gender,
         "phone": contact.phone,
         "client_name": contact.employer,
