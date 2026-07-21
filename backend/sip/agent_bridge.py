@@ -61,7 +61,7 @@ class SipAgentBridge:
         call_id: str = "",
         bot_name: str = "语音助手",
         max_call_sec: float | None = None,
-        opening_nudge: str = "（电话已接通，请按系统角色中的开场要求开始说话）",
+        opening_nudge: str | None = None,
         on_status: Callable[[str, dict[str, Any]], None] | None = None,
     ) -> None:
         self.sip_config = sip_config
@@ -70,7 +70,8 @@ class SipAgentBridge:
         self.call_id = call_id or "anon"
         self.bot_name = bot_name
         self.max_call_sec = max_call_sec if max_call_sec is not None else sip_config.max_call_sec
-        self.opening_nudge = (opening_nudge or "").strip()
+        resolved_nudge = sip_config.opening_nudge if opening_nudge is None else opening_nudge
+        self.opening_nudge = (resolved_nudge or "").strip()
         self.on_status = on_status
         self._loop: asyncio.AbstractEventLoop | None = None
         self._uplink_q: asyncio.Queue[bytes | None] | None = None
@@ -132,6 +133,11 @@ class SipAgentBridge:
             remote_rtp=sip_result.remote_rtp,
         )
 
+        session_ready = asyncio.Event()
+
+        def on_session_started(_dialog_id: str) -> None:
+            session_ready.set()
+
         client = DuplexVoiceClient(
             api_key=api_key,
             app_id=app_id,
@@ -142,6 +148,7 @@ class SipAgentBridge:
             on_tts_end=self._on_tts_end,
             on_chat_response=self._on_chat_delta,
             on_chat_ended=self._on_chat_ended,
+            on_session_started=on_session_started,
             on_error=lambda m: LOG.warning("agent error call_id=%s: %s", self.call_id, m),
         )
         self._client = client
@@ -165,8 +172,21 @@ class SipAgentBridge:
 
             # Phone calls need AI to speak first; nudge is scenario-agnostic text.
             if self.opening_nudge:
+                try:
+                    await asyncio.wait_for(session_ready.wait(), timeout=5.0)
+                except asyncio.TimeoutError:
+                    LOG.warning(
+                        "session.created timeout call_id=%s; sending opening_nudge anyway",
+                        self.call_id,
+                    )
                 await asyncio.sleep(0.25)
                 await client.send_text_query(self.opening_nudge)
+                LOG.info(
+                    "opening_nudge sent call_id=%s len=%d",
+                    self.call_id,
+                    len(self.opening_nudge),
+                )
+                self._emit("opening_nudge_sent", text_len=len(self.opening_nudge))
 
             uplink_task = asyncio.create_task(self._uplink_loop(client))
             keepalive_task = asyncio.create_task(self._silence_keepalive_watchdog(client, session))

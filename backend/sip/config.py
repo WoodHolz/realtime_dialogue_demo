@@ -32,6 +32,16 @@ def _env_float(name: str, default: float) -> float:
         return default
 
 
+def _env_bool(name: str, default: bool) -> bool:
+    raw = _env(name, "")
+    if not raw:
+        return default
+    return raw.lower() in {"1", "true", "yes", "on"}
+
+
+DEFAULT_OPENING_NUDGE = "（电话已接通，请按系统角色中的开场要求开始说话）"
+
+
 @dataclass(frozen=True)
 class SipConfig:
     """Peer + local media endpoints for SIP direct calling."""
@@ -55,6 +65,9 @@ class SipConfig:
     sip_keepalive_sec: float = 10.0
     # Optional recording directory; empty = disabled.
     record_dir: str = ""
+    # After answer, inject opening_nudge via Duplex text query so AI speaks first.
+    ai_speak_first: bool = True
+    opening_nudge: str = DEFAULT_OPENING_NUDGE
 
     def is_configured(self) -> bool:
         return bool(self.dst_host and self.src_ip and self.from_user)
@@ -68,6 +81,11 @@ def load_sip_config() -> SipConfig:
     prefix = _env("SIP_CALLED_PREFIX") or DEFAULT_CALLED_PREFIX
     if "#" in prefix:
         prefix = prefix.split("#", 1)[0].strip()
+    ai_speak_first = _env_bool("SIP_AI_SPEAK_FIRST", True)
+    opening_nudge = _env("SIP_OPENING_NUDGE", DEFAULT_OPENING_NUDGE)
+    if not ai_speak_first:
+        opening_nudge = ""
+
     return SipConfig(
         dst_host=_env("SIP_DST_HOST", "124.70.154.200"),
         dst_port=_env_int("SIP_DST_PORT", 5060),
@@ -82,4 +100,6 @@ def load_sip_config() -> SipConfig:
         max_call_sec=_env_float("SIP_MAX_CALL_SEC", 600.0),
         sip_keepalive_sec=_env_float("SIP_KEEPALIVE_SEC", 10.0),
         record_dir=_env("SIP_RECORD_DIR", ""),
+        ai_speak_first=ai_speak_first,
+        opening_nudge=opening_nudge,
     )
