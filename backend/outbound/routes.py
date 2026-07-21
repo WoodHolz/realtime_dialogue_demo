@@ -30,11 +30,34 @@ class CreateCallRequest(BaseModel):
     external_id: str = Field(default="", description="合作方侧业务单号，原样回传")
     callback_url: str = Field(default="", description="通话结束后 POST 结果到此地址")
     candidate_name: str = Field(default="", description="候选人称呼，如 张先生")
-    client_name: str = Field(default="", description="委托方（候选人认识的颗粒度，如 闪购）")
-    invite_channel: str = Field(default="手机短信和邮箱")
+    client_name: str = Field(
+        default="",
+        description="brand_self=委托方BU名；白标/渠道名义=自称品牌名",
+    )
+    identity_mode: str = Field(
+        default="CLIENT_IDENTITY",
+        description="BRAND_SELF | CLIENT_IDENTITY | CHANNEL_BRAND（后两者共用白标台词族）",
+    )
+    our_brand_name: str = Field(default="芝麻背调", description="仅 BRAND_SELF 自称用")
+    channel_brand_name: str = Field(
+        default="",
+        description="CHANNEL_BRAND 时渠道方名；非空则覆盖 client_name 作为自称",
+    )
+    invite_channel: str = Field(default="短信", description="已发送渠道文案，如 短信 / 短信和邮箱")
+    send_channel: str = Field(default="", description="同 invite_channel；优先于 invite_channel")
     invite_subject: str = Field(default="背调采集邀请")
+    send_time: str = Field(default="", description="发送时间锚点，如 今天上午")
+    phone_tail: str = Field(default="", description="手机尾号四位")
+    reserved_email: str = Field(default="", description="预留邮箱（配邮件时）")
+    has_email: bool | None = Field(default=None, description="是否配置授权邮件渠道")
+    has_fallback_sms: bool | None = Field(default=None, description="是否配置兜底短信")
+    fallback_sms_body: str = Field(default="", description="兜底短信正文（公众号指引唯一信息源）")
+    mp_name: str = Field(default="", description="公众号名称")
+    resend_channel: str = Field(default="短信", description="补发提醒渠道")
     deadline: str = Field(default="一个工作日内")
     hotline: str = Field(default="", description="答疑回拨号码")
+    work_hours: str = Field(default="9:00–18:00")
+    ticket_id: str = Field(default="", description="工单号（身份核验可选）")
     extra_note: str = Field(default="", description="额外备注，注入剧本")
     display: str = Field(
         default="",
@@ -67,7 +90,7 @@ async def list_scenarios(x_api_key: str | None = Header(default=None, alias="X-A
             {
                 "id": "urge_auth",
                 "name": "催授权",
-                "description": "芝麻背调 A1 催授权外呼，依据 bg_check_voice_docs 阶段2催授权剧本",
+                "description": "催授权外呼：情景话术约束见 config/urge_auth_prompt.py（剧本 v2.3 冒烟口径）",
             }
         ]
     }
@@ -102,15 +125,31 @@ async def create_call(
                 status_code=400,
                 detail=f"display must be one of config outbound.display_numbers; got {display}",
             )
-    payload = {
+    payload: dict[str, Any] = {
         "candidate_name": req.candidate_name,
         "client_name": req.client_name,
-        "invite_channel": req.invite_channel,
+        "identity_mode": req.identity_mode,
+        "our_brand_name": req.our_brand_name,
+        "channel_brand_name": req.channel_brand_name,
+        "invite_channel": req.send_channel or req.invite_channel,
+        "send_channel": req.send_channel or req.invite_channel,
         "invite_subject": req.invite_subject,
+        "send_time": req.send_time,
+        "phone_tail": req.phone_tail,
+        "reserved_email": req.reserved_email,
+        "fallback_sms_body": req.fallback_sms_body,
+        "mp_name": req.mp_name,
+        "resend_channel": req.resend_channel,
         "deadline": req.deadline,
         "hotline": req.hotline,
+        "work_hours": req.work_hours,
+        "ticket_id": req.ticket_id,
         "extra_note": req.extra_note,
     }
+    if req.has_email is not None:
+        payload["has_email"] = req.has_email
+    if req.has_fallback_sms is not None:
+        payload["has_fallback_sms"] = req.has_fallback_sms
     try:
         task = await create_outbound_call(
             phone=req.phone,
