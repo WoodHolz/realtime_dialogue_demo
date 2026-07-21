@@ -70,22 +70,20 @@ def build_urge_auth_opening_parts(
     channel_bit = _opening_channel_phrase(invite_channel, with_email)
 
     part1 = f"您好，请问是{name}吗？"
+    part3 = (
+        f"为保证服务质量，本次通话将会录音。"
+        f"今天联系您是想确认一下您是否有收到主题为《{subject}》的授权{channel_bit}，"
+        f"大概占用您两分钟，现在方便吗？"
+    )
     if white:
         self_name = brand_or_client
-        part2 = (
-            f"我是{self_name}的智能语音助手，为您办理入职背景调查。"
-            f"为保证服务质量，本次通话将会录音。"
-            f"今天联系您是想确认一下您是否有收到主题为《{subject}》的授权{channel_bit}，"
-            f"大概占用您两分钟，现在方便吗？"
-        )
+        part2 = f"我是{self_name}的智能语音助手，为您办理入职背景调查。"
     else:
         part2 = (
             f"我是{our_brand}的智能语音助手，受{brand_or_client}委托，"
-            f"协助您完成入职背景调查。为保证服务质量，本次通话将会录音。"
-            f"今天联系您是想确认一下您是否有收到主题为《{subject}》的授权{channel_bit}，"
-            f"大概占用您两分钟，现在方便吗？"
+            f"协助您完成入职背景调查。"
         )
-    return [part1, part2]
+    return [part1, part2, part3]
 
 
 def build_urge_auth_opening(

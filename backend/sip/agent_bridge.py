@@ -99,6 +99,7 @@ class SipAgentBridge:
         self._opening_tts_started: asyncio.Event | None = None
         self._opening_tts_done: asyncio.Event | None = None
         self._opening_uplink_pending = False
+        self._opening_part_pcm24_bytes = 0
 
     def _emit(self, status: str, **extra: Any) -> None:
         if self.on_status:
@@ -279,9 +280,9 @@ class SipAgentBridge:
     async def _play_opening_parts(self, client: DuplexVoiceClient) -> None:
         """Play opening as separate SayHello utterances; enable uplink when all finish."""
         assert self._opening_tts_done is not None
-        pause_sec = 0.4
         for idx, part in enumerate(self.opening_parts):
             self._opening_tts_done.clear()
+            self._opening_part_pcm24_bytes = 0
             await client.say_hello(part)
             LOG.info(
                 "SayHello part %d/%d call_id=%s len=%d",
@@ -299,12 +300,31 @@ class SipAgentBridge:
                     self.call_id,
                 )
             if idx + 1 < len(self.opening_parts):
-                await asyncio.sleep(pause_sec)
+                await self._wait_opening_part_playback_drain(idx + 1)
         await asyncio.sleep(0.15)
         self._accept_uplink = True
         self._opening_uplink_pending = False
         self._emit("audio_mode_ready")
         LOG.info("opening TTS all parts done call_id=%s; uplink enabled", self.call_id)
+
+    async def _wait_opening_part_playback_drain(self, part_idx: int) -> None:
+        """Wait for RTP downlink to finish current part before next SayHello."""
+        pcm_bytes = self._opening_part_pcm24_bytes
+        duration_sec = pcm_bytes / float(AGENT_TTS_RATE * 2) if pcm_bytes > 0 else 0.0
+        # Server TTS done != phone finished playing; add margin for RTP queue + jitter.
+        drain_sec = max(0.55, duration_sec + 0.35)
+        tail = self._pcmu_tx_buf.flush_pad_silence()
+        if tail and self._session:
+            self._session.enqueue_pcmu(tail)
+        LOG.info(
+            "opening part %d playback drain call_id=%s pcm24k=%d est=%.2fs wait=%.2fs",
+            part_idx,
+            self.call_id,
+            pcm_bytes,
+            duration_sec,
+            drain_sec,
+        )
+        await asyncio.sleep(drain_sec)
 
     def _enqueue_uplink(self, item: bytes | None) -> None:
         q = self._uplink_q
@@ -399,6 +419,8 @@ class SipAgentBridge:
     def _on_tts_audio(self, pcm24k: bytes) -> None:
         if not pcm24k or not self._session:
             return
+        if self._opening_uplink_pending:
+            self._opening_part_pcm24_bytes += len(pcm24k)
         if self._opening_tts_started and not self._opening_tts_started.is_set():
             self._opening_tts_started.set()
         # Record AI at 16k for consistent mixed track rate.
