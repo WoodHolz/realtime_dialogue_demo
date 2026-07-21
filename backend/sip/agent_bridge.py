@@ -198,8 +198,8 @@ class SipAgentBridge:
                     self.call_id,
                     len(self.opening_line),
                 )
-                self._transcript.append({"role": "assistant", "text": self.opening_line})
                 self._emit("opening_line_sent", text_len=len(self.opening_line))
+                self._transcript.append({"role": "assistant", "text": self.opening_line})
                 promote_task = asyncio.create_task(
                     self._enable_uplink_after_opening(),
                     name=f"sip-opening-{self.call_id}",

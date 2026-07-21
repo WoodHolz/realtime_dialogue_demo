@@ -81,9 +81,18 @@ async def _run_sip_bridged_call(call_id: str, store: CallStore) -> None:
         store.update(call_id, **fields)
 
     opening = (getattr(task, "opening_line", None) or "").strip()
+    system_role = task.system_role
+    if cfg.ai_speak_first and opening and task.scenario == "urge_auth":
+        from config.urge_auth_prompt import (
+            build_urge_auth_system_role,
+            urge_auth_slots_from_payload,
+        )
+
+        slots = urge_auth_slots_from_payload(task.payload)
+        system_role = build_urge_auth_system_role(**slots, opening_preplayed=True)
     bridge = SipAgentBridge(
         cfg,
-        system_role=task.system_role,
+        system_role=system_role,
         speaking_style=task.speaking_style,
         call_id=call_id,
         bot_name="催授权助手" if task.scenario == "urge_auth" else "语音助手",

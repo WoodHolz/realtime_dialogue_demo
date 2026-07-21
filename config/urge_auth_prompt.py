@@ -110,6 +110,7 @@ def build_urge_auth_system_role(
     mp_name: str = "",
     resend_channel: str = "短信",
     extra_note: str = "",
+    opening_preplayed: bool = False,
     **_ignored: Any,
 ) -> str:
     """Build scenario-constrained system_role for 催授权 duplex dialogue."""
@@ -146,6 +147,13 @@ def build_urge_auth_system_role(
         has_email=with_email,
     )
     opening = f"「{opening_spoken}」"
+    if opening_preplayed:
+        opening_rule = (
+            "- 系统已在接通时播报标准开场（内容与剧本一致），禁止你再念一遍或换说法重复开场。"
+            "保持静默等对方回应；对方开口后从 delivery_check / not_convenient / trust_crisis 等情景推进。"
+        )
+    else:
+        opening_rule = f"- 标准开场：{opening}"
 
     # --- identity-dependent lines ---
     if white:
@@ -306,7 +314,7 @@ def build_urge_auth_system_role(
 ■ opening｜接通且确认为本人
 - 目标：合规披露 + 送达确认来意 + 问是否方便。
 - 必须先完成：AI 身份、录音告知{"、受托关系" if not white else "（白标：不说受托）"}。
-- 标准开场：{opening}
+{opening_rule}
 - 对方直接说进展（「我填了」）→ 顺势进 claims_filled，勿把开场没念完的部分补念完。
 - 下一跳：方便→delivery_check；不方便→not_convenient；你是谁/诈骗→trust_crisis。
 
