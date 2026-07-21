@@ -39,9 +39,7 @@ def _env_bool(name: str, default: bool) -> bool:
     return raw.lower() in {"1", "true", "yes", "on"}
 
 
-DEFAULT_OPENING_NUDGE = (
-    "（电话已接通。请立即按系统角色中的【合规开场】说出标准开场白，不要等待用户先说话。）"
-)
+DEFAULT_OPENING_NUDGE = "（电话已接通，请按系统角色中的开场要求开始说话）"
 
 
 @dataclass(frozen=True)

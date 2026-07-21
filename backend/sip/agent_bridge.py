@@ -81,8 +81,6 @@ class SipAgentBridge:
         self._recorder: CallRecorder | None = None
         self._session: SipCallSession | None = None
         self._client: DuplexVoiceClient | None = None
-        self._accept_uplink = False
-        self._opening_tts_done: asyncio.Event | None = None
 
     def _emit(self, status: str, **extra: Any) -> None:
         if self.on_status:
@@ -104,14 +102,11 @@ class SipAgentBridge:
 
         self._loop = asyncio.get_running_loop()
         self._uplink_q = asyncio.Queue(maxsize=200)
-        self._opening_tts_done = asyncio.Event()
 
         session = SipCallSession(self.sip_config)
         self._session = session
 
         def on_pcmu(payload: bytes) -> None:
-            if not self._accept_uplink:
-                return
             try:
                 pcm16 = telephony_rx_to_agent(payload)
             except Exception:
@@ -163,18 +158,19 @@ class SipAgentBridge:
         try:
             await client.connect()
             client.start_receive_loop()
-            # Opening: keep_alive + text query triggers TTS. server_vad+audio waits for user audio first.
+            # Phone calls idle between turns; default recv_timeout=10 would drop the dialog.
             sid = await client.start_session(
                 self.system_role,
                 self.speaking_style,
                 bot_name=self.bot_name,
                 dialog_id=self.call_id,
-                input_mod="text",
-                server_vad=False,
+                input_mod="audio",
+                server_vad=True,
                 recv_timeout=120,
             )
             self._emit("agent_started", session_id=sid)
 
+            # Phone calls need AI to speak first; nudge is scenario-agnostic text.
             if self.opening_nudge:
                 try:
                     await asyncio.wait_for(session_ready.wait(), timeout=5.0)
@@ -191,16 +187,7 @@ class SipAgentBridge:
                     len(self.opening_nudge),
                 )
                 self._emit("opening_nudge_sent", text_len=len(self.opening_nudge))
-                try:
-                    await asyncio.wait_for(self._opening_tts_done.wait(), timeout=20.0)
-                    LOG.info("opening TTS completed call_id=%s", self.call_id)
-                except asyncio.TimeoutError:
-                    LOG.warning("opening TTS timeout call_id=%s; continuing to audio mode", self.call_id)
-                await client.update_session(input_mod="audio", server_vad=True, recv_timeout=120)
-            else:
-                await client.update_session(input_mod="audio", server_vad=True, recv_timeout=120)
 
-            self._accept_uplink = True
             uplink_task = asyncio.create_task(self._uplink_loop(client))
             keepalive_task = asyncio.create_task(self._silence_keepalive_watchdog(client, session))
             try:
@@ -331,8 +318,6 @@ class SipAgentBridge:
             self._transcript.append({"role": "assistant", "text": text})
 
     def _on_tts_end(self, _meta: dict) -> None:
-        if self._opening_tts_done and not self._opening_tts_done.is_set():
-            self._opening_tts_done.set()
         client = self._client
         if not client:
             return
