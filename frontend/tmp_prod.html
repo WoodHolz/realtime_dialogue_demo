@@ -1,0 +1,266 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>tmp-prod 国投催授权演示</title>
+  <style>
+    :root {
+      --bg: #f2f4f3;
+      --ink: #1a1f1c;
+      --muted: #5c675f;
+      --line: #d5ddd7;
+      --accent: #0d5c45;
+      --card: #ffffff;
+      --danger: #9b2c2c;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: "IBM Plex Sans", "Noto Sans SC", system-ui, sans-serif;
+      color: var(--ink);
+      background:
+        radial-gradient(ellipse 70% 45% at 0% 0%, #dceee6 0%, transparent 55%),
+        var(--bg);
+      min-height: 100vh;
+    }
+    main { width: min(1080px, calc(100% - 2rem)); margin: 2rem auto 3rem; }
+    h1 { margin: 0 0 0.35rem; font-size: 1.6rem; }
+    .lead { color: var(--muted); margin: 0 0 1.25rem; line-height: 1.5; }
+    .panel {
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      padding: 1.1rem 1.2rem 1.25rem;
+      margin-bottom: 1rem;
+    }
+    label { display: block; font-size: 0.85rem; font-weight: 600; margin: 0.7rem 0 0.3rem; }
+    input, button, select {
+      font: inherit; width: 100%;
+      border: 1px solid var(--line); border-radius: 8px; padding: 0.6rem 0.75rem;
+    }
+    button {
+      background: var(--accent); color: #fff; border: 0; font-weight: 600;
+      cursor: pointer; margin-top: 0.85rem;
+    }
+    button.secondary { background: #2f3d36; }
+    button:disabled { opacity: 0.55; cursor: not-allowed; }
+    .row { display: grid; grid-template-columns: 1fr 1fr; gap: 0.75rem; }
+    @media (max-width: 700px) { .row { grid-template-columns: 1fr; } }
+    .hint { font-size: 0.8rem; color: var(--muted); margin-top: 0.35rem; }
+    .status {
+      white-space: pre-wrap; font-size: 0.85rem; line-height: 1.45;
+      background: #f7faf8; border: 1px solid var(--line); border-radius: 8px;
+      padding: 0.75rem; min-height: 2.5rem; margin-top: 0.75rem;
+    }
+    .status.err { color: var(--danger); background: #fff5f5; }
+    table { width: 100%; border-collapse: collapse; font-size: 0.84rem; }
+    th, td { border-bottom: 1px solid var(--line); padding: 0.45rem 0.35rem; text-align: left; vertical-align: top; }
+    th { color: var(--muted); font-weight: 600; }
+    .tag { display: inline-block; padding: 0.1rem 0.4rem; border-radius: 999px; background: #e7f2ed; font-size: 0.75rem; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>tmp-prod · 国投催授权演示</h1>
+    <p class="lead">上传 Excel（用人单位 / 姓名 / 性别 / 手机号）→ 批量外呼 → 查看结果并下载 xlsx。未接通 30 分钟后自动重试一次；2 次失败记为「未接通」。单通最长 15 分钟。</p>
+
+    <section class="panel">
+      <h2 style="margin:0 0 0.5rem;font-size:1rem;">1. 上传并外呼</h2>
+      <label for="file">Excel 文件</label>
+      <input id="file" type="file" accept=".xlsx,.xlsm" />
+      <div class="row">
+        <div>
+          <label for="apiKey">X-API-Key（可选）</label>
+          <input id="apiKey" type="password" placeholder="PARTNER_API_KEY 为空可留空" autocomplete="off" />
+        </div>
+        <div>
+          <label for="dryRun">模式</label>
+          <select id="dryRun">
+            <option value="">跟随 OUTBOUND_DRY_RUN</option>
+            <option value="false">真实外呼</option>
+            <option value="true">dry_run（不拨号）</option>
+          </select>
+        </div>
+      </div>
+      <button id="uploadBtn" type="button">上传 Excel</button>
+      <button id="startBtn" class="secondary" type="button" disabled>开始外呼</button>
+      <p class="hint">模板参考 <code>docs/tmp.xlsx</code>。外显号由服务端号池自动分配。</p>
+      <div class="status" id="status">就绪</div>
+    </section>
+
+    <section class="panel">
+      <h2 style="margin:0 0 0.5rem;font-size:1rem;">2. 批次结果</h2>
+      <div class="row">
+        <div>
+          <label for="batchId">batch_id</label>
+          <input id="batchId" type="text" placeholder="上传后自动填入" />
+        </div>
+        <div style="display:flex;align-items:end;gap:0.5rem;">
+          <button id="refreshBtn" class="secondary" type="button">刷新</button>
+          <button id="exportBtn" type="button">下载 xlsx</button>
+        </div>
+      </div>
+      <div style="overflow:auto;margin-top:0.75rem;">
+        <table>
+          <thead>
+            <tr>
+              <th>用人单位</th><th>姓名</th><th>性别</th><th>手机</th>
+              <th>状态</th><th>结果</th><th>尝试</th><th>失败原因</th><th>call_id</th>
+            </tr>
+          </thead>
+          <tbody id="tbody"></tbody>
+        </table>
+      </div>
+    </section>
+  </main>
+  <script>
+    (function () {
+      var pathPrefix = location.pathname.indexOf("/s2s/") === 0 || location.pathname === "/s2s"
+        ? "/s2s" : "";
+      // page may be /tmp-prod/ or /tmp-prod
+      var API = pathPrefix + "/tmp-prod";
+      var el = {
+        file: document.getElementById("file"),
+        apiKey: document.getElementById("apiKey"),
+        dryRun: document.getElementById("dryRun"),
+        uploadBtn: document.getElementById("uploadBtn"),
+        startBtn: document.getElementById("startBtn"),
+        refreshBtn: document.getElementById("refreshBtn"),
+        exportBtn: document.getElementById("exportBtn"),
+        batchId: document.getElementById("batchId"),
+        status: document.getElementById("status"),
+        tbody: document.getElementById("tbody"),
+      };
+      var pollTimer = null;
+
+      function headers(json) {
+        var h = {};
+        if (json) h["Content-Type"] = "application/json";
+        var key = (el.apiKey.value || "").trim();
+        if (key) h["X-API-Key"] = key;
+        return h;
+      }
+      function setStatus(text, isErr) {
+        el.status.textContent = text;
+        el.status.classList.toggle("err", !!isErr);
+      }
+      function renderContacts(contacts) {
+        el.tbody.innerHTML = "";
+        (contacts || []).forEach(function (c) {
+          var tr = document.createElement("tr");
+          tr.innerHTML =
+            "<td>" + (c.employer || "") + "</td>" +
+            "<td>" + (c.name || "") + "</td>" +
+            "<td>" + (c.gender || "") + "</td>" +
+            "<td>" + (c.phone || "") + "</td>" +
+            "<td><span class='tag'>" + (c.status || "") + "</span></td>" +
+            "<td>" + (c.result || "") + "</td>" +
+            "<td>" + (c.attempt || 0) + "</td>" +
+            "<td>" + (c.fail_reason || "") + "</td>" +
+            "<td>" + (c.last_call_id || "") + "</td>";
+          el.tbody.appendChild(tr);
+        });
+      }
+      async function refresh() {
+        var id = (el.batchId.value || "").trim();
+        if (!id) return;
+        var resp = await fetch(API + "/batches/" + id, { headers: headers(false) });
+        var data = await resp.json();
+        if (!resp.ok) throw new Error(data.detail || resp.statusText);
+        renderContacts(data.contacts || []);
+        setStatus(
+          "batch=" + data.batch_id +
+          " status=" + data.status +
+          " stats=" + JSON.stringify(data.stats || {})
+        );
+        if (data.status === "done" && pollTimer) {
+          clearInterval(pollTimer);
+          pollTimer = null;
+        }
+      }
+      function startPoll() {
+        if (pollTimer) clearInterval(pollTimer);
+        pollTimer = setInterval(function () {
+          refresh().catch(function () {});
+        }, 3000);
+      }
+
+      el.uploadBtn.addEventListener("click", async function () {
+        if (!el.file.files || !el.file.files[0]) {
+          setStatus("请先选择 Excel", true);
+          return;
+        }
+        el.uploadBtn.disabled = true;
+        try {
+          var fd = new FormData();
+          fd.append("file", el.file.files[0]);
+          var resp = await fetch(API + "/batches/upload", {
+            method: "POST",
+            headers: headers(false),
+            body: fd,
+          });
+          var data = await resp.json();
+          if (!resp.ok) throw new Error(data.detail || resp.statusText);
+          el.batchId.value = data.batch_id;
+          el.startBtn.disabled = false;
+          renderContacts(data.contacts || []);
+          setStatus("已上传 batch_id=" + data.batch_id + " 共 " + data.count + " 人");
+        } catch (e) {
+          setStatus(String(e.message || e), true);
+        } finally {
+          el.uploadBtn.disabled = false;
+        }
+      });
+
+      el.startBtn.addEventListener("click", async function () {
+        var id = (el.batchId.value || "").trim();
+        if (!id) return;
+        el.startBtn.disabled = true;
+        try {
+          var body = { stagger_sec: 2 };
+          if (el.dryRun.value === "true") body.dry_run = true;
+          if (el.dryRun.value === "false") body.dry_run = false;
+          var resp = await fetch(API + "/batches/" + id + "/start", {
+            method: "POST",
+            headers: headers(true),
+            body: JSON.stringify(body),
+          });
+          var data = await resp.json();
+          if (!resp.ok) throw new Error(data.detail || resp.statusText);
+          setStatus(data.message || "已开始");
+          startPoll();
+          await refresh();
+        } catch (e) {
+          setStatus(String(e.message || e), true);
+          el.startBtn.disabled = false;
+        }
+      });
+
+      el.refreshBtn.addEventListener("click", function () {
+        refresh().catch(function (e) { setStatus(String(e.message || e), true); });
+      });
+
+      el.exportBtn.addEventListener("click", async function () {
+        var id = (el.batchId.value || "").trim();
+        if (!id) return;
+        try {
+          var resp = await fetch(API + "/batches/" + id + "/export.xlsx", { headers: headers(false) });
+          if (!resp.ok) {
+            var t = await resp.text();
+            throw new Error(t || resp.statusText);
+          }
+          var blob = await resp.blob();
+          var a = document.createElement("a");
+          a.href = URL.createObjectURL(blob);
+          a.download = "tmp_prod_results_" + id + ".xlsx";
+          a.click();
+          URL.revokeObjectURL(a.href);
+        } catch (e) {
+          setStatus(String(e.message || e), true);
+        }
+      });
+    })();
+  </script>
+</body>
+</html>

@@ -81,6 +81,7 @@ from backend.demo_asr_broadcast import (
     unregister_demo_asr_viewer,
 )
 from backend.outbound.routes import router as partner_outbound_router
+from backend.tmp_prod.routes import router as tmp_prod_router
 
 LOG = logging.getLogger(__name__)
 
@@ -98,6 +99,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="AI Interviewer Realtime Voice Demo", lifespan=lifespan)
 app.include_router(partner_outbound_router)
+app.include_router(tmp_prod_router)
 
 VAD_ASR_TARGET_SAMPLE_RATE = 16000
 

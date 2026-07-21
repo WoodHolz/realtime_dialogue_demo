@@ -28,7 +28,7 @@ from config.urge_auth_prompt import (
 
 LOG = logging.getLogger(__name__)
 
-SUPPORTED_SCENARIOS = {"urge_auth"}
+SUPPORTED_SCENARIOS = {"urge_auth", "guotou_auth_demo"}
 
 
 def _partner_api_key() -> str:
@@ -49,6 +49,20 @@ def verify_partner_api_key(provided: str | None) -> bool:
 
 def build_scenario_prompt(scenario: str, payload: dict[str, Any]) -> tuple[str, str, str, list[str]]:
     """Return (system_role, speaking_style, opening_line, opening_parts)."""
+    if scenario == "guotou_auth_demo":
+        from config.guotou_demo_prompt import (
+            DEFAULT_SPEAKING_STYLE as G_STYLE,
+            build_guotou_demo_opening,
+            build_guotou_demo_opening_parts,
+            build_guotou_demo_system_role,
+            guotou_demo_slots_from_payload,
+        )
+
+        slots = guotou_demo_slots_from_payload(payload)
+        role = build_guotou_demo_system_role(**slots)
+        parts = build_guotou_demo_opening_parts(**slots)
+        opening = build_guotou_demo_opening(**slots)
+        return role, G_STYLE, opening, parts
     if scenario != "urge_auth":
         raise ValueError(f"Unsupported scenario: {scenario}")
     slots = urge_auth_slots_from_payload(payload)

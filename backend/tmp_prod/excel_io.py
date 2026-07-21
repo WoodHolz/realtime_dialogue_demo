@@ -1,0 +1,146 @@
+# -*- coding: utf-8 -*-
+"""tmp-prod Excel helpers (openpyxl)."""
+from __future__ import annotations
+
+import re
+from io import BytesIO
+from pathlib import Path
+from typing import Any
+
+from openpyxl import Workbook, load_workbook
+
+HEADER_ALIASES = {
+    "用人单位": "employer",
+    "姓名": "name",
+    "性别": "gender",
+    "手机号": "phone",
+}
+
+
+def _norm_header(cell: Any) -> str:
+    return re.sub(r"\s+", "", str(cell or "").strip())
+
+
+def _norm_phone(raw: Any) -> str:
+    s = str(raw or "").strip()
+    if s.endswith(".0") and s.replace(".", "", 1).isdigit():
+        s = s[:-2]
+    s = re.sub(r"[\s\-()]", "", s)
+    if s.startswith("+86"):
+        s = s[3:]
+    return s
+
+
+def read_contacts_from_xlsx(data: bytes | Path) -> list[dict[str, str]]:
+    """Parse docs/tmp.xlsx-like sheets: find header row with 用人单位/姓名/手机号."""
+    if isinstance(data, Path):
+        wb = load_workbook(data, read_only=True, data_only=True)
+    else:
+        wb = load_workbook(BytesIO(data), read_only=True, data_only=True)
+    try:
+        ws = wb.active
+        rows = list(ws.iter_rows(values_only=True))
+    finally:
+        wb.close()
+
+    header_idx = -1
+    colmap: dict[str, int] = {}
+    for i, row in enumerate(rows):
+        cells = [_norm_header(c) for c in (row or ())]
+        found: dict[str, int] = {}
+        for j, h in enumerate(cells):
+            if h in HEADER_ALIASES:
+                found[HEADER_ALIASES[h]] = j
+        if {"employer", "name", "phone"}.issubset(found.keys()):
+            header_idx = i
+            colmap = found
+            # gender optional
+            if "gender" not in colmap and "性别" in cells:
+                colmap["gender"] = cells.index("性别")
+            break
+    if header_idx < 0:
+        raise ValueError("未找到表头（需要列：用人单位、姓名、手机号）")
+
+    contacts: list[dict[str, str]] = []
+    for row in rows[header_idx + 1 :]:
+        if not row:
+            continue
+        def cell(key: str) -> str:
+            idx = colmap.get(key)
+            if idx is None or idx >= len(row):
+                return ""
+            return str(row[idx] or "").strip()
+
+        name = cell("name")
+        phone = _norm_phone(cell("phone") if "phone" in colmap else "")
+        employer = cell("employer")
+        gender = cell("gender")
+        if not name and not phone:
+            continue
+        if not phone or not phone.isdigit() or len(phone) < 7:
+            continue
+        contacts.append(
+            {
+                "employer": employer,
+                "name": name,
+                "gender": gender,
+                "phone": phone,
+            }
+        )
+    return contacts
+
+
+def write_results_xlsx(rows: list[dict[str, Any]]) -> bytes:
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "外呼结果"
+    headers = [
+        "用人单位",
+        "姓名",
+        "性别",
+        "手机号",
+        "状态",
+        "结果",
+        "结果说明",
+        "尝试次数",
+        "失败原因",
+        "承诺完成时间",
+        "登记邮箱",
+        "最近call_id",
+        "转写摘要",
+        "录音目录",
+        "更新时间",
+    ]
+    ws.append(headers)
+    for r in rows:
+        transcript = r.get("transcript") or []
+        summary = ""
+        if isinstance(transcript, list) and transcript:
+            bits = []
+            for t in transcript[-8:]:
+                role = t.get("role", "")
+                text = t.get("text", "")
+                bits.append(f"{role}:{text}")
+            summary = " | ".join(bits)[:2000]
+        ws.append(
+            [
+                r.get("employer", ""),
+                r.get("name", ""),
+                r.get("gender", ""),
+                r.get("phone", ""),
+                r.get("status", ""),
+                r.get("result", ""),
+                r.get("result_summary", ""),
+                r.get("attempt", 0),
+                r.get("fail_reason", ""),
+                r.get("promised_time", ""),
+                r.get("email", ""),
+                r.get("last_call_id", ""),
+                summary,
+                r.get("recording_dir", ""),
+                r.get("updated_at", ""),
+            ]
+        )
+    buf = BytesIO()
+    wb.save(buf)
+    return buf.getvalue()

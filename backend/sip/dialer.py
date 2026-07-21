@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 from datetime import datetime, timezone
 from typing import Any
 
@@ -115,6 +116,13 @@ async def _run_sip_bridged_call(
             return
 
         cfg = load_sip_config().with_peer(peer_host, peer_port)
+        if task.scenario == "guotou_auth_demo":
+            from dataclasses import replace
+            from pathlib import Path
+
+            rec = Path(os.environ.get("SIP_RECORD_DIR") or "data/tmp_prod/recordings")
+            rec.mkdir(parents=True, exist_ok=True)
+            cfg = replace(cfg, max_call_sec=900.0, record_dir=str(rec))
         dial = (task.telephony or {}).get("dial") or {}
         phone = str(dial.get("called") or task.phone)
 
@@ -142,6 +150,14 @@ async def _run_sip_bridged_call(
 
             slots = urge_auth_slots_from_payload(task.payload)
             system_role = build_urge_auth_system_role(**slots, opening_preplayed=True)
+        elif cfg.ai_speak_first and opening and task.scenario == "guotou_auth_demo":
+            from config.guotou_demo_prompt import (
+                build_guotou_demo_system_role,
+                guotou_demo_slots_from_payload,
+            )
+
+            slots = guotou_demo_slots_from_payload(task.payload)
+            system_role = build_guotou_demo_system_role(**slots, opening_preplayed=True)
         bridge = SipAgentBridge(
             cfg,
             system_role=system_role,
