@@ -360,7 +360,10 @@
             el.openingPreview.textContent = data.detail || raw || "预览失败";
             return;
           }
-          el.openingPreview.textContent = data.opening_line || "（空）";
+          el.openingPreview.textContent =
+            (data.opening_parts && data.opening_parts.length)
+              ? data.opening_parts.join("\n\n")
+              : (data.opening_line || "（空）");
         } catch (err) {
           el.openingPreview.textContent = String(err.message || err);
         }

@@ -62,6 +62,7 @@ class SipAgentBridge:
         bot_name: str = "语音助手",
         max_call_sec: float | None = None,
         opening_line: str | None = None,
+        opening_parts: list[str] | None = None,
         opening_nudge: str | None = None,
         on_status: Callable[[str, dict[str, Any]], None] | None = None,
     ) -> None:
@@ -79,6 +80,12 @@ class SipAgentBridge:
         else:
             line = sip_config.opening_nudge
         self.opening_line = (line or "").strip()
+        if opening_parts:
+            self.opening_parts = [p.strip() for p in opening_parts if (p or "").strip()]
+        elif self.opening_line:
+            self.opening_parts = [self.opening_line]
+        else:
+            self.opening_parts = []
         self.on_status = on_status
         self._loop: asyncio.AbstractEventLoop | None = None
         self._uplink_q: asyncio.Queue[bytes | None] | None = None
@@ -171,11 +178,10 @@ class SipAgentBridge:
 
         outcome_error = ""
         keepalive_task: asyncio.Task | None = None
-        promote_task: asyncio.Task | None = None
         try:
             await client.connect()
             client.start_receive_loop()
-            opening_first = bool(self.opening_line and self.sip_config.ai_speak_first)
+            opening_first = bool(self.opening_parts and self.sip_config.ai_speak_first)
             self._opening_uplink_pending = opening_first
             sid = await client.start_session(
                 self.system_role,
@@ -196,18 +202,19 @@ class SipAgentBridge:
                         "session.created timeout call_id=%s; sending SayHello anyway",
                         self.call_id,
                     )
-                await client.say_hello(self.opening_line)
+                await self._play_opening_parts(client)
                 LOG.info(
-                    "SayHello opening call_id=%s chars=%d",
+                    "SayHello opening call_id=%s parts=%d chars=%d",
                     self.call_id,
+                    len(self.opening_parts),
                     len(self.opening_line),
                 )
-                self._emit("opening_line_sent", text_len=len(self.opening_line))
-                self._transcript.append({"role": "assistant", "text": self.opening_line})
-                promote_task = asyncio.create_task(
-                    self._enable_uplink_after_opening(),
-                    name=f"sip-opening-{self.call_id}",
+                self._emit(
+                    "opening_line_sent",
+                    text_len=len(self.opening_line),
+                    parts=len(self.opening_parts),
                 )
+                self._transcript.append({"role": "assistant", "text": self.opening_line})
             else:
                 self._accept_uplink = True
 
@@ -228,10 +235,10 @@ class SipAgentBridge:
                     )
             finally:
                 self._enqueue_uplink(None)
-                for task in (promote_task, keepalive_task, uplink_task):
+                for task in (keepalive_task, uplink_task):
                     if task and not task.done():
                         task.cancel()
-                for task in (promote_task, keepalive_task, uplink_task):
+                for task in (keepalive_task, uplink_task):
                     if not task:
                         continue
                     try:
@@ -269,27 +276,35 @@ class SipAgentBridge:
             agent_session_id=self.call_id,
         )
 
-    async def _enable_uplink_after_opening(self) -> None:
-        """Gate RTP uplink until opening TTS finishes (avoid mid-greeting interference)."""
+    async def _play_opening_parts(self, client: DuplexVoiceClient) -> None:
+        """Play opening as separate SayHello utterances; enable uplink when all finish."""
         assert self._opening_tts_done is not None
-        try:
+        pause_sec = 0.4
+        for idx, part in enumerate(self.opening_parts):
+            self._opening_tts_done.clear()
+            await client.say_hello(part)
+            LOG.info(
+                "SayHello part %d/%d call_id=%s len=%d",
+                idx + 1,
+                len(self.opening_parts),
+                self.call_id,
+                len(part),
+            )
             try:
-                await asyncio.wait_for(self._opening_tts_done.wait(), timeout=30.0)
-                LOG.info("opening TTS done call_id=%s; enabling uplink", self.call_id)
+                await asyncio.wait_for(self._opening_tts_done.wait(), timeout=25.0)
             except asyncio.TimeoutError:
                 LOG.warning(
-                    "opening TTS not finished within 30s call_id=%s; enabling uplink anyway",
+                    "opening part %d TTS timeout call_id=%s",
+                    idx + 1,
                     self.call_id,
                 )
-            await asyncio.sleep(0.15)
-            self._accept_uplink = True
-            self._opening_uplink_pending = False
-            self._emit("audio_mode_ready")
-        except asyncio.CancelledError:
-            raise
-        except Exception:
-            LOG.exception("enable uplink after opening failed call_id=%s", self.call_id)
-            self._accept_uplink = True
+            if idx + 1 < len(self.opening_parts):
+                await asyncio.sleep(pause_sec)
+        await asyncio.sleep(0.15)
+        self._accept_uplink = True
+        self._opening_uplink_pending = False
+        self._emit("audio_mode_ready")
+        LOG.info("opening TTS all parts done call_id=%s; uplink enabled", self.call_id)
 
     def _enqueue_uplink(self, item: bytes | None) -> None:
         q = self._uplink_q

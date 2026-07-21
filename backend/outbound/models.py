@@ -43,6 +43,7 @@ class CallTask:
     speaking_style: str = ""
     # Explicit spoken opener for AI-speak-first (方案2); empty = disabled / fallback.
     opening_line: str = ""
+    opening_parts: list[str] = field(default_factory=list)
     telephony: dict[str, Any] = field(default_factory=dict)
     result: str | None = None
     result_summary: str = ""

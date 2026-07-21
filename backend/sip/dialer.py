@@ -81,6 +81,9 @@ async def _run_sip_bridged_call(call_id: str, store: CallStore) -> None:
         store.update(call_id, **fields)
 
     opening = (getattr(task, "opening_line", None) or "").strip()
+    parts = list(getattr(task, "opening_parts", None) or [])
+    if not parts and opening:
+        parts = [opening]
     system_role = task.system_role
     if cfg.ai_speak_first and opening and task.scenario == "urge_auth":
         from config.urge_auth_prompt import (
@@ -97,6 +100,7 @@ async def _run_sip_bridged_call(call_id: str, store: CallStore) -> None:
         call_id=call_id,
         bot_name="催授权助手" if task.scenario == "urge_auth" else "语音助手",
         opening_line=opening,
+        opening_parts=parts,
         on_status=on_status,
     )
 

@@ -21,6 +21,7 @@ from backend.outbound.store import CallStore, get_call_store
 from config.urge_auth_prompt import (
     DEFAULT_SPEAKING_STYLE,
     build_urge_auth_opening,
+    build_urge_auth_opening_parts,
     build_urge_auth_system_role,
     urge_auth_slots_from_payload,
 )
@@ -46,14 +47,15 @@ def verify_partner_api_key(provided: str | None) -> bool:
     return (provided or "").strip() == expected
 
 
-def build_scenario_prompt(scenario: str, payload: dict[str, Any]) -> tuple[str, str, str]:
-    """Return (system_role, speaking_style, opening_line)."""
+def build_scenario_prompt(scenario: str, payload: dict[str, Any]) -> tuple[str, str, str, list[str]]:
+    """Return (system_role, speaking_style, opening_line, opening_parts)."""
     if scenario != "urge_auth":
         raise ValueError(f"Unsupported scenario: {scenario}")
     slots = urge_auth_slots_from_payload(payload)
     role = build_urge_auth_system_role(**slots)
+    parts = build_urge_auth_opening_parts(**slots)
     opening = build_urge_auth_opening(**slots)
-    return role, DEFAULT_SPEAKING_STYLE, opening
+    return role, DEFAULT_SPEAKING_STYLE, opening, parts
 
 
 async def create_outbound_call(
@@ -77,7 +79,7 @@ async def create_outbound_call(
     body = dict(payload or {})
     if display:
         body["display"] = display.strip()
-    system_role, speaking_style, opening_line = build_scenario_prompt(scenario, body)
+    system_role, speaking_style, opening_line, opening_parts = build_scenario_prompt(scenario, body)
     store = store or get_call_store()
 
     use_dry = _force_dry_run() if dry_run is None else bool(dry_run)
@@ -92,6 +94,7 @@ async def create_outbound_call(
         system_role=system_role,
         speaking_style=speaking_style,
         opening_line=opening_line,
+        opening_parts=opening_parts,
         dry_run=use_dry,
     )
     store.put(task)

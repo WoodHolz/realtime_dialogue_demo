@@ -48,6 +48,46 @@ def _opening_channel_phrase(invite_channel: str, has_email: bool) -> str:
     return ch or "短信"
 
 
+def build_urge_auth_opening_parts(
+    *,
+    candidate_name: str = "",
+    client_name: str = "",
+    our_brand_name: str = "芝麻背调",
+    identity_mode: str = IDENTITY_CLIENT,
+    invite_channel: str = "短信",
+    invite_subject: str = "背调采集邀请",
+    has_email: bool | str = False,
+    **_ignored: Any,
+) -> list[str]:
+    """Return opening as separate TTS utterances (confirm identity, then disclosure)."""
+    name = (candidate_name or "候选人").strip()
+    brand_or_client = (client_name or "用人单位").strip()
+    our_brand = (our_brand_name or "芝麻背调").strip()
+    subject = (invite_subject or "背调采集邀请").strip()
+    mode = _norm_identity(identity_mode)
+    white = mode in _WHITE_LABEL
+    with_email = _truthy(has_email, default=False)
+    channel_bit = _opening_channel_phrase(invite_channel, with_email)
+
+    part1 = f"您好，请问是{name}吗？"
+    if white:
+        self_name = brand_or_client
+        part2 = (
+            f"我是{self_name}的智能语音助手，为您办理入职背景调查。"
+            f"为保证服务质量，本次通话将会录音。"
+            f"今天联系您是想确认一下您是否有收到主题为《{subject}》的授权{channel_bit}，"
+            f"大概占用您两分钟，现在方便吗？"
+        )
+    else:
+        part2 = (
+            f"我是{our_brand}的智能语音助手，受{brand_or_client}委托，"
+            f"协助您完成入职背景调查。为保证服务质量，本次通话将会录音。"
+            f"今天联系您是想确认一下您是否有收到主题为《{subject}》的授权{channel_bit}，"
+            f"大概占用您两分钟，现在方便吗？"
+        )
+    return [part1, part2]
+
+
 def build_urge_auth_opening(
     *,
     candidate_name: str = "",
@@ -63,29 +103,17 @@ def build_urge_auth_opening(
 
     槽位来源：POST /outbound/v1/calls 业务字段 → urge_auth_slots_from_payload。
     """
-    name = (candidate_name or "候选人").strip()
-    brand_or_client = (client_name or "用人单位").strip()
-    our_brand = (our_brand_name or "芝麻背调").strip()
-    subject = (invite_subject or "背调采集邀请").strip()
-    mode = _norm_identity(identity_mode)
-    white = mode in _WHITE_LABEL
-    with_email = _truthy(has_email, default=False)
-    channel_bit = _opening_channel_phrase(invite_channel, with_email)
-
-    # 合规开场：身份披露 + 录音告知 + 《邀请主题》+ 是否方便（剧本 ■ opening）
-    if white:
-        self_name = brand_or_client
-        return (
-            f"您好，请问是{name}吗？我是{self_name}的 智能语音助手，为您办理入职背景调查。"
-            f"为保证服务质量，本次通话将会录音。"
-            f"今天联系您是想确认一下您是否有收到主题为《{subject}》的授权{channel_bit}，"
-            f"大概占用您两分钟，现在方便吗？"
+    return "".join(
+        build_urge_auth_opening_parts(
+            candidate_name=candidate_name,
+            client_name=client_name,
+            our_brand_name=our_brand_name,
+            identity_mode=identity_mode,
+            invite_channel=invite_channel,
+            invite_subject=invite_subject,
+            has_email=has_email,
+            **_ignored,
         )
-    return (
-        f"您好，请问是{name}吗？我是{our_brand}的 智能语音助手，受{brand_or_client}委托，"
-        f"协助您完成入职背景调查。为保证服务质量，本次通话将会录音。"
-        f"今天联系您是想确认一下您是否有收到主题为《{subject}》的授权{channel_bit}，"
-        f"大概占用您两分钟，现在方便吗？"
     )
 
 
@@ -159,12 +187,12 @@ def build_urge_auth_system_role(
     if white:
         self_name = brand_or_client
         role_line = (
-            f"你是「{self_name}」的 智能语音助手，正在以{self_name}名义给候选人打电话，"
+            f"你是「{self_name}」的智能语音助手，正在以{self_name}名义给候选人打电话，"
             f"办理入职前背景调查授权确认。话术中禁止出现第三方背调机构名称，禁止说「受某某委托」。"
         )
         assistant_bridge = f"「{self_name}招聘，关于{name}的入职背景调查，请转接本人。」"
         trust_verify = (
-            f"「我来说明一下：我是{self_name}的 智能语音助手，负责您的入职背调事项"
+            f"「我来说明一下：我是{self_name}的智能语音助手，负责您的入职背调事项"
             + (f"，工单编号{ticket}" if ticket else "")
             + f"。您可以直接跟{self_name}对接您的 HR 核实"
             + (f"，或者回拨{line}确认这次通话，工作时间{hours}都有人接听" if line else "")
@@ -179,7 +207,7 @@ def build_urge_auth_system_role(
             "确认后我们再继续，完全来得及。」"
         )
         shortest_compliance = (
-            f"「好的，一句话说明：我是{self_name}的 智能助手，为您办入职背调的，通话有录音。"
+            f"「好的，一句话说明：我是{self_name}的智能助手，为您办入职背调的，通话有录音。"
             f"您看几点方便我再联系？」"
         )
         feedback_team = "招聘团队"
@@ -187,12 +215,12 @@ def build_urge_auth_system_role(
     else:
         self_name = our_brand
         role_line = (
-            f"你是「{self_name}」的 智能语音助手，受「{brand_or_client}」委托，"
+            f"你是「{self_name}」的智能语音助手，受「{brand_or_client}」委托，"
             f"正在给候选人打电话确认入职前背调授权。必须说明受托关系。"
         )
         assistant_bridge = f"「{self_name}背调，关于{name}的入职背景调查，请转接本人。」"
         trust_verify = (
-            f"「我来说明一下：我是{self_name}的 智能语音助手"
+            f"「我来说明一下：我是{self_name}的智能语音助手"
             + (f"，工单编号{ticket}" if ticket else "")
             + f"。{self_name}是受{brand_or_client}委托的第三方背调机构。"
             f"您如果想核实，可以直接问{brand_or_client}的 HR"
@@ -208,7 +236,7 @@ def build_urge_auth_system_role(
             f"确认后我们再继续，完全来得及。」"
         )
         shortest_compliance = (
-            f"「好的，一句话说明：我是{self_name}的 智能助手，受{brand_or_client}委托的，通话有录音。"
+            f"「好的，一句话说明：我是{self_name}的智能助手，受{brand_or_client}委托的，通话有录音。"
             f"您看几点方便我再联系？」"
         )
         feedback_team = "委托方"

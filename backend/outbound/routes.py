@@ -144,10 +144,10 @@ async def preview_opening(
     if req.has_fallback_sms is not None:
         payload["has_fallback_sms"] = req.has_fallback_sms
     try:
-        _role, _style, opening = build_scenario_prompt(req.scenario, payload)
+        _role, _style, opening, parts = build_scenario_prompt(req.scenario, payload)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return {"scenario": req.scenario, "opening_line": opening}
+    return {"scenario": req.scenario, "opening_line": opening, "opening_parts": parts}
 
 
 @router.post("/calls")
