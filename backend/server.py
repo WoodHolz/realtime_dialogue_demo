@@ -640,6 +640,15 @@ async def sip_call_page():
     return HTMLResponse(raw, media_type="text/html; charset=utf-8")
 
 
+@app.get("/tmp-prod")
+@app.get("/tmp-prod/")
+async def tmp_prod_page():
+    """国投临时演示页。同时挂 /tmp-prod 与 /tmp-prod/，避免反代下 307 Location 丢 /s2s 前缀。"""
+    from backend.tmp_prod.routes import render_tmp_prod_page
+
+    return render_tmp_prod_page()
+
+
 @app.get("/voice")
 async def voice_page():
     path = _frontend_dir() / "voice.html"

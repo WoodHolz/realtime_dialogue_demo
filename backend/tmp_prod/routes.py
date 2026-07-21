@@ -31,8 +31,8 @@ class StartBody(BaseModel):
     stagger_sec: float = Field(default=2.0, ge=0, le=60)
 
 
-@router.get("/")
-async def tmp_prod_page() -> HTMLResponse:
+def render_tmp_prod_page() -> HTMLResponse:
+    """HTML page (also mounted at /tmp-prod without trailing-slash redirect)."""
     path = Path(__file__).resolve().parents[2] / "frontend" / "tmp_prod.html"
     if not path.exists():
         return HTMLResponse("<p>tmp_prod.html not found</p>", status_code=404)

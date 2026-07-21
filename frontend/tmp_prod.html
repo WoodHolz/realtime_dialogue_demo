@@ -118,7 +118,7 @@
     (function () {
       var pathPrefix = location.pathname.indexOf("/s2s/") === 0 || location.pathname === "/s2s"
         ? "/s2s" : "";
-      // page may be /tmp-prod/ or /tmp-prod
+      // page: /tmp-prod or /s2s/tmp-prod（勿依赖尾斜杠重定向）
       var API = pathPrefix + "/tmp-prod";
       var el = {
         file: document.getElementById("file"),

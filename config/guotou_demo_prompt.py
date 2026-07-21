@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""国投临时演示剧本（tmp-prod）— 硬编码话术 + 北京时间注入。"""
+"""国投临时演示剧本（tmp-prod）— 硬编码话术 + 外呼触发时刻（北京时间）注入。"""
 from __future__ import annotations
 
 from datetime import datetime
@@ -21,9 +21,42 @@ def beijing_now() -> datetime:
     return datetime.now(BJ)
 
 
+def parse_trigger_beijing(raw: str | datetime | None) -> datetime:
+    """Resolve trigger instant; always return timezone-aware Asia/Shanghai."""
+    if isinstance(raw, datetime):
+        dt = raw
+        if dt.tzinfo is None:
+            return dt.replace(tzinfo=BJ)
+        return dt.astimezone(BJ)
+    text = str(raw or "").strip()
+    if text:
+        try:
+            dt = datetime.fromisoformat(text.replace("Z", "+00:00"))
+            if dt.tzinfo is None:
+                return dt.replace(tzinfo=BJ)
+            return dt.astimezone(BJ)
+        except ValueError:
+            pass
+    return beijing_now()
+
+
+def stamp_trigger_beijing(payload: dict[str, Any] | None = None) -> str:
+    """Capture outbound trigger time (Beijing) once; reuse if already stamped."""
+    p = dict(payload or {})
+    existing = str(p.get("trigger_beijing_at") or "").strip()
+    if existing:
+        return parse_trigger_beijing(existing).isoformat()
+    return beijing_now().isoformat()
+
+
 def format_deadline_today_18(now: datetime | None = None) -> str:
+    """口播用：以触发日为「今天」的 18 点。"""
     n = now or beijing_now()
-    return f"{n.month}月{n.day}日18点"
+    return f"今天18点（{n.month}月{n.day}日18:00）"
+
+
+def format_trigger_day(now: datetime) -> str:
+    return f"{now.year}年{now.month}月{now.day}日"
 
 
 def build_guotou_demo_opening(*, candidate_name: str, employer: str = "", **_ignored: Any) -> str:
@@ -51,6 +84,7 @@ def build_guotou_demo_system_role(
     employer: str = "",
     gender: str = "",
     phone: str = "",
+    trigger_beijing_at: str = "",
     opening_preplayed: bool = False,
     **_ignored: Any,
 ) -> str:
@@ -58,9 +92,11 @@ def build_guotou_demo_system_role(
     emp = (employer or EMPLOYER_DEFAULT).strip() or EMPLOYER_DEFAULT
     sex = (gender or "").strip()
     phone_s = (phone or "").strip()
-    now = beijing_now()
-    deadline = format_deadline_today_18(now)
-    now_str = now.strftime("%Y-%m-%d %H:%M")
+    # 必须使用「本通外呼触发时刻」的北京时间，禁止通话中再取 wall clock。
+    trigger = parse_trigger_beijing(trigger_beijing_at)
+    deadline = format_deadline_today_18(trigger)
+    trigger_str = trigger.strftime("%Y-%m-%d %H:%M:%S")
+    trigger_day = format_trigger_day(trigger)
     parts = build_guotou_demo_opening_parts(candidate_name=name, employer=emp)
 
     preplayed_note = (
@@ -73,9 +109,11 @@ def build_guotou_demo_system_role(
 你是「{BRAND}」的 AI 语音助手，正在给候选人打电话，确认背调授权短信是否收到并推动当天完成授权。
 本通为临时演示产品，严格按下列分支话术推进，不要引入芝麻/其它品牌，不要展开深度背调讲解。
 
-【实时时间（北京时间，注入时点）】
-- 当前北京时间：{now_str}
-- 催办截止口径：请尽量在「{deadline}」前完成（即今天 18:00，北京时间）
+【外呼触发时刻（北京时间）⚠ 唯一时间源】
+- 本通触发时刻：{trigger_str}（Asia/Shanghai）
+- 「今天」= 触发日 {trigger_day}（以本通触发时刻为准，不要自行换算其它时区或当前墙钟）
+- 催办截止口播固定为：请尽量在{deadline}前完成
+- 禁止改口成别的日期/时间；若对方问「今天几号」，按触发日 {trigger_day} 回答
 
 【任务锚点】
 - 候选人姓名：{name}
@@ -131,9 +169,11 @@ def build_guotou_demo_system_role(
 
 def guotou_demo_slots_from_payload(payload: dict[str, Any]) -> dict[str, Any]:
     p = payload or {}
+    trigger = stamp_trigger_beijing(p)
     return {
         "candidate_name": str(p.get("candidate_name") or p.get("name") or ""),
         "employer": str(p.get("employer") or p.get("client_name") or EMPLOYER_DEFAULT),
         "gender": str(p.get("gender") or ""),
         "phone": str(p.get("phone") or ""),
+        "trigger_beijing_at": trigger,
     }

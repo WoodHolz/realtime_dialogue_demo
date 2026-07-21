@@ -56,8 +56,11 @@ def build_scenario_prompt(scenario: str, payload: dict[str, Any]) -> tuple[str, 
             build_guotou_demo_opening_parts,
             build_guotou_demo_system_role,
             guotou_demo_slots_from_payload,
+            stamp_trigger_beijing,
         )
 
+        # Stamp trigger Beijing time at prompt build (= outbound trigger); persist for dialer rebuild.
+        payload["trigger_beijing_at"] = stamp_trigger_beijing(payload)
         slots = guotou_demo_slots_from_payload(payload)
         role = build_guotou_demo_system_role(**slots)
         parts = build_guotou_demo_opening_parts(**slots)
@@ -93,6 +96,11 @@ async def create_outbound_call(
     body = dict(payload or {})
     if display:
         body["display"] = display.strip()
+    if scenario == "guotou_auth_demo":
+        from config.guotou_demo_prompt import stamp_trigger_beijing
+
+        # Freeze Beijing trigger time at call creation (本通外呼触发瞬间).
+        body["trigger_beijing_at"] = stamp_trigger_beijing(body)
     system_role, speaking_style, opening_line, opening_parts = build_scenario_prompt(scenario, body)
     store = store or get_call_store()
 
