@@ -594,7 +594,7 @@ async def root():
 
 @app.get("/sip-call")
 async def sip_call_page():
-    """SIP 外呼联调页：选外显号 + 测试手机号。"""
+    """SIP 外呼联调页：测试手机号 + 催授权剧本槽位（外显号由服务端自动分配）。"""
     path = _frontend_dir() / "sip_call.html"
     if not path.exists():
         return HTMLResponse("<p>sip_call.html not found</p>", status_code=404)
@@ -623,16 +623,13 @@ async def sip_call_page():
 
     nums = [str(n).strip() for n in (boot.get("display_numbers") or []) if str(n).strip()]
     default = str(boot.get("default_display") or (nums[0] if nums else "")).strip()
-    option_html: list[str] = []
-    for n in nums:
-        selected = " selected" if n == default else ""
-        option_html.append(f'<option value="{n}"{selected}>{n}</option>')
-    raw = raw.replace("<!--__DISPLAY_OPTIONS__-->", "\n        ".join(option_html), 1)
+    # 兼容旧模板占位；当前页面已不展示外显号选择
+    raw = raw.replace("<!--__DISPLAY_OPTIONS__-->", "", 1)
 
     status = (
-        f"已加载 {len(nums)} 个外显号。主叫 ANI={boot.get('ani') or '-'}"
+        f"外显号由服务端自动分配（默认 {default or '-'}，号池 {len(nums)} 个）。主叫 ANI={boot.get('ani') or '-'}"
         if nums
-        else "未配置外显号池，请检查 config.json outbound.display_numbers"
+        else "未配置外显号池，请检查 config.json outbound.display_numbers / SIP_DEFAULT_DISPLAY"
     )
     raw = raw.replace("<!--__STATUS_BOOT__-->", status, 1)
 

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from backend.outbound.dial import DEFAULT_ANI, DEFAULT_CALLED_PREFIX
 
@@ -60,7 +60,8 @@ class SipConfig:
     src_sip_port: int = 5070
     # Preferred RTP port; if busy, try the next rtp_port_count ports before INVITE.
     rtp_port: int = 10000
-    rtp_port_count: int = 50
+    # ~60 concurrent needs ≥60 ports; default 80 with headroom.
+    rtp_port_count: int = 80
     from_user: str = DEFAULT_ANI
     called_prefix: str = DEFAULT_CALLED_PREFIX
     ring_timeout_sec: float = 45.0
@@ -78,9 +79,17 @@ class SipConfig:
     def is_configured(self) -> bool:
         return bool(self.dst_host and self.src_ip and self.from_user)
 
+    def with_peer(self, host: str, port: int | None = None) -> "SipConfig":
+        """Return a copy targeting a specific SIP peer (from traffic pool)."""
+        return replace(
+            self,
+            dst_host=(host or self.dst_host).strip(),
+            dst_port=int(port if port is not None else self.dst_port),
+        )
+
 
 def load_sip_config() -> SipConfig:
-    """Load SIP settings from env (SIP_*)."""
+    """Load SIP settings from env (SIP_*). Peer host may be overridden per call by traffic gate."""
     ani = _env("SIP_FROM_USER") or DEFAULT_ANI
     if "#" in ani:
         ani = ani.split("#", 1)[0].strip()
@@ -92,14 +101,21 @@ def load_sip_config() -> SipConfig:
     if not ai_speak_first:
         opening_nudge = ""
 
+    # Prefer first pool peer as default dst when SIP_DST_HOST unset.
+    from backend.sip.traffic import load_sip_peers
+
+    peers = load_sip_peers()
+    default_host = peers[0][0] if peers else "124.70.154.200"
+    default_port = peers[0][1] if peers else 5060
+
     return SipConfig(
-        dst_host=_env("SIP_DST_HOST", "124.70.154.200"),
-        dst_port=_env_int("SIP_DST_PORT", 5060),
+        dst_host=_env("SIP_DST_HOST", default_host) or default_host,
+        dst_port=_env_int("SIP_DST_PORT", default_port),
         src_ip=_env("SIP_SRC_IP", "1.13.182.189"),
         bind_ip=_env("SIP_BIND_IP", "0.0.0.0"),
         src_sip_port=_env_int("SIP_SRC_PORT", 5070),
         rtp_port=_env_int("SIP_RTP_PORT", 10000),
-        rtp_port_count=_env_int("SIP_RTP_PORT_COUNT", 50),
+        rtp_port_count=_env_int("SIP_RTP_PORT_COUNT", 80),
         from_user=ani,
         called_prefix=prefix,
         ring_timeout_sec=_env_float("SIP_RING_TIMEOUT", 45.0),

@@ -173,17 +173,13 @@
   <main>
     <a class="back" href="../">← 返回首页</a>
     <h1>SIP 外呼测试</h1>
-    <p class="lead">催授权场景联调：配置剧本槽位、预览开场白，发起 SIP 外呼。被叫自动加 <code>a1</code> 前缀。</p>
+    <p class="lead">催授权场景联调：配置剧本槽位、预览开场白，发起 SIP 外呼。被叫自动加 <code>a1</code> 前缀；外显号由服务端自动分配。</p>
 
     <form class="panel" id="form">
       <h2>拨号</h2>
-      <label for="display">外显号</label>
-      <select id="display" name="display" required>
-        <!--__DISPLAY_OPTIONS__-->
-      </select>
-
       <label for="phone">被测手机号</label>
       <input id="phone" type="tel" inputmode="numeric" placeholder="例如 18324133080" required autocomplete="tel" />
+      <p class="hint">外显号由服务端从号池自动分配（<code>SIP_DEFAULT_DISPLAY</code> / <code>config.json</code>），测试页无需选择。</p>
 
       <h2>剧本槽位（催授权）</h2>
       <div class="row">
@@ -246,6 +242,36 @@
         已配置邮件渠道（开场白用「短信或邮件」）
       </label>
 
+      <label class="check">
+        <input id="hasFallbackSms" type="checkbox" />
+        已配置兜底短信（启用公众号指引级联）
+      </label>
+
+      <div class="row">
+        <div>
+          <label for="reservedEmail">预留邮箱（可选）</label>
+          <input id="reservedEmail" type="text" placeholder="如 zhangsan@example.com" />
+        </div>
+        <div>
+          <label for="resendChannel">补发提醒渠道</label>
+          <input id="resendChannel" type="text" value="短信" placeholder="短信 / 邮件 / 其它" />
+        </div>
+      </div>
+
+      <div class="row">
+        <div>
+          <label for="mpName">公众号名称（可选）</label>
+          <input id="mpName" type="text" placeholder="如 背调助手" />
+        </div>
+        <div>
+          <label for="hotline">回拨号码（可选）</label>
+          <input id="hotline" type="text" placeholder="如 400-000-0000" />
+        </div>
+      </div>
+
+      <label for="fallbackSmsBody">兜底短信正文（可选）</label>
+      <textarea id="fallbackSmsBody" placeholder="如：请关注公众号并按短信提示完成授权"></textarea>
+
       <h2>开场白预览</h2>
       <div class="preview" id="openingPreview">填写上方槽位后自动预览…</div>
       <p class="hint">接通后 AI 将按此文案开场（方案2）。槽位与 <code>POST /outbound/v1/calls</code> 一致。</p>
@@ -277,7 +303,6 @@
       var previewTimer = null;
 
       var el = {
-        display: document.getElementById("display"),
         phone: document.getElementById("phone"),
         candidate: document.getElementById("candidate"),
         client: document.getElementById("client"),
@@ -290,6 +315,12 @@
         deadline: document.getElementById("deadline"),
         sendTime: document.getElementById("sendTime"),
         hasEmail: document.getElementById("hasEmail"),
+        hasFallbackSms: document.getElementById("hasFallbackSms"),
+        reservedEmail: document.getElementById("reservedEmail"),
+        resendChannel: document.getElementById("resendChannel"),
+        mpName: document.getElementById("mpName"),
+        hotline: document.getElementById("hotline"),
+        fallbackSmsBody: document.getElementById("fallbackSmsBody"),
         openingPreview: document.getElementById("openingPreview"),
         apiKey: document.getElementById("apiKey"),
         status: document.getElementById("status"),
@@ -324,7 +355,7 @@
         var body = {
           phone: normalizePhone(el.phone.value) || "13800000000",
           scenario: "urge_auth",
-          display: el.display.value,
+          // 外显号由服务端号池自动分配，页面不传 display
           candidate_name: (el.candidate.value || "").trim() || "张先生",
           client_name: (el.client.value || "").trim() || "比赛日科技",
           identity_mode: el.identityMode.value,
@@ -336,6 +367,12 @@
           deadline: (el.deadline.value || "").trim() || "一个工作日内",
           send_time: (el.sendTime.value || "").trim(),
           has_email: !!el.hasEmail.checked,
+          has_fallback_sms: !!el.hasFallbackSms.checked,
+          reserved_email: (el.reservedEmail.value || "").trim(),
+          resend_channel: (el.resendChannel.value || "").trim() || "短信",
+          mp_name: (el.mpName.value || "").trim(),
+          hotline: (el.hotline.value || "").trim(),
+          fallback_sms_body: (el.fallbackSmsBody.value || "").trim(),
         };
         return body;
       }
@@ -409,7 +446,8 @@
 
       [
         "candidate", "client", "identityMode", "ourBrand", "channelBrand",
-        "inviteSubject", "inviteChannel", "phoneTail", "deadline", "sendTime", "hasEmail"
+        "inviteSubject", "inviteChannel", "phoneTail", "deadline", "sendTime", "hasEmail",
+        "hasFallbackSms", "reservedEmail", "resendChannel", "mpName", "hotline", "fallbackSmsBody"
       ].forEach(function (id) {
         var node = el[id];
         if (!node) return;
@@ -422,10 +460,6 @@
         var phone = normalizePhone(el.phone.value);
         if (!phone) {
           setStatus("请填写手机号", true);
-          return;
-        }
-        if (!el.display.value) {
-          setStatus("请选择外显号", true);
           return;
         }
         el.callBtn.disabled = true;
@@ -449,7 +483,7 @@
             "已创建 call_id=" + data.call_id +
             "\nstatus=" + data.status +
             "\ncalled=" + (dial.called || withPrefix(phone)) +
-            "\ndisplay=" + (dial.display || el.display.value) +
+            "\ndisplay=" + (dial.display || "(服务端自动分配)") +
             (data.opening_line ? ("\n\n开场白：\n" + data.opening_line) : "") +
             "\n\n轮询中…"
           );

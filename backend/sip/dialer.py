@@ -19,10 +19,13 @@ from backend.outbound.store import CallStore
 
 LOG = logging.getLogger(__name__)
 
+RESULT_CONCURRENCY_LIMIT = "concurrency_limit"
+
 
 async def dispatch_outbound_call(task: CallTask, store: CallStore) -> None:
     """Start a background SIP + Agent call for the partner task."""
     from backend.sip.config import load_sip_config
+    from backend.sip.traffic import get_traffic_gate
 
     cfg = load_sip_config()
     if not cfg.is_configured():
@@ -40,9 +43,46 @@ async def dispatch_outbound_call(task: CallTask, store: CallStore) -> None:
             await notify_partner_callback(updated)
         return
 
-    store.update(task.call_id, status=STATUS_DIALING)
+    gate = get_traffic_gate()
+    slot = await gate.try_acquire(task.call_id)
+    if slot is None:
+        snap = gate.snapshot()
+        store.update(
+            task.call_id,
+            status=STATUS_FAILED,
+            result=RESULT_CONCURRENCY_LIMIT,
+            error=(
+                f"outbound concurrency limit reached "
+                f"(active={snap.get('active_total')}/{snap.get('max_concurrent')})"
+            ),
+            finished_at=datetime.now(timezone.utc).isoformat(),
+            telephony={
+                **(task.telephony or {}),
+                "traffic": snap,
+            },
+        )
+        updated = store.get(task.call_id)
+        if updated:
+            from backend.outbound.service import notify_partner_callback
+
+            await notify_partner_callback(updated)
+        return
+
+    store.update(
+        task.call_id,
+        status=STATUS_DIALING,
+        telephony={
+            **(task.telephony or {}),
+            "sip_peer": {"host": slot.host, "port": slot.port},
+            "traffic": {
+                "active_total": slot.active_total,
+                "active_on_peer": slot.active_on_peer,
+                "max_concurrent": gate.snapshot().get("max_concurrent"),
+            },
+        },
+    )
     bg = asyncio.create_task(
-        _run_sip_bridged_call(task.call_id, store),
+        _run_sip_bridged_call(task.call_id, store, slot.host, slot.port),
         name=f"sip-call-{task.call_id}",
     )
 
@@ -57,108 +97,122 @@ async def dispatch_outbound_call(task: CallTask, store: CallStore) -> None:
     bg.add_done_callback(_log_bg)
 
 
-async def _run_sip_bridged_call(call_id: str, store: CallStore) -> None:
+async def _run_sip_bridged_call(
+    call_id: str,
+    store: CallStore,
+    peer_host: str,
+    peer_port: int,
+) -> None:
     from backend.outbound.service import complete_call, notify_partner_callback
     from backend.sip.agent_bridge import SipAgentBridge
     from backend.sip.config import load_sip_config
+    from backend.sip.traffic import get_traffic_gate
 
-    task = store.get(call_id)
-    if not task:
-        return
-
-    cfg = load_sip_config()
-    dial = (task.telephony or {}).get("dial") or {}
-    phone = str(dial.get("called") or task.phone)
-
-    def on_status(status: str, extra: dict[str, Any]) -> None:
-        tel = dict((store.get(call_id) or task).telephony or {})
-        tel["sip"] = {**(tel.get("sip") or {}), "status": status, **extra}
-        fields: dict[str, Any] = {"telephony": tel}
-        if status == "answered":
-            fields["status"] = STATUS_IN_CALL
-        elif status == "dialing":
-            fields["status"] = STATUS_DIALING
-        store.update(call_id, **fields)
-
-    opening = (getattr(task, "opening_line", None) or "").strip()
-    parts = list(getattr(task, "opening_parts", None) or [])
-    if not parts and opening:
-        parts = [opening]
-    system_role = task.system_role
-    if cfg.ai_speak_first and opening and task.scenario == "urge_auth":
-        from config.urge_auth_prompt import (
-            build_urge_auth_system_role,
-            urge_auth_slots_from_payload,
-        )
-
-        slots = urge_auth_slots_from_payload(task.payload)
-        system_role = build_urge_auth_system_role(**slots, opening_preplayed=True)
-    bridge = SipAgentBridge(
-        cfg,
-        system_role=system_role,
-        speaking_style=task.speaking_style,
-        call_id=call_id,
-        bot_name="催授权助手" if task.scenario == "urge_auth" else "语音助手",
-        opening_line=opening,
-        opening_parts=parts,
-        on_status=on_status,
-    )
-
+    gate = get_traffic_gate()
     try:
-        outcome = await bridge.run(phone)
-    except Exception as exc:
-        LOG.exception("SIP bridged call crashed call_id=%s", call_id)
-        store.update(
-            call_id,
-            status=STATUS_FAILED,
-            result=RESULT_FAILED,
-            error=str(exc),
-            finished_at=datetime.now(timezone.utc).isoformat(),
+        task = store.get(call_id)
+        if not task:
+            return
+
+        cfg = load_sip_config().with_peer(peer_host, peer_port)
+        dial = (task.telephony or {}).get("dial") or {}
+        phone = str(dial.get("called") or task.phone)
+
+        def on_status(status: str, extra: dict[str, Any]) -> None:
+            tel = dict((store.get(call_id) or task).telephony or {})
+            tel["sip"] = {**(tel.get("sip") or {}), "status": status, **extra}
+            tel["sip_peer"] = {"host": peer_host, "port": peer_port}
+            fields: dict[str, Any] = {"telephony": tel}
+            if status == "answered":
+                fields["status"] = STATUS_IN_CALL
+            elif status == "dialing":
+                fields["status"] = STATUS_DIALING
+            store.update(call_id, **fields)
+
+        opening = (getattr(task, "opening_line", None) or "").strip()
+        parts = list(getattr(task, "opening_parts", None) or [])
+        if not parts and opening:
+            parts = [opening]
+        system_role = task.system_role
+        if cfg.ai_speak_first and opening and task.scenario == "urge_auth":
+            from config.urge_auth_prompt import (
+                build_urge_auth_system_role,
+                urge_auth_slots_from_payload,
+            )
+
+            slots = urge_auth_slots_from_payload(task.payload)
+            system_role = build_urge_auth_system_role(**slots, opening_preplayed=True)
+        bridge = SipAgentBridge(
+            cfg,
+            system_role=system_role,
+            speaking_style=task.speaking_style,
+            call_id=call_id,
+            bot_name="催授权助手" if task.scenario == "urge_auth" else "语音助手",
+            opening_line=opening,
+            opening_parts=parts,
+            on_status=on_status,
         )
-        updated = store.get(call_id)
-        if updated:
-            await notify_partner_callback(updated)
-        return
 
-    sip = outcome.sip
-    tel = dict((store.get(call_id) or task).telephony or {})
-    tel["sip"] = {
-        **(tel.get("sip") or {}),
-        "ok": sip.ok,
-        "sip_call_id": sip.sip_call_id,
-        "servercallid": sip.servercallid,
-        "remote_rtp": list(sip.remote_rtp) if sip.remote_rtp else None,
-        "hangup_reason": sip.hangup_reason,
-        "rx_packets": sip.rx_packets,
-        "tx_packets": sip.tx_packets,
-        "status": sip.status,
-        "error": sip.error or outcome.error,
-        "recordings": outcome.recordings or None,
-    }
+        try:
+            outcome = await bridge.run(phone)
+        except Exception as exc:
+            LOG.exception("SIP bridged call crashed call_id=%s", call_id)
+            store.update(
+                call_id,
+                status=STATUS_FAILED,
+                result=RESULT_FAILED,
+                error=str(exc),
+                finished_at=datetime.now(timezone.utc).isoformat(),
+            )
+            updated = store.get(call_id)
+            if updated:
+                await notify_partner_callback(updated)
+            return
 
-    if not sip.ok:
+        sip = outcome.sip
+        tel = dict((store.get(call_id) or task).telephony or {})
+        tel["sip_peer"] = {"host": peer_host, "port": peer_port}
+        tel["sip"] = {
+            **(tel.get("sip") or {}),
+            "ok": sip.ok,
+            "sip_call_id": sip.sip_call_id,
+            "servercallid": sip.servercallid,
+            "remote_rtp": list(sip.remote_rtp) if sip.remote_rtp else None,
+            "hangup_reason": sip.hangup_reason,
+            "rx_packets": sip.rx_packets,
+            "tx_packets": sip.tx_packets,
+            "status": sip.status,
+            "error": sip.error or outcome.error,
+            "recordings": outcome.recordings or None,
+            "dst_host": peer_host,
+            "dst_port": peer_port,
+        }
+
+        if not sip.ok:
+            await complete_call(
+                call_id,
+                result=(
+                    RESULT_NO_ANSWER
+                    if "failed: 4" in (sip.error or "") or sip.status in {"404", "480", "486", "487"}
+                    else RESULT_FAILED
+                ),
+                result_summary=sip.error or outcome.error or "SIP dial failed",
+                transcript=outcome.transcript,
+                telephony=tel,
+                error=sip.error or outcome.error,
+            )
+            return
+
+        summary = "通话结束"
+        if outcome.transcript:
+            summary = f"通话结束，共 {len(outcome.transcript)} 轮用户发言"
         await complete_call(
             call_id,
-            result=(
-                RESULT_NO_ANSWER
-                if "failed: 4" in (sip.error or "") or sip.status in {"404", "480", "486", "487"}
-                else RESULT_FAILED
-            ),
-            result_summary=sip.error or outcome.error or "SIP dial failed",
+            result="completed",
+            result_summary=summary,
             transcript=outcome.transcript,
             telephony=tel,
-            error=sip.error or outcome.error,
+            error="",
         )
-        return
-
-    summary = "通话结束"
-    if outcome.transcript:
-        summary = f"通话结束，共 {len(outcome.transcript)} 轮用户发言"
-    await complete_call(
-        call_id,
-        result="completed",
-        result_summary=summary,
-        transcript=outcome.transcript,
-        telephony=tel,
-        error="",
-    )
+    finally:
+        await gate.release(peer_host, peer_port, call_id)

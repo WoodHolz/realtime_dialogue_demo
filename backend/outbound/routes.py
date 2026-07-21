@@ -102,12 +102,23 @@ async def dial_options(x_api_key: str | None = Header(default=None, alias="X-API
     """Web / 联调页：外显号池与默认值（来自 config.json outbound + env）。"""
     _auth(x_api_key)
     cfg = load_dial_settings()
+    traffic: dict[str, Any] = {}
+    try:
+        from backend.sip.traffic import get_traffic_gate, load_sip_peers
+
+        traffic = {
+            **get_traffic_gate().snapshot(),
+            "peer_pool": [{"host": h, "port": p} for h, p in load_sip_peers()],
+        }
+    except Exception as exc:  # noqa: BLE001
+        traffic = {"error": str(exc)}
     return {
         "called_prefix": cfg.called_prefix,
         "ani": cfg.ani,
         "default_display": cfg.default_display,
         "display_numbers": list(cfg.display_numbers),
         "scenario": "urge_auth",
+        "traffic": traffic,
     }
 
 
