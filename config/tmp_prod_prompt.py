@@ -22,7 +22,7 @@ DEFAULT_SPEAKING_STYLE = (
     "严格按本剧本分支推进，不要扩展无关业务讲解。"
 )
 
-EMPLOYER_DEFAULT = "陕西榆林能源集团有限公司"
+EMPLOYER_DEFAULT = "比赛日科技"
 BRAND = "芝麻背调"
 
 
