@@ -90,6 +90,8 @@ class SipAgentBridge:
         self._client: DuplexVoiceClient | None = None
         self._accept_uplink = False
         self._opening_tts_started: asyncio.Event | None = None
+        self._opening_tts_done: asyncio.Event | None = None
+        self._opening_uplink_pending = False
 
     def _emit(self, status: str, **extra: Any) -> None:
         if self.on_status:
@@ -112,6 +114,7 @@ class SipAgentBridge:
         self._loop = asyncio.get_running_loop()
         self._uplink_q = asyncio.Queue(maxsize=200)
         self._opening_tts_started = asyncio.Event()
+        self._opening_tts_done = asyncio.Event()
 
         session = SipCallSession(self.sip_config)
         self._session = session
@@ -173,6 +176,7 @@ class SipAgentBridge:
             await client.connect()
             client.start_receive_loop()
             opening_first = bool(self.opening_line and self.sip_config.ai_speak_first)
+            self._opening_uplink_pending = opening_first
             sid = await client.start_session(
                 self.system_role,
                 self.speaking_style,
@@ -266,18 +270,20 @@ class SipAgentBridge:
         )
 
     async def _enable_uplink_after_opening(self) -> None:
-        """Gate RTP uplink until opening TTS starts (or timeout)."""
-        assert self._opening_tts_started is not None
+        """Gate RTP uplink until opening TTS finishes (avoid mid-greeting interference)."""
+        assert self._opening_tts_done is not None
         try:
             try:
-                await asyncio.wait_for(self._opening_tts_started.wait(), timeout=8.0)
-                LOG.info("opening TTS started call_id=%s; enabling uplink", self.call_id)
+                await asyncio.wait_for(self._opening_tts_done.wait(), timeout=30.0)
+                LOG.info("opening TTS done call_id=%s; enabling uplink", self.call_id)
             except asyncio.TimeoutError:
                 LOG.warning(
-                    "opening TTS not observed within 8s call_id=%s; enabling uplink anyway",
+                    "opening TTS not finished within 30s call_id=%s; enabling uplink anyway",
                     self.call_id,
                 )
+            await asyncio.sleep(0.15)
             self._accept_uplink = True
+            self._opening_uplink_pending = False
             self._emit("audio_mode_ready")
         except asyncio.CancelledError:
             raise
@@ -361,6 +367,9 @@ class SipAgentBridge:
             self._opening_tts_started.set()
 
     def _on_tts_end(self, _meta: dict) -> None:
+        if self._opening_uplink_pending and self._opening_tts_done and not self._opening_tts_done.is_set():
+            self._opening_tts_done.set()
+            LOG.info("opening TTS ended call_id=%s", self.call_id)
         client = self._client
         if not client:
             return
