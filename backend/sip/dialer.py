@@ -104,7 +104,7 @@ async def _run_sip_bridged_call(
     peer_host: str,
     peer_port: int,
 ) -> None:
-    from backend.outbound.service import complete_call, notify_partner_callback
+    from backend.outbound.service import complete_call, is_tmp_prod_scenario, notify_partner_callback
     from backend.sip.agent_bridge import SipAgentBridge
     from backend.sip.config import load_sip_config
     from backend.sip.traffic import get_traffic_gate
@@ -116,7 +116,7 @@ async def _run_sip_bridged_call(
             return
 
         cfg = load_sip_config().with_peer(peer_host, peer_port)
-        if task.scenario == "guotou_auth_demo":
+        if is_tmp_prod_scenario(task.scenario):
             from dataclasses import replace
             from pathlib import Path
 
@@ -150,14 +150,14 @@ async def _run_sip_bridged_call(
 
             slots = urge_auth_slots_from_payload(task.payload)
             system_role = build_urge_auth_system_role(**slots, opening_preplayed=True)
-        elif cfg.ai_speak_first and opening and task.scenario == "guotou_auth_demo":
-            from config.guotou_demo_prompt import (
-                build_guotou_demo_system_role,
-                guotou_demo_slots_from_payload,
+        elif cfg.ai_speak_first and opening and is_tmp_prod_scenario(task.scenario):
+            from config.tmp_prod_prompt import (
+                build_tmp_prod_system_role,
+                tmp_prod_slots_from_payload,
             )
 
-            slots = guotou_demo_slots_from_payload(task.payload)
-            system_role = build_guotou_demo_system_role(**slots, opening_preplayed=True)
+            slots = tmp_prod_slots_from_payload(task.payload)
+            system_role = build_tmp_prod_system_role(**slots, opening_preplayed=True)
         bridge = SipAgentBridge(
             cfg,
             system_role=system_role,

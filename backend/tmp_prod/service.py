@@ -13,7 +13,7 @@ from backend.tmp_prod.store import Batch, BatchStore, ContactJob, get_batch_stor
 
 LOG = logging.getLogger(__name__)
 
-SCENARIO = "guotou_auth_demo"
+SCENARIO = "tmp_prod_auth_demo"
 RETRY_DELAY_SEC = int(os.environ.get("TMP_PROD_RETRY_SEC", "1800"))  # 30 min
 MAX_ATTEMPTS = 2
 CALL_MAX_SEC = 900  # 15 min

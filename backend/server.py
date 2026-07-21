@@ -643,7 +643,7 @@ async def sip_call_page():
 @app.get("/tmp-prod")
 @app.get("/tmp-prod/")
 async def tmp_prod_page():
-    """国投临时演示页。同时挂 /tmp-prod 与 /tmp-prod/，避免反代下 307 Location 丢 /s2s 前缀。"""
+    """tmp-prod 临时演示页。同时挂 /tmp-prod 与 /tmp-prod/，避免反代下 307 Location 丢 /s2s 前缀。"""
     from backend.tmp_prod.routes import render_tmp_prod_page
 
     return render_tmp_prod_page()

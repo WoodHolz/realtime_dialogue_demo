@@ -28,7 +28,14 @@ from config.urge_auth_prompt import (
 
 LOG = logging.getLogger(__name__)
 
-SUPPORTED_SCENARIOS = {"urge_auth", "guotou_auth_demo"}
+TMP_PROD_SCENARIO = "tmp_prod_auth_demo"
+# Legacy alias kept so in-flight / old batch rows still resolve.
+_TMP_PROD_SCENARIOS = {TMP_PROD_SCENARIO, "guotou_auth_demo"}
+SUPPORTED_SCENARIOS = {"urge_auth", *_TMP_PROD_SCENARIOS}
+
+
+def is_tmp_prod_scenario(scenario: str) -> bool:
+    return (scenario or "").strip() in _TMP_PROD_SCENARIOS
 
 
 def _partner_api_key() -> str:
@@ -49,23 +56,23 @@ def verify_partner_api_key(provided: str | None) -> bool:
 
 def build_scenario_prompt(scenario: str, payload: dict[str, Any]) -> tuple[str, str, str, list[str]]:
     """Return (system_role, speaking_style, opening_line, opening_parts)."""
-    if scenario == "guotou_auth_demo":
-        from config.guotou_demo_prompt import (
-            DEFAULT_SPEAKING_STYLE as G_STYLE,
-            build_guotou_demo_opening,
-            build_guotou_demo_opening_parts,
-            build_guotou_demo_system_role,
-            guotou_demo_slots_from_payload,
+    if is_tmp_prod_scenario(scenario):
+        from config.tmp_prod_prompt import (
+            DEFAULT_SPEAKING_STYLE as TMP_STYLE,
+            build_tmp_prod_opening,
+            build_tmp_prod_opening_parts,
+            build_tmp_prod_system_role,
             stamp_trigger_beijing,
+            tmp_prod_slots_from_payload,
         )
 
         # Stamp trigger Beijing time at prompt build (= outbound trigger); persist for dialer rebuild.
         payload["trigger_beijing_at"] = stamp_trigger_beijing(payload)
-        slots = guotou_demo_slots_from_payload(payload)
-        role = build_guotou_demo_system_role(**slots)
-        parts = build_guotou_demo_opening_parts(**slots)
-        opening = build_guotou_demo_opening(**slots)
-        return role, G_STYLE, opening, parts
+        slots = tmp_prod_slots_from_payload(payload)
+        role = build_tmp_prod_system_role(**slots)
+        parts = build_tmp_prod_opening_parts(**slots)
+        opening = build_tmp_prod_opening(**slots)
+        return role, TMP_STYLE, opening, parts
     if scenario != "urge_auth":
         raise ValueError(f"Unsupported scenario: {scenario}")
     slots = urge_auth_slots_from_payload(payload)
@@ -96,8 +103,8 @@ async def create_outbound_call(
     body = dict(payload or {})
     if display:
         body["display"] = display.strip()
-    if scenario == "guotou_auth_demo":
-        from config.guotou_demo_prompt import stamp_trigger_beijing
+    if is_tmp_prod_scenario(scenario):
+        from config.tmp_prod_prompt import stamp_trigger_beijing
 
         # Freeze Beijing trigger time at call creation (本通外呼触发瞬间).
         body["trigger_beijing_at"] = stamp_trigger_beijing(body)
