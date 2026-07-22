@@ -94,7 +94,6 @@ def build_tmp_prod_compliance_opening(*, candidate_name: str = "", employer: str
     return (
         f"您好，我是{BRAND}的智能语音助手。"
         f"正在协助办理您在{emp}的入职背景调查。"
-        f"为保证服务质量，本次通话将会录音。"
         f"今天联系您，是想确认一下您是否收到此前发送的背调授权短信。"
         f"大约占用您两分钟，现在方便吗？"
     )

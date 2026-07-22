@@ -71,14 +71,26 @@
       <input id="file" type="file" accept=".xlsx,.xlsm" />
       <div class="row">
         <div>
-          <label for="dryRun">模式</label>
-          <select id="dryRun">
-            <option value="">跟随 OUTBOUND_DRY_RUN</option>
-            <option value="false">真实外呼</option>
-            <option value="true">dry_run（不拨号）</option>
+          <label for="client">委托方 / 自称品牌</label>
+          <input id="client" type="text" value="比赛日科技" />
+        </div>
+        <div>
+          <label for="identityMode">身份模式</label>
+          <select id="identityMode">
+            <option value="CLIENT_IDENTITY">CLIENT_IDENTITY（客户白标）</option>
+            <option value="CHANNEL_BRAND">CHANNEL_BRAND（渠道白标）</option>
+            <option value="BRAND_SELF" selected>BRAND_SELF（芝麻背调自称+受托）</option>
           </select>
         </div>
       </div>
+      <div class="row">
+        <div>
+          <label for="ourBrand">我方品牌（BRAND_SELF）</label>
+          <input id="ourBrand" type="text" value="芝麻背调" />
+        </div>
+      </div>
+      <label for="channelBrand">渠道品牌名（CHANNEL_BRAND，可覆盖委托方）</label>
+      <input id="channelBrand" type="text" placeholder="仅 CHANNEL_BRAND 时填写" />
       <!-- API Key 字段默认隐藏；需要鉴权时再在页面显示 #apiKeyWrap -->
       <div id="apiKeyWrap" style="display:none">
         <label for="apiKey">X-API-Key（可选）</label>
@@ -126,7 +138,10 @@
       var el = {
         file: document.getElementById("file"),
         apiKey: document.getElementById("apiKey"),
-        dryRun: document.getElementById("dryRun"),
+        identityMode: document.getElementById("identityMode"),
+        client: document.getElementById("client"),
+        ourBrand: document.getElementById("ourBrand"),
+        channelBrand: document.getElementById("channelBrand"),
         uploadBtn: document.getElementById("uploadBtn"),
         startBtn: document.getElementById("startBtn"),
         refreshBtn: document.getElementById("refreshBtn"),
@@ -224,9 +239,13 @@
         if (!id) return;
         el.startBtn.disabled = true;
         try {
-          var body = { stagger_sec: 0.5 };
-          if (el.dryRun.value === "true") body.dry_run = true;
-          if (el.dryRun.value === "false") body.dry_run = false;
+          var body = {
+            stagger_sec: 0.5,
+            identity_mode: el.identityMode.value,
+            client_name: (el.client.value || "").trim() || "比赛日科技",
+            our_brand_name: (el.ourBrand.value || "").trim() || "芝麻背调",
+            channel_brand_name: (el.channelBrand.value || "").trim(),
+          };
           var resp = await fetch(API + "/batches/" + id + "/start", {
             method: "POST",
             headers: headers(true),

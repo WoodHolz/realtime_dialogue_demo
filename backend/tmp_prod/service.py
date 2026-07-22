@@ -93,7 +93,10 @@ async def dial_one_contact(
     contact: ContactJob,
     *,
     store: BatchStore | None = None,
-    dry_run: bool | None = None,
+    identity_mode: str = "BRAND_SELF",
+    client_name: str = "比赛日科技",
+    our_brand_name: str = "芝麻背调",
+    channel_brand_name: str = "",
 ) -> ContactJob:
     """Place one outbound attempt; schedule retry on no-answer if attempts remain."""
     ensure_tmp_prod_env()
@@ -115,14 +118,16 @@ async def dial_one_contact(
         "employer": contact.employer or "比赛日科技",
         "gender": contact.gender,
         "phone": contact.phone,
-        "client_name": contact.employer,
+        "client_name": (client_name or contact.employer or "比赛日科技").strip(),
+        "identity_mode": (identity_mode or "BRAND_SELF").strip() or "BRAND_SELF",
+        "our_brand_name": (our_brand_name or "芝麻背调").strip() or "芝麻背调",
+        "channel_brand_name": (channel_brand_name or "").strip(),
     }
     task = await create_outbound_call(
         phone=contact.phone,
         scenario=SCENARIO,
         external_id=f"{batch_id}:{contact.contact_id}:{attempt}",
         payload=payload,
-        dry_run=dry_run,
     )
     call_ids = list(contact.call_ids) + [task.call_id]
     store.update_contact(
@@ -179,7 +184,15 @@ async def dial_one_contact(
                 **rec_fields,
             )
             asyncio.create_task(
-                _retry_later(batch_id, contact.contact_id, RETRY_DELAY_SEC),
+                _retry_later(
+                    batch_id,
+                    contact.contact_id,
+                    RETRY_DELAY_SEC,
+                    identity_mode=identity_mode,
+                    client_name=client_name,
+                    our_brand_name=our_brand_name,
+                    channel_brand_name=channel_brand_name,
+                ),
                 name=f"tmp-prod-retry-{contact.contact_id}-{attempt}",
             )
         else:
@@ -320,7 +333,16 @@ def _persist_artifacts(
         )
 
 
-async def _retry_later(batch_id: str, contact_id: str, delay_sec: int) -> None:
+async def _retry_later(
+    batch_id: str,
+    contact_id: str,
+    delay_sec: int,
+    *,
+    identity_mode: str = "BRAND_SELF",
+    client_name: str = "比赛日科技",
+    our_brand_name: str = "芝麻背调",
+    channel_brand_name: str = "",
+) -> None:
     try:
         await asyncio.sleep(delay_sec)
         store = get_batch_store()
@@ -330,7 +352,15 @@ async def _retry_later(batch_id: str, contact_id: str, delay_sec: int) -> None:
         contact = next((c for c in batch.contacts if c.contact_id == contact_id), None)
         if not contact or contact.status != "waiting_retry":
             return
-        await dial_one_contact(batch_id, contact, store=store, dry_run=False)
+        await dial_one_contact(
+            batch_id,
+            contact,
+            store=store,
+            identity_mode=identity_mode,
+            client_name=client_name,
+            our_brand_name=our_brand_name,
+            channel_brand_name=channel_brand_name,
+        )
         _maybe_mark_batch_done(batch_id, store)
     except Exception:
         LOG.exception("tmp-prod retry failed batch=%s contact=%s", batch_id, contact_id)
@@ -350,7 +380,10 @@ def _maybe_mark_batch_done(batch_id: str, store: BatchStore) -> None:
 async def run_batch(
     batch_id: str,
     *,
-    dry_run: bool | None = None,
+    identity_mode: str = "BRAND_SELF",
+    client_name: str = "比赛日科技",
+    our_brand_name: str = "芝麻背调",
+    channel_brand_name: str = "",
     stagger_sec: float = 0.5,
     max_concurrent: int | None = None,
 ) -> Batch:
@@ -381,7 +414,15 @@ async def run_batch(
             if not contact or contact.status in {"completed", "failed", "waiting_retry"}:
                 return
             try:
-                await dial_one_contact(batch_id, contact, store=store, dry_run=dry_run)
+                await dial_one_contact(
+                    batch_id,
+                    contact,
+                    store=store,
+                    identity_mode=identity_mode,
+                    client_name=client_name,
+                    our_brand_name=our_brand_name,
+                    channel_brand_name=channel_brand_name,
+                )
             except Exception as exc:
                 LOG.exception("tmp-prod dial error contact=%s", contact_id)
                 store.update_contact(

@@ -27,7 +27,13 @@ def _auth(x_api_key: str | None) -> None:
 
 
 class StartBody(BaseModel):
-    dry_run: bool | None = Field(default=None, description="覆盖 OUTBOUND_DRY_RUN")
+    identity_mode: str = Field(
+        default="BRAND_SELF",
+        description="BRAND_SELF | CLIENT_IDENTITY | CHANNEL_BRAND",
+    )
+    client_name: str = Field(default="比赛日科技", description="委托方 / 自称品牌")
+    our_brand_name: str = Field(default="芝麻背调", description="BRAND_SELF 我方品牌")
+    channel_brand_name: str = Field(default="", description="CHANNEL_BRAND 渠道品牌名")
     stagger_sec: float = Field(
         default=0.5,
         ge=0,
@@ -147,7 +153,10 @@ async def start_batch(
     asyncio.create_task(
         run_batch(
             batch_id,
-            dry_run=body.dry_run,
+            identity_mode=body.identity_mode,
+            client_name=body.client_name,
+            our_brand_name=body.our_brand_name,
+            channel_brand_name=body.channel_brand_name,
             stagger_sec=body.stagger_sec,
             max_concurrent=body.max_concurrent,
         ),

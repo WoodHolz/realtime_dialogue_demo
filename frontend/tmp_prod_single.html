@@ -159,18 +159,32 @@
 
           <div class="row">
             <div>
-              <label for="dryRun">模式</label>
-              <select id="dryRun">
-                <option value="">跟随 OUTBOUND_DRY_RUN</option>
-                <option value="false">真实外呼</option>
-                <option value="true">dry_run（不拨号）</option>
+              <label for="client">委托方 / 自称品牌</label>
+              <input id="client" type="text" value="比赛日科技" />
+            </div>
+            <div>
+              <label for="identityMode">身份模式</label>
+              <select id="identityMode">
+                <option value="CLIENT_IDENTITY">CLIENT_IDENTITY（客户白标）</option>
+                <option value="CHANNEL_BRAND">CHANNEL_BRAND（渠道白标）</option>
+                <option value="BRAND_SELF" selected>BRAND_SELF（芝麻背调自称+受托）</option>
               </select>
+            </div>
+          </div>
+
+          <div class="row">
+            <div>
+              <label for="ourBrand">我方品牌（BRAND_SELF）</label>
+              <input id="ourBrand" type="text" value="芝麻背调" />
             </div>
             <div id="apiKeyWrap">
               <label for="apiKey">X-API-Key（可选）</label>
               <input id="apiKey" type="password" placeholder="PARTNER_API_KEY 为空可留空" autocomplete="off" />
             </div>
           </div>
+
+          <label for="channelBrand">渠道品牌名（CHANNEL_BRAND，可覆盖委托方）</label>
+          <input id="channelBrand" type="text" placeholder="仅 CHANNEL_BRAND 时填写" />
 
           <h2 style="margin-top:1.1rem;">开场白预览</h2>
           <div class="preview" id="openingPreview">填写槽位后自动预览…</div>
@@ -234,7 +248,10 @@
         candidate: document.getElementById("candidate"),
         gender: document.getElementById("gender"),
         employer: document.getElementById("employer"),
-        dryRun: document.getElementById("dryRun"),
+        client: document.getElementById("client"),
+        identityMode: document.getElementById("identityMode"),
+        ourBrand: document.getElementById("ourBrand"),
+        channelBrand: document.getElementById("channelBrand"),
         apiKey: document.getElementById("apiKey"),
         openingPreview: document.getElementById("openingPreview"),
         status: document.getElementById("status"),
@@ -293,11 +310,11 @@
           candidate_name: (el.candidate.value || "").trim() || "张三",
           gender: (el.gender.value || "").trim(),
           employer: (el.employer.value || "").trim(),
-          client_name: (el.employer.value || "").trim(),
+          client_name: (el.client.value || "").trim() || "比赛日科技",
+          identity_mode: el.identityMode.value,
+          our_brand_name: (el.ourBrand.value || "").trim() || "芝麻背调",
+          channel_brand_name: (el.channelBrand.value || "").trim(),
         };
-        var dry = (el.dryRun.value || "").trim();
-        if (dry === "true") body.dry_run = true;
-        if (dry === "false") body.dry_run = false;
         return body;
       }
       async function refreshOpeningPreview() {
@@ -439,9 +456,10 @@
         }, 1500);
       }
 
-      ["candidate", "gender", "employer", "phone"].forEach(function (id) {
+      ["candidate", "gender", "employer", "client", "ourBrand", "channelBrand", "phone"].forEach(function (id) {
         el[id].addEventListener("input", schedulePreview);
       });
+      el.identityMode.addEventListener("change", schedulePreview);
       el.previewBtn.addEventListener("click", refreshOpeningPreview);
       el.btnStereo.addEventListener("click", function () { loadKind("stereo"); });
       el.btnUser.addEventListener("click", function () { loadKind("user"); });
