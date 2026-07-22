@@ -90,9 +90,10 @@ def build_tmp_prod_opening(*, candidate_name: str, employer: str = "", **_ignore
 def build_tmp_prod_compliance_opening(*, candidate_name: str = "", employer: str = "", **_ignored: Any) -> str:
     """确认本人后的合规开场（不预播，由模型在对方确认后说）。"""
     emp = (employer or EMPLOYER_DEFAULT).strip() or EMPLOYER_DEFAULT
-    # 分句 + 避免英文「AI」，降低电话 TTS 叠音/快读概率。
+    # 身份介绍拆成两句，避免电话侧中段听感叠音；录音侧通常正常。
     return (
-        f"您好，我是{BRAND}的智能语音助手，正在协助办理您在{emp}的入职背景调查。"
+        f"您好，我是{BRAND}的智能语音助手。"
+        f"正在协助办理您在{emp}的入职背景调查。"
         f"为保证服务质量，本次通话将会录音。"
         f"今天联系您，是想确认一下您是否收到此前发送的背调授权短信。"
         f"大约占用您两分钟，现在方便吗？"

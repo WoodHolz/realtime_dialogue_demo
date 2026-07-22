@@ -350,8 +350,10 @@ class SipAgentBridge:
                     idx + 1,
                     self.call_id,
                 )
-            # Drain every part (including last) so RTP finishes before uplink / next reply.
-            await self._wait_opening_part_playback_drain(idx + 1)
+            if idx + 1 < len(self.opening_parts):
+                await self._wait_opening_part_playback_drain(idx + 1)
+        # Last part: open uplink promptly (do not wait full playback drain).
+        await asyncio.sleep(0.15)
         self._accept_uplink = True
         self._opening_uplink_pending = False
         self._emit("audio_mode_ready")
