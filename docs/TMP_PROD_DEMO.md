@@ -13,7 +13,7 @@
 
 `/tmp-prod` 与 `/tmp-prod/`、`/tmp-prod/single` 与 `/tmp-prod/single/` 均直接返回页面，避免反代下 307 丢前缀。
 
-单人页走 `POST /outbound/v1/calls`（`scenario=tmp_prod_auth_demo`）。右侧为 **SIP 轮次延迟**（人说完 → AI 开说；开场白 AI 先说不计）、双声道录音回放、ASR / AI 转写。录音：`GET /outbound/v1/calls/{id}/recording/stereo`。
+单人页走 `POST /outbound/v1/calls`（`scenario=tmp_prod_auth_demo`）。通话结束后可回放双声道录音并查看 ASR / AI 转写。录音：`GET /outbound/v1/calls/{id}/recording/stereo`。
 
 ## 流程
 

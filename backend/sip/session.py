@@ -89,6 +89,12 @@ class SipCallSession:
         if self.rtp:
             self.rtp.enqueue_pcmu(payload)
 
+    def clear_downlink_audio(self) -> int:
+        """Clear pending AI TTS RTP frames so a new utterance does not overlap."""
+        if not self.rtp:
+            return 0
+        return self.rtp.clear_tx_queue()
+
     def _release_prebound_rtp(self) -> None:
         sock = self._rtp_sock
         self._rtp_sock = None

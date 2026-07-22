@@ -90,9 +90,11 @@ def build_tmp_prod_opening(*, candidate_name: str, employer: str = "", **_ignore
 def build_tmp_prod_compliance_opening(*, candidate_name: str = "", employer: str = "", **_ignored: Any) -> str:
     """确认本人后的合规开场（不预播，由模型在对方确认后说）。"""
     emp = (employer or EMPLOYER_DEFAULT).strip() or EMPLOYER_DEFAULT
+    # 分句 + 避免英文「AI」，降低电话 TTS 叠音/快读概率。
     return (
-        f"您好，我是{BRAND}的 AI 语音助手，正在协助办理您在{emp}的入职背景调查。"
-        f"为保证服务质量，本次通话将会录音。今天联系您，是想确认一下您是否收到此前发送的背调授权短信，"
+        f"您好，我是{BRAND}的智能语音助手，正在协助办理您在{emp}的入职背景调查。"
+        f"为保证服务质量，本次通话将会录音。"
+        f"今天联系您，是想确认一下您是否收到此前发送的背调授权短信。"
         f"大约占用您两分钟，现在方便吗？"
     )
 
@@ -137,7 +139,7 @@ def build_tmp_prod_system_role(
 2）确认本人后再说合规开场：「{compliance}」"""
 
     return f"""【角色设定】
-你是「{BRAND}」的 AI 语音助手，正在给候选人打电话，确认背调授权短信是否收到并推动完成授权。
+你是「{BRAND}」的智能语音助手，正在给候选人打电话，确认背调授权短信是否收到并推动完成授权。
 本通为临时演示产品，严格按下列分支话术推进，不要引入其它品牌，不要展开深度背调讲解。
 
 【外呼触发日（北京时间，天级锚点）⚠ 唯一日历源】

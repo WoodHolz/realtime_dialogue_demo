@@ -124,6 +124,24 @@ class RtpSession:
                     break
         # Drop trailing partial frame (caller should use PcmuFrameBuffer).
 
+    def clear_tx_queue(self) -> int:
+        """Drop queued TTS frames (barge-in / new utterance). Returns dropped count."""
+        dropped = 0
+        while True:
+            try:
+                item = self._tx_q.get_nowait()
+            except queue.Empty:
+                break
+            if item is None:
+                # Preserve stop sentinel.
+                try:
+                    self._tx_q.put_nowait(None)
+                except queue.Full:
+                    pass
+                break
+            dropped += 1
+        return dropped
+
     def _send_loop(self) -> None:
         next_t = time.monotonic()
         while not self._stop.is_set():

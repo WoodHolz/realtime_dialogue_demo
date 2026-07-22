@@ -198,6 +198,7 @@ class SipAgentBridge:
             on_tts_end=self._on_tts_end,
             on_chat_response=self._on_chat_delta,
             on_chat_ended=self._on_chat_ended,
+            on_barge_in=self._on_barge_in,
             on_session_started=on_session_started,
             on_error=lambda m: LOG.warning("agent error call_id=%s: %s", self.call_id, m),
         )
@@ -346,9 +347,8 @@ class SipAgentBridge:
                     idx + 1,
                     self.call_id,
                 )
-            if idx + 1 < len(self.opening_parts):
-                await self._wait_opening_part_playback_drain(idx + 1)
-        await asyncio.sleep(0.15)
+            # Drain every part (including last) so RTP finishes before uplink / next reply.
+            await self._wait_opening_part_playback_drain(idx + 1)
         self._accept_uplink = True
         self._opening_uplink_pending = False
         self._emit("audio_mode_ready")
@@ -473,6 +473,30 @@ class SipAgentBridge:
         self._transcript.append(entry)
         self._publish_transcript()
 
+    def _clear_downlink(self, reason: str) -> None:
+        """Drop pending PCMU so a new AI utterance does not overlap stale TTS."""
+        self._pcmu_tx_buf = PcmuFrameBuffer()
+        dropped = 0
+        if self._session:
+            try:
+                dropped = self._session.clear_downlink_audio()
+            except Exception:
+                LOG.debug("clear_downlink_audio failed", exc_info=True)
+        if dropped:
+            LOG.info(
+                "cleared downlink TTS call_id=%s reason=%s dropped_frames=%d",
+                self.call_id,
+                reason,
+                dropped,
+            )
+
+    def _on_barge_in(self, _item_id: str) -> None:
+        # Phone echo / user speech while AI talking: Duplex restarts TTS —
+        # must clear local RTP queue or old+new audio stacks (叠音).
+        if self._opening_uplink_pending:
+            return
+        self._clear_downlink("barge_in")
+
     def _on_tts_start(self, _meta: dict) -> None:
         if self._opening_tts_started and not self._opening_tts_started.is_set():
             self._opening_tts_started.set()
@@ -480,6 +504,8 @@ class SipAgentBridge:
             if self._opening_tts_start_ms is None:
                 self._opening_tts_start_ms = self._rel_ms()
             return
+        # New model utterance (e.g. compliance opening): start from a clean TX queue.
+        self._clear_downlink("tts_start")
         # Normal turn: user finished → AI TTS starts = SIP turn latency.
         self._latency.tts_start()
         lat = self._latency.get_last_total_latency_ms()

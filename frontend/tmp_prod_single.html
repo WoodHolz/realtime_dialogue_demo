@@ -16,7 +16,6 @@
       --danger: #9b2c2c;
       --user: #0f766e;
       --ai: #b45309;
-      --lat: #1d4ed8;
     }
     * { box-sizing: border-box; }
     body {
@@ -96,21 +95,6 @@
       line-height: 1.5;
       white-space: pre-wrap;
     }
-    .lat-big {
-      font-size: 1.8rem; font-weight: 700; font-variant-numeric: tabular-nums;
-      color: var(--lat); margin: 0.25rem 0 0.5rem;
-    }
-    .lat-list { list-style: none; padding: 0; margin: 0.5rem 0 0; }
-    .lat-list li {
-      font-size: 0.82rem; padding: 0.45rem 0.55rem; border-bottom: 1px solid var(--line);
-      display: flex; justify-content: space-between; gap: 0.5rem;
-    }
-    .lat-list .ms { font-weight: 700; color: var(--lat); white-space: nowrap; }
-    .lat-list .skip { color: var(--muted); font-weight: 600; }
-    canvas#latCanvas {
-      display: block; width: 100%; height: 120px;
-      background: #0f1218; border-radius: 8px; border: 1px solid #1c2230; margin-top: 0.5rem;
-    }
     audio { width: 100%; margin-top: 0.5rem; }
     .tx {
       max-height: 420px; overflow: auto; margin-top: 0.5rem;
@@ -132,7 +116,6 @@
     .badge.user { background: #ccfbf1; color: var(--user); }
     .badge.ai { background: #ffedd5; color: var(--ai); }
     .badge.opening { background: #e0e7ff; color: #3730a3; }
-    .badge.lat { background: #dbeafe; color: var(--lat); }
     .interim {
       margin-top: 0.5rem; padding: 0.55rem 0.7rem; border-radius: 8px;
       background: #fffbeb; border: 1px dashed #f59e0b;
@@ -149,7 +132,7 @@
     </nav>
     <h1>tmp-prod · 单人测试</h1>
     <p class="lead">
-      用 tmp-prod 剧本（芝麻背调）打一通 SIP 外呼。右侧展示<strong>通话轮次延迟</strong>（人说完 → AI 开说；开场白 AI 先说不计入该指标）、双声道录音回放，以及 ASR / AI 转写。
+      用 tmp-prod 剧本（芝麻背调）打一通 SIP 外呼。通话结束后可回放双声道录音，并查看 ASR / AI 转写。
     </p>
 
     <div class="layout">
@@ -191,7 +174,7 @@
 
           <h2 style="margin-top:1.1rem;">开场白预览</h2>
           <div class="preview" id="openingPreview">填写槽位后自动预览…</div>
-          <p class="hint">方案 A：系统只预播「确认本人」；合规开场由模型在确认后说。开场为 AI 先说，不算 user→AI 延迟。</p>
+          <p class="hint">方案 A：系统只预播「确认本人」；合规开场由模型在确认后说。</p>
 
           <button type="submit" id="callBtn">发起单人外呼</button>
           <button type="button" class="secondary" id="previewBtn">刷新预览</button>
@@ -200,17 +183,6 @@
       </section>
 
       <aside>
-        <section class="panel">
-          <h2>SIP 轮次延迟（人说完 → AI 开说）</h2>
-          <p class="hint" style="margin-top:0;">
-            事件口径：Duplex <code>ASR ended</code> → 下一次 <code>TTS start</code>。开场白 AI speak-first 单独标记，不计入该项。
-          </p>
-          <div class="lat-big" id="latLatest">—</div>
-          <p class="hint" id="latHint">接通后轮询更新；挂机后保留本通结果。</p>
-          <canvas id="latCanvas" width="900" height="120"></canvas>
-          <ul class="lat-list" id="latList"><li class="empty">尚无轮次</li></ul>
-        </section>
-
         <section class="panel">
           <h2>双声道录音（L=用户 · R=AI）</h2>
           <audio id="stereoPlayer" controls preload="none"></audio>
@@ -269,10 +241,6 @@
         form: document.getElementById("form"),
         callBtn: document.getElementById("callBtn"),
         previewBtn: document.getElementById("previewBtn"),
-        latLatest: document.getElementById("latLatest"),
-        latHint: document.getElementById("latHint"),
-        latList: document.getElementById("latList"),
-        latCanvas: document.getElementById("latCanvas"),
         stereoPlayer: document.getElementById("stereoPlayer"),
         recHint: document.getElementById("recHint"),
         btnStereo: document.getElementById("btnStereo"),
@@ -369,73 +337,6 @@
         );
       }
 
-      function renderLatency(timings) {
-        timings = timings || [];
-        var turns = timings.filter(function (t) { return t && t.kind === "turn" && t.latency_ms != null; });
-        var opening = timings.find(function (t) { return t && t.kind === "opening"; });
-        if (turns.length) {
-          el.latLatest.textContent = turns[turns.length - 1].latency_ms + " ms";
-          el.latHint.textContent = "最近一轮 user→AI；共 " + turns.length + " 轮（开场已排除）";
-        } else if (opening) {
-          el.latLatest.textContent = "开场中";
-          el.latHint.textContent = "AI 先说开场白，不计 user→AI 延迟" +
-            (opening.ai_speech_start_ms != null ? (" · opening TTS @" + opening.ai_speech_start_ms + " ms") : "");
-        } else {
-          el.latLatest.textContent = "—";
-          el.latHint.textContent = "接通后轮询更新；挂机后保留本通结果。";
-        }
-        el.latList.innerHTML = "";
-        if (!timings.length) {
-          el.latList.innerHTML = "<li class='empty'>尚无轮次</li>";
-        } else {
-          timings.forEach(function (t, i) {
-            var li = document.createElement("li");
-            if (t.kind === "opening") {
-              li.innerHTML = "<span>#" + (i + 1) + " 开场（AI first）</span><span class='skip'>skip</span>";
-            } else {
-              li.innerHTML =
-                "<span>#" + (i + 1) + " user@" + (t.user_speech_end_ms ?? "?") +
-                " → ai@" + (t.ai_speech_start_ms ?? "?") + "</span>" +
-                "<span class='ms'>" + (t.latency_ms ?? "—") + " ms</span>";
-            }
-            el.latList.appendChild(li);
-          });
-        }
-        drawLatencyCanvas(timings);
-      }
-
-      function drawLatencyCanvas(timings) {
-        var c = el.latCanvas;
-        var g = c.getContext("2d");
-        var w = c.width, h = c.height;
-        g.fillStyle = "#0f1218";
-        g.fillRect(0, 0, w, h);
-        var turns = (timings || []).filter(function (t) { return t && t.kind === "turn" && t.latency_ms != null; });
-        g.fillStyle = "#8b93a7";
-        g.font = "12px ui-monospace, monospace";
-        if (!turns.length) {
-          g.fillText("waiting for user→AI turns…", 16, h / 2);
-          return;
-        }
-        var maxLat = Math.max(400, Math.max.apply(null, turns.map(function (t) { return t.latency_ms; })));
-        var pad = 28;
-        var barW = (w - pad * 2) / turns.length;
-        turns.forEach(function (t, i) {
-          var bh = Math.max(4, (t.latency_ms / maxLat) * (h - 40));
-          var x = pad + i * barW + 6;
-          var y = h - 20 - bh;
-          g.fillStyle = "#3b82f6";
-          g.fillRect(x, y, Math.max(8, barW - 12), bh);
-          g.fillStyle = "#e8ecf4";
-          g.fillText(String(t.latency_ms), x, y - 4);
-        });
-        g.strokeStyle = "#2a3142";
-        g.beginPath();
-        g.moveTo(pad, h - 20);
-        g.lineTo(w - pad, h - 20);
-        g.stroke();
-      }
-
       function renderTranscript(rows, interim) {
         el.asrInterim.textContent = "实时 ASR interim：" + (interim || "—");
         rows = rows || [];
@@ -457,7 +358,6 @@
             badges += "<span class='badge ai'>AI / STT</span>";
           }
           if (r.source) badges += "<span class='badge'>" + r.source + "</span>";
-          if (r.latency_ms != null) badges += "<span class='badge lat'>" + r.latency_ms + " ms</span>";
           if (r.t_ms != null) badges += "<span>" + r.t_ms + " ms</span>";
           div.innerHTML =
             "<div class='tx-meta'>" + badges + "</div>" +
@@ -501,7 +401,6 @@
       }
 
       function applyCallSnapshot(data) {
-        renderLatency(data.turn_timings || []);
         renderTranscript(data.transcript || [], data.asr_interim || "");
         if (data.recording_urls) setRecordingButtons(data.recording_urls);
         var dial = data.telephony && data.telephony.dial;
@@ -515,10 +414,6 @@
         if (sip && sip.error) line += "\nsip=" + sip.error;
         if (data.error) line += "\nerror=" + data.error;
         if (data.result_summary) line += "\n" + data.result_summary;
-        var turns = (data.turn_timings || []).filter(function (t) { return t.kind === "turn"; });
-        if (turns.length) {
-          line += "\nlast_latency_ms=" + turns[turns.length - 1].latency_ms;
-        }
         setStatus(line, data.status === "failed");
       }
 
@@ -561,7 +456,6 @@
         }
         el.callBtn.disabled = true;
         setRecordingButtons(null);
-        renderLatency([]);
         renderTranscript([], "");
         var body = payloadFromForm();
         body.phone = phone;
@@ -586,7 +480,7 @@
             "\ncalled=" + (dial.called || withPrefix(phone)) +
             "\ndisplay=" + (dial.display || "(服务端自动分配)") +
             (data.opening_line ? ("\n\n开场白：\n" + data.opening_line) : "") +
-            "\n\n轮询中（含转写 / 延迟）…"
+            "\n\n轮询中（转写 / 录音）…"
           );
           pollCall(data.call_id);
         } catch (err) {
