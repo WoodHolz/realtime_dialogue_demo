@@ -22,6 +22,18 @@ LOG = logging.getLogger(__name__)
 
 RESULT_CONCURRENCY_LIMIT = "concurrency_limit"
 
+# 404 + Q.850 cause=16 (NORMAL_CLEARING) is often a flaky carrier clear before answer.
+SIP_CLEARING_404_RETRIES = 3
+SIP_CLEARING_404_RETRY_INTERVAL_SEC = 5.0
+
+
+def _is_retryable_404_normal_clearing(*, status: str, error: str) -> bool:
+    """True for SIP 404 wrapped with Q.850 NORMAL_CLEARING (cause=16)."""
+    if (status or "").strip() != "404":
+        return False
+    err = error or ""
+    return "cause=16" in err or "NORMAL_CLEARING" in err
+
 
 async def dispatch_outbound_call(task: CallTask, store: CallStore) -> None:
     """Start a background SIP + Agent call for the partner task."""
@@ -175,33 +187,83 @@ async def _run_sip_bridged_call(
 
             slots = tmp_prod_slots_from_payload(task.payload)
             system_role = build_tmp_prod_system_role(**slots, opening_preplayed=True)
-        bridge = SipAgentBridge(
-            cfg,
-            system_role=system_role,
-            speaking_style=task.speaking_style,
-            call_id=call_id,
-            bot_name="催授权助手" if task.scenario == "urge_auth" else "语音助手",
-            opening_line=opening,
-            opening_parts=parts,
-            on_status=on_status,
-        )
 
-        try:
-            outcome = await bridge.run(phone)
-        except Exception as exc:
-            LOG.exception("SIP bridged call crashed call_id=%s", call_id)
-            store.update(
-                call_id,
-                status=STATUS_FAILED,
-                result=RESULT_FAILED,
-                error=str(exc),
-                finished_at=datetime.now(timezone.utc).isoformat(),
+        max_attempts = 1 + SIP_CLEARING_404_RETRIES
+        dial_attempts: list[dict[str, Any]] = []
+        outcome = None
+        for attempt in range(1, max_attempts + 1):
+            bridge = SipAgentBridge(
+                cfg,
+                system_role=system_role,
+                speaking_style=task.speaking_style,
+                call_id=call_id,
+                bot_name="催授权助手" if task.scenario == "urge_auth" else "语音助手",
+                opening_line=opening,
+                opening_parts=parts,
+                on_status=on_status,
             )
-            updated = store.get(call_id)
-            if updated:
-                await notify_partner_callback(updated)
-            return
+            try:
+                outcome = await bridge.run(phone)
+            except Exception as exc:
+                LOG.exception(
+                    "SIP bridged call crashed call_id=%s attempt=%s/%s",
+                    call_id,
+                    attempt,
+                    max_attempts,
+                )
+                store.update(
+                    call_id,
+                    status=STATUS_FAILED,
+                    result=RESULT_FAILED,
+                    error=str(exc),
+                    finished_at=datetime.now(timezone.utc).isoformat(),
+                )
+                updated = store.get(call_id)
+                if updated:
+                    await notify_partner_callback(updated)
+                return
 
+            sip = outcome.sip
+            dial_attempts.append(
+                {
+                    "attempt": attempt,
+                    "ok": sip.ok,
+                    "status": sip.status,
+                    "error": sip.error or outcome.error or "",
+                    "sip_call_id": sip.sip_call_id,
+                    "servercallid": sip.servercallid,
+                }
+            )
+            if sip.ok:
+                break
+            retryable = _is_retryable_404_normal_clearing(
+                status=sip.status or "",
+                error=sip.error or outcome.error or "",
+            )
+            if not retryable or attempt >= max_attempts:
+                break
+            LOG.warning(
+                "SIP 404 NORMAL_CLEARING call_id=%s attempt=%s/%s; retry in %.0fs error=%s",
+                call_id,
+                attempt,
+                max_attempts,
+                SIP_CLEARING_404_RETRY_INTERVAL_SEC,
+                sip.error or outcome.error,
+            )
+            cur = store.get(call_id) or task
+            tel_retry = dict(cur.telephony or {})
+            tel_retry["sip"] = {
+                **(tel_retry.get("sip") or {}),
+                "status": "retrying",
+                "error": sip.error or outcome.error,
+                "dial_attempt": attempt,
+                "dial_attempts": list(dial_attempts),
+            }
+            tel_retry["sip_peer"] = {"host": peer_host, "port": peer_port}
+            store.update(call_id, status=STATUS_DIALING, telephony=tel_retry)
+            await asyncio.sleep(SIP_CLEARING_404_RETRY_INTERVAL_SEC)
+
+        assert outcome is not None
         sip = outcome.sip
         tel = dict((store.get(call_id) or task).telephony or {})
         tel["sip_peer"] = {"host": peer_host, "port": peer_port}
@@ -219,6 +281,8 @@ async def _run_sip_bridged_call(
             "recordings": outcome.recordings or None,
             "dst_host": peer_host,
             "dst_port": peer_port,
+            "dial_attempt": len(dial_attempts),
+            "dial_attempts": dial_attempts,
         }
 
         if not sip.ok:
