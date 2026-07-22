@@ -153,8 +153,6 @@ class SipAgentBridge:
         self._session = session
 
         def on_pcmu(payload: bytes) -> None:
-            if not self._accept_uplink:
-                return
             try:
                 pcm16 = telephony_rx_to_agent(payload)
             except Exception:
@@ -162,8 +160,11 @@ class SipAgentBridge:
                 return
             if not pcm16:
                 return
+            # Always record user leg for stereo timeline (even while uplink gated).
             if self._recorder:
                 self._recorder.append_user(pcm16)
+            if not self._accept_uplink:
+                return
             loop = self._loop
             q = self._uplink_q
             if loop and q:
@@ -181,6 +182,8 @@ class SipAgentBridge:
             remote_rtp=sip_result.remote_rtp,
         )
         self._t0 = time.perf_counter()
+        if self._recorder:
+            self._recorder.mark_start()
 
         session_ready = asyncio.Event()
 

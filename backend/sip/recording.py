@@ -7,6 +7,8 @@ Optional mono legs kept for analysis.
 from __future__ import annotations
 
 import logging
+import threading
+import time
 import wave
 from pathlib import Path
 
@@ -17,8 +19,12 @@ class CallRecorder:
     """
     Dual-channel recording (user | AI).
 
-    - stereo.wav: PCM16LE stereo, L=user, R=AI (time-aligned, shorter side padded)
+    - stereo.wav: PCM16LE stereo, L=user, R=AI (wall-clock aligned)
     - user.wav / ai.wav: optional mono legs (same sample rate)
+
+    Timeline: both channels share one monotonic clock from mark_start() /
+    first append. Gaps (AI between turns, user before uplink, packet loss)
+    are filled with silence so L/R stay on the same axis.
     """
 
     def __init__(
@@ -36,24 +42,59 @@ class CallRecorder:
         self.root.mkdir(parents=True, exist_ok=True)
         self._user = bytearray()
         self._ai = bytearray()
+        self._t0: float | None = None
+        self._lock = threading.Lock()
         self.paths = {
             "stereo": str(self.root / "stereo.wav"),
             "user": str(self.root / "user.wav"),
             "ai": str(self.root / "ai.wav"),
         }
 
+    def mark_start(self) -> None:
+        """Anchor shared timeline (call answered). Idempotent."""
+        with self._lock:
+            if self._t0 is None:
+                self._t0 = time.monotonic()
+
     def append_user(self, pcm16: bytes) -> None:
-        if pcm16:
-            self._user.extend(pcm16)
+        self._append_aligned(self._user, pcm16, self.user_rate)
 
     def append_ai(self, pcm16: bytes) -> None:
-        if pcm16:
-            self._ai.extend(pcm16)
+        self._append_aligned(self._ai, pcm16, self.ai_rate)
+
+    def _append_aligned(self, buf: bytearray, pcm16: bytes, rate: int) -> None:
+        if not pcm16:
+            return
+        if len(pcm16) % 2:
+            pcm16 = pcm16[:-1]
+        if not pcm16:
+            return
+        with self._lock:
+            now = time.monotonic()
+            if self._t0 is None:
+                self._t0 = now
+            # Place chunk start at current wall clock; pad earlier gap with silence.
+            target = int((now - self._t0) * rate) * 2
+            if target > len(buf):
+                buf.extend(b"\x00" * (target - len(buf)))
+            buf.extend(pcm16)
 
     def close(self) -> dict[str, str]:
         try:
-            user = bytes(self._user)
-            ai = bytes(self._ai)
+            with self._lock:
+                now = time.monotonic()
+                user = bytearray(self._user)
+                ai = bytearray(self._ai)
+                t0 = self._t0
+            if t0 is not None:
+                end_user = int((now - t0) * self.user_rate) * 2
+                end_ai = int((now - t0) * self.ai_rate) * 2
+                if end_user > len(user):
+                    user.extend(b"\x00" * (end_user - len(user)))
+                if end_ai > len(ai):
+                    ai.extend(b"\x00" * (end_ai - len(ai)))
+            user_b = bytes(user)
+            ai_b = bytes(ai)
             rate = self.user_rate if self.user_rate == self.ai_rate else self.user_rate
             if self.user_rate != self.ai_rate:
                 LOG.warning(
@@ -62,10 +103,17 @@ class CallRecorder:
                     self.ai_rate,
                     self.call_id,
                 )
-            self._write_mono_wav(self.paths["user"], user, self.user_rate)
-            self._write_mono_wav(self.paths["ai"], ai, self.ai_rate)
-            stereo = self._interleave_stereo(user, ai)
+            self._write_mono_wav(self.paths["user"], user_b, self.user_rate)
+            self._write_mono_wav(self.paths["ai"], ai_b, self.ai_rate)
+            stereo = self._interleave_stereo(user_b, ai_b)
             self._write_stereo_wav(self.paths["stereo"], stereo, rate)
+            LOG.info(
+                "recording flushed call_id=%s user_bytes=%s ai_bytes=%s duration_approx=%.1fs",
+                self.call_id,
+                len(user_b),
+                len(ai_b),
+                (len(user_b) / 2) / float(self.user_rate) if self.user_rate else 0.0,
+            )
         except Exception:
             LOG.exception("failed to flush recordings call_id=%s", self.call_id)
         return dict(self.paths)
