@@ -122,6 +122,19 @@
       font-size: 0.82rem; color: #92400e; min-height: 1.4rem;
     }
     .empty { color: var(--muted); font-size: 0.82rem; padding: 0.75rem; }
+    .result-grid {
+      display: grid;
+      grid-template-columns: 7.5rem 1fr;
+      gap: 0.35rem 0.75rem;
+      font-size: 0.86rem;
+      line-height: 1.45;
+      margin-top: 0.35rem;
+    }
+    .result-grid dt { color: var(--muted); font-weight: 600; }
+    .result-grid dd { margin: 0; word-break: break-word; }
+    .result-grid dd.strong { font-weight: 700; color: var(--accent); }
+    .result-actions { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-top: 0.75rem; }
+    .result-actions button { margin-top: 0; width: auto; min-width: 8rem; }
   </style>
 </head>
 <body>
@@ -190,6 +203,23 @@
           <button type="button" class="secondary" id="previewBtn">刷新预览</button>
           <div class="status" id="status"><!--__STATUS_BOOT__--></div>
         </form>
+
+        <section class="panel" id="resultPanel">
+          <h2>外呼结果 · 可导出 xlsx</h2>
+          <p class="hint" id="resultHint">通话结束后这里显示业务结果（与批量页同列结构），可下载 xlsx。</p>
+          <dl class="result-grid" id="resultGrid">
+            <dt>状态</dt><dd id="rStatus">—</dd>
+            <dt>结果</dt><dd id="rResult" class="strong">—</dd>
+            <dt>结果说明</dt><dd id="rSummary">—</dd>
+            <dt>承诺完成时间</dt><dd id="rPromised">—</dd>
+            <dt>登记邮箱</dt><dd id="rEmail">—</dd>
+            <dt>交付跟进</dt><dd id="rFollowup">—</dd>
+            <dt>call_id</dt><dd id="rCallId">—</dd>
+          </dl>
+          <div class="result-actions">
+            <button type="button" id="exportBtn" disabled>下载结果 xlsx</button>
+          </div>
+        </section>
       </section>
 
       <aside>
@@ -220,6 +250,7 @@
         ? "/s2s"
         : "";
       var API_BASE = pathPrefix + "/outbound/v1";
+      var TMP_PROD_API = pathPrefix + "/tmp-prod";
       var SCENARIO = "tmp_prod_auth_demo";
 
       document.getElementById("linkBatch").href = pathPrefix + "/tmp-prod";
@@ -261,6 +292,15 @@
         btnAi: document.getElementById("btnAi"),
         asrInterim: document.getElementById("asrInterim"),
         txBox: document.getElementById("txBox"),
+        resultHint: document.getElementById("resultHint"),
+        exportBtn: document.getElementById("exportBtn"),
+        rStatus: document.getElementById("rStatus"),
+        rResult: document.getElementById("rResult"),
+        rSummary: document.getElementById("rSummary"),
+        rPromised: document.getElementById("rPromised"),
+        rEmail: document.getElementById("rEmail"),
+        rFollowup: document.getElementById("rFollowup"),
+        rCallId: document.getElementById("rCallId"),
       };
 
       function headers(json) {
@@ -414,9 +454,50 @@
         }
       }
 
+      function dash(v) {
+        var s = (v == null ? "" : String(v)).trim();
+        return s || "—";
+      }
+
+      function clearResultPanel() {
+        el.rStatus.textContent = "—";
+        el.rResult.textContent = "—";
+        el.rSummary.textContent = "—";
+        el.rPromised.textContent = "—";
+        el.rEmail.textContent = "—";
+        el.rFollowup.textContent = "—";
+        el.rCallId.textContent = "—";
+        el.exportBtn.disabled = true;
+        el.resultHint.textContent = "通话结束后这里显示业务结果（与批量页同列结构），可下载 xlsx。";
+      }
+
+      function renderResultPanel(data) {
+        var biz = (data.telephony && data.telephony.business) || {};
+        var result = data.result || biz.result || "";
+        var summary = data.result_summary || biz.result_summary || "";
+        var email = biz.email || "";
+        var promised = biz.promised_time || "";
+        var followup = result === "no_email_feedback" ? "是（需交付跟进）" : (result ? "否" : "—");
+        el.rStatus.textContent = dash(data.status);
+        el.rResult.textContent = dash(result);
+        el.rSummary.textContent = dash(summary);
+        el.rPromised.textContent = dash(promised);
+        el.rEmail.textContent = dash(email);
+        el.rFollowup.textContent = followup;
+        el.rCallId.textContent = dash(data.call_id);
+        var done = data.status === "completed" || data.status === "failed";
+        el.exportBtn.disabled = !done || !data.call_id;
+        if (done) {
+          el.resultHint.textContent = "结果已就绪，可下载与批量页同结构的 xlsx。";
+        } else if (data.call_id) {
+          el.resultHint.textContent = "通话进行中，结束后将自动填充结果…";
+        }
+      }
+
       function applyCallSnapshot(data) {
         renderTranscript(data.transcript || [], data.asr_interim || "");
         if (data.recording_urls) setRecordingButtons(data.recording_urls);
+        renderResultPanel(data);
         var dial = data.telephony && data.telephony.dial;
         var sip = data.telephony && data.telephony.sip;
         var line =
@@ -471,6 +552,33 @@
       el.btnUser.addEventListener("click", function () { loadKind("user"); });
       el.btnAi.addEventListener("click", function () { loadKind("ai"); });
 
+      el.exportBtn.addEventListener("click", async function () {
+        if (!activeCallId) return;
+        el.exportBtn.disabled = true;
+        try {
+          var resp = await fetch(
+            TMP_PROD_API + "/calls/" + activeCallId + "/export.xlsx",
+            { headers: headers(false) }
+          );
+          if (!resp.ok) {
+            var t = await resp.text();
+            throw new Error(t || resp.statusText);
+          }
+          var blob = await resp.blob();
+          var a = document.createElement("a");
+          a.href = URL.createObjectURL(blob);
+          a.download = "tmp_prod_result_" + activeCallId + ".xlsx";
+          a.click();
+          URL.revokeObjectURL(a.href);
+          el.resultHint.textContent = "已下载 tmp_prod_result_" + activeCallId + ".xlsx";
+        } catch (err) {
+          el.resultHint.textContent = String(err.message || err);
+          setStatus(String(err.message || err), true);
+        } finally {
+          el.exportBtn.disabled = !activeCallId;
+        }
+      });
+
       el.form.addEventListener("submit", async function (e) {
         e.preventDefault();
         var phone = normalizePhone(el.phone.value);
@@ -480,6 +588,7 @@
         }
         el.callBtn.disabled = true;
         setRecordingButtons(null);
+        clearResultPanel();
         renderTranscript([], "");
         var body = payloadFromForm();
         body.phone = phone;
@@ -497,6 +606,10 @@
             throw new Error((data.detail || rawText || resp.statusText) + foreignApiHint(data, rawText));
           }
           var dial = data.dial || {};
+          activeCallId = data.call_id;
+          el.rCallId.textContent = dash(data.call_id);
+          el.rStatus.textContent = dash(data.status);
+          el.resultHint.textContent = "通话进行中，结束后将自动填充结果…";
           setStatus(
             "已创建 call_id=" + data.call_id +
             "\nstatus=" + data.status +
@@ -504,7 +617,7 @@
             "\ncalled=" + (dial.called || withPrefix(phone)) +
             "\ndisplay=" + (dial.display || "(服务端自动分配)") +
             (data.opening_line ? ("\n\n开场白：\n" + data.opening_line) : "") +
-            "\n\n轮询中（转写 / 录音）…"
+            "\n\n轮询中（转写 / 录音 / 结果）…"
           );
           pollCall(data.call_id);
         } catch (err) {

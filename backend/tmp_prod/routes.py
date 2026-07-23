@@ -12,7 +12,12 @@ from fastapi.responses import HTMLResponse, Response
 from pydantic import BaseModel, Field
 
 from backend.outbound.service import verify_partner_api_key
-from backend.tmp_prod.excel_io import read_contacts_from_xlsx, write_results_xlsx
+from backend.outbound.store import get_call_store
+from backend.tmp_prod.excel_io import (
+    call_task_to_result_row,
+    read_contacts_from_xlsx,
+    write_results_xlsx,
+)
 from backend.tmp_prod.service import ensure_tmp_prod_env, run_batch
 from backend.tmp_prod.store import get_batch_store
 
@@ -223,6 +228,25 @@ async def export_batch_xlsx(
         raise HTTPException(status_code=404, detail="batch not found")
     data = write_results_xlsx([c.to_dict() for c in batch.contacts])
     filename = f"tmp_prod_results_{batch_id}.xlsx"
+    return Response(
+        content=data,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@router.get("/calls/{call_id}/export.xlsx")
+async def export_single_call_xlsx(
+    call_id: str,
+    x_api_key: str | None = Header(default=None, alias="X-API-Key"),
+) -> Response:
+    """单人测试页：导出与批次相同列结构的一通结果 xlsx。"""
+    _auth(x_api_key)
+    task = get_call_store().get(call_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="call_id not found")
+    data = write_results_xlsx([call_task_to_result_row(task)])
+    filename = f"tmp_prod_result_{call_id}.xlsx"
     return Response(
         content=data,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",

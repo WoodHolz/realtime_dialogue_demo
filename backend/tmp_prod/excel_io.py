@@ -90,6 +90,62 @@ def read_contacts_from_xlsx(data: bytes | Path) -> list[dict[str, str]]:
     return contacts
 
 
+def call_task_to_result_row(task: Any) -> dict[str, Any]:
+    """Map outbound CallTask → write_results_xlsx row (tmp-prod single / batch shape)."""
+    payload = getattr(task, "payload", None) or {}
+    if not isinstance(payload, dict):
+        payload = {}
+    telephony = getattr(task, "telephony", None) or {}
+    if not isinstance(telephony, dict):
+        telephony = {}
+    sip = telephony.get("sip") or {}
+    if not isinstance(sip, dict):
+        sip = {}
+    business = telephony.get("business") or {}
+    if not isinstance(business, dict):
+        business = {}
+    recordings = sip.get("recordings") or {}
+    if not isinstance(recordings, dict):
+        recordings = {}
+    stereo = str(recordings.get("stereo") or "")
+    recording_dir = ""
+    if stereo:
+        try:
+            recording_dir = str(Path(stereo).parent)
+        except Exception:
+            recording_dir = ""
+    name = str(
+        payload.get("candidate_name")
+        or payload.get("name")
+        or ""
+    ).strip()
+    return {
+        "employer": str(payload.get("employer") or payload.get("client_name") or "").strip(),
+        "name": name,
+        "gender": str(payload.get("gender") or "").strip(),
+        "phone": str(getattr(task, "phone", "") or payload.get("phone") or "").strip(),
+        "status": str(getattr(task, "status", "") or ""),
+        "result": str(getattr(task, "result", None) or business.get("result") or ""),
+        "result_summary": str(
+            getattr(task, "result_summary", "") or business.get("result_summary") or ""
+        ),
+        "attempt": 1,
+        "fail_reason": str(getattr(task, "error", "") or ""),
+        "promised_time": str(business.get("promised_time") or ""),
+        "email": str(business.get("email") or ""),
+        "last_call_id": str(getattr(task, "call_id", "") or ""),
+        "transcript": list(getattr(task, "transcript", None) or []),
+        "stereo_path": stereo,
+        "recordings": recordings,
+        "recording_dir": recording_dir,
+        "updated_at": str(
+            getattr(task, "finished_at", None)
+            or getattr(task, "updated_at", "")
+            or ""
+        ),
+    }
+
+
 def write_results_xlsx(rows: list[dict[str, Any]]) -> bytes:
     wb = Workbook()
     ws = wb.active
