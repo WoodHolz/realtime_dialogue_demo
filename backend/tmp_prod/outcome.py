@@ -74,6 +74,30 @@ _NOT_CONVENIENT_HINTS = (
     "回头再打",
 )
 
+# 模型「内心回写」漏进转写时的结构化字段（优先于口播启发式）
+_WRITEBACK_RESULT_RE = re.compile(
+    r"(?:result\s*=\s*|内心回写[：:]\s*)([a-z_][a-z0-9_]*)",
+    re.IGNORECASE,
+)
+_WRITEBACK_PROMISED_TIME_RE = re.compile(
+    r"promised_time\s*=\s*([^；;\n）)\]]+)",
+    re.IGNORECASE,
+)
+_WRITEBACK_PROMISED_DAY_RE = re.compile(
+    r"promised_day\s*=\s*([^；;\n）)\]]+)",
+    re.IGNORECASE,
+)
+_WRITEBACK_PRECISION_RE = re.compile(
+    r"time_precision\s*=\s*(hour|day)",
+    re.IGNORECASE,
+)
+
+# 口播承诺时间：记录的是 / 约到 = 最终确认；尽量在 = 开场催办（易陈旧）
+_SPOKEN_PROMISED_RE = re.compile(
+    r"(记录的是|约到|尽量在|按)"
+    r"([^，。！？\n]{0,24}?(?:\d{1,2}\s*[:：]\s*\d{2}|点前|点|当天内)[^，。！？\n]{0,8})"
+)
+
 
 def _role_of(turn: dict[str, Any]) -> str:
     role = str(turn.get("role") or turn.get("speaker") or "").strip().lower()
@@ -103,6 +127,38 @@ def _user_refused_email(user_text: str) -> bool:
 
 def _find_emails(text: str) -> list[str]:
     return list(dict.fromkeys(_EMAIL_RE.findall(text or "")))
+
+
+def _last_group(pattern: re.Pattern[str], text: str) -> str:
+    matches = list(pattern.finditer(text or ""))
+    if not matches:
+        return ""
+    return (matches[-1].group(1) or "").strip()
+
+
+def _parse_writeback(ai_text: str) -> dict[str, str]:
+    """Parse structured 内心回写 tags from assistant transcript (last wins)."""
+    text = ai_text or ""
+    result = _last_group(_WRITEBACK_RESULT_RE, text)
+    promised_time = _last_group(_WRITEBACK_PROMISED_TIME_RE, text)
+    promised_day = _last_group(_WRITEBACK_PROMISED_DAY_RE, text)
+    precision = _last_group(_WRITEBACK_PRECISION_RE, text).lower()
+    return {
+        "result": result if result in RESULT_LABELS_CN else "",
+        "promised_time": promised_time,
+        "promised_day": promised_day,
+        "time_precision": precision,
+    }
+
+
+def _extract_spoken_promised(ai_text: str) -> str:
+    """Prefer final confirmation (记录的是/约到); never let opening 尽量在 win over later confirms."""
+    matches = list(_SPOKEN_PROMISED_RE.finditer(ai_text or ""))
+    if not matches:
+        return ""
+    confirms = [m for m in matches if m.group(1) in {"记录的是", "约到"}]
+    chosen = confirms[-1] if confirms else matches[-1]
+    return (chosen.group(2) or "").strip()
 
 
 def extract_tmp_prod_outcome(
@@ -175,21 +231,53 @@ def extract_tmp_prod_outcome(
                 "promised_time": "",
             }
 
-    # 粗提承诺时间（模型复述里常见）
-    promised = ""
-    m = re.search(
-        r"(?:记录的是|尽量在|约到|按)([^，。！？\n]{0,24}?(?:\d{1,2}\s*[:：]\s*\d{2}|点前|点)[^，。！？\n]{0,8})",
-        ai_text,
+    writeback = _parse_writeback(ai_text)
+    promised = (
+        writeback.get("promised_time")
+        or writeback.get("promised_day")
+        or _extract_spoken_promised(ai_text)
     )
-    if m:
-        promised = m.group(1).strip()
+    wb_result = writeback.get("result") or ""
+    precision = writeback.get("time_precision") or ""
 
-    if promised and ("收到" in all_text or "短信" in all_text):
-        day_only = "当天内" in promised and "点" not in promised
+    # 内心回写已给出明确结果码时优先采用（尤其是承诺时间类）
+    if wb_result in {"received_will_complete", "promised_day_only"} and (
+        promised or "收到" in all_text or "短信" in all_text
+    ):
+        if not promised and wb_result == "promised_day_only":
+            day_only = True
+        else:
+            day_only = (
+                wb_result == "promised_day_only"
+                or precision == "day"
+                or ("当天内" in promised and "点" not in promised)
+            )
         code = "promised_day_only" if day_only else "received_will_complete"
         return {
             "result": code,
             "result_summary": RESULT_LABELS_CN[code] + (f"：{promised}" if promised else ""),
+            "email": email,
+            "promised_time": promised,
+        }
+
+    if promised and ("收到" in all_text or "短信" in all_text):
+        day_only = (
+            precision == "day"
+            or ("当天内" in promised and "点" not in promised)
+        )
+        code = "promised_day_only" if day_only else "received_will_complete"
+        return {
+            "result": code,
+            "result_summary": RESULT_LABELS_CN[code] + (f"：{promised}" if promised else ""),
+            "email": email,
+            "promised_time": promised,
+        }
+
+    if wb_result and wb_result in RESULT_LABELS_CN:
+        return {
+            "result": wb_result,
+            "result_summary": RESULT_LABELS_CN[wb_result]
+            + (f"：{promised}" if promised else ""),
             "email": email,
             "promised_time": promised,
         }
