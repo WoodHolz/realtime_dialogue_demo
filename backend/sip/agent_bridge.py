@@ -105,6 +105,8 @@ class SipAgentBridge:
         self._opening_tts_done: asyncio.Event | None = None
         self._opening_uplink_pending = False
         self._opening_part_pcm24_bytes = 0
+        self._opening_received_audio = False
+        self._opening_settle_token = 0
         # SIP turn latency: user speech end → AI speech start (opening is AI-first, skipped).
         self._t0: float | None = None
         self._latency = LatencyLogger()
@@ -337,6 +339,8 @@ class SipAgentBridge:
         for idx, part in enumerate(self.opening_parts):
             self._opening_tts_done.clear()
             self._opening_part_pcm24_bytes = 0
+            self._opening_received_audio = False
+            self._opening_settle_token += 1
             await client.say_hello(part)
             LOG.info(
                 "SayHello part %d/%d call_id=%s len=%d",
@@ -346,20 +350,18 @@ class SipAgentBridge:
                 len(part),
             )
             try:
-                await asyncio.wait_for(self._opening_tts_done.wait(), timeout=25.0)
+                await asyncio.wait_for(self._opening_tts_done.wait(), timeout=35.0)
             except asyncio.TimeoutError:
                 LOG.warning(
-                    "opening part %d TTS timeout call_id=%s",
+                    "opening part %d TTS settle timeout call_id=%s",
                     idx + 1,
                     self.call_id,
                 )
             if idx + 1 < len(self.opening_parts):
-                # Between parts: drain TX queue + short silence gap (anti-overlap).
                 await self._wait_opening_part_playback_drain(
                     idx + 1, breath_ms=160, wait_full_idle=True
                 )
             else:
-                # Last part: wait until queued audio is on the wire, then open uplink.
                 await self._wait_opening_part_playback_drain(
                     idx + 1, breath_ms=0, wait_full_idle=True
                 )
@@ -367,6 +369,66 @@ class SipAgentBridge:
         self._opening_uplink_pending = False
         self._emit("audio_mode_ready")
         LOG.info("opening TTS all parts done call_id=%s; uplink enabled", self.call_id)
+
+    async def _confirm_opening_tts_settled(self, token: int) -> None:
+        """After tts_end: require TX idle + quiet window with no new audio/restart.
+
+        Long SayHello may emit multiple audio started/done; first done must not
+        finish the opening part while another stream is still coming.
+        """
+        if not self._opening_uplink_pending:
+            return
+        done = self._opening_tts_done
+        if not done or done.is_set():
+            return
+
+        session = self._session
+        pcm_bytes = self._opening_part_pcm24_bytes
+        duration_sec = pcm_bytes / float(AGENT_TTS_RATE * 2) if pcm_bytes > 0 else 0.0
+        tail = self._pcmu_tx_buf.flush_pad_silence()
+        if tail and session:
+            session.enqueue_pcmu(tail)
+
+        if session:
+            timeout = max(2.0, duration_sec + 3.0)
+            await asyncio.to_thread(
+                session.wait_downlink_idle,
+                timeout_sec=timeout,
+                quiet_frames=2,
+            )
+
+        # Quiet observe: abort if TTS restarts or more audio arrives.
+        quiet_sec = 0.28
+        deadline = time.monotonic() + quiet_sec
+        pcm_mark = self._opening_part_pcm24_bytes
+        while time.monotonic() < deadline:
+            if token != self._opening_settle_token or not self._opening_uplink_pending:
+                LOG.info(
+                    "opening settle aborted call_id=%s token=%s→%s",
+                    self.call_id,
+                    token,
+                    self._opening_settle_token,
+                )
+                return
+            if self._opening_part_pcm24_bytes != pcm_mark:
+                LOG.info(
+                    "opening settle saw more audio call_id=%s; wait next tts_end",
+                    self.call_id,
+                )
+                return
+            await asyncio.sleep(0.05)
+
+        if token != self._opening_settle_token or not self._opening_uplink_pending:
+            return
+        if done.is_set():
+            return
+        done.set()
+        LOG.info(
+            "opening TTS settled call_id=%s token=%s pcm24k=%d",
+            self.call_id,
+            token,
+            self._opening_part_pcm24_bytes,
+        )
 
     async def _wait_opening_part_playback_drain(
         self,
@@ -549,7 +611,13 @@ class SipAgentBridge:
     def _on_barge_in(self, _item_id: str) -> None:
         # Phone echo / user speech while AI talking: Duplex restarts TTS —
         # must clear local RTP queue or old+new audio stacks (叠音).
-        if self._opening_uplink_pending:
+        # Opening: uplink may be gated, but echo can still trigger restart → clear too.
+        if self._opening_active or self._opening_uplink_pending:
+            self._opening_settle_token += 1
+            self._clear_downlink("opening_barge_in")
+            self._opening_part_pcm24_bytes = 0
+            self._opening_received_audio = False
+            LOG.info("opening barge_in cleared downlink call_id=%s", self.call_id)
             return
         self._clear_downlink("barge_in")
 
@@ -557,10 +625,20 @@ class SipAgentBridge:
         if self._opening_tts_started and not self._opening_tts_started.is_set():
             self._opening_tts_started.set()
         if self._opening_active or self._opening_uplink_pending:
+            # Intra-opening restart / second audio stream: drop stale queue (防句内叠流).
+            if self._opening_received_audio or self._opening_part_pcm24_bytes > 0:
+                self._clear_downlink("opening_tts_restart")
+                self._opening_part_pcm24_bytes = 0
+                LOG.info(
+                    "opening tts_start restart cleared downlink call_id=%s",
+                    self.call_id,
+                )
+            self._opening_settle_token += 1
+            self._opening_received_audio = False
             if self._opening_tts_start_ms is None:
                 self._opening_tts_start_ms = self._rel_ms()
             return
-        # New model utterance (e.g. compliance opening): start from a clean TX queue.
+        # New model utterance: start from a clean TX queue.
         self._clear_downlink("tts_start")
         # Normal turn: user finished → AI TTS starts = SIP turn latency.
         self._latency.tts_start()
@@ -588,8 +666,18 @@ class SipAgentBridge:
 
     def _on_tts_end(self, _meta: dict) -> None:
         if self._opening_uplink_pending and self._opening_tts_done and not self._opening_tts_done.is_set():
-            self._opening_tts_done.set()
-            LOG.info("opening TTS ended call_id=%s", self.call_id)
+            token = self._opening_settle_token
+            loop = self._loop
+            if loop and loop.is_running():
+                loop.create_task(self._confirm_opening_tts_settled(token))
+                LOG.info(
+                    "opening TTS end → settle confirm call_id=%s token=%s",
+                    self.call_id,
+                    token,
+                )
+            else:
+                self._opening_tts_done.set()
+                LOG.info("opening TTS ended (sync) call_id=%s", self.call_id)
         client = self._client
         if not client:
             return
@@ -606,6 +694,7 @@ class SipAgentBridge:
             return
         if self._opening_uplink_pending:
             self._opening_part_pcm24_bytes += len(pcm24k)
+            self._opening_received_audio = True
         if self._opening_tts_started and not self._opening_tts_started.is_set():
             self._opening_tts_started.set()
         if (self._opening_active or self._opening_uplink_pending) and self._opening_tts_start_ms is None:
