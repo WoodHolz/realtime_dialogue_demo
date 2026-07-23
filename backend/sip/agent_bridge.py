@@ -5,13 +5,15 @@ Bridge SIP/RTP media ↔ Voice Agent (Duplex).
 Scenario-agnostic: only needs system_role / speaking_style / call_id.
 Audio path:
   RTP PCMU 8k → PCM16 16k → DuplexVoiceClient.send_audio
-  Duplex TTS PCM16 24k → PCMU 8k → RtpSession.enqueue_pcmu
+  Duplex TTS PCM16 24k → (worker) PCMU 8k → RtpSession soft-1x enqueue_pcmu
 """
 from __future__ import annotations
 
 import asyncio
 import logging
 import os
+import queue
+import threading
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -32,6 +34,11 @@ from backend.sip.recording import CallRecorder
 from backend.sip.session import SipCallResult, SipCallSession
 
 LOG = logging.getLogger(__name__)
+
+# TTS→RTP worker sentinels (1x pace sleeps stay off the asyncio/duplex thread).
+_DOWNLINK_CLEAR = object()
+_DOWNLINK_STOP = object()
+_DOWNLINK_FLUSH = object()
 
 
 @dataclass
@@ -95,6 +102,10 @@ class SipAgentBridge:
         self._loop: asyncio.AbstractEventLoop | None = None
         self._uplink_q: asyncio.Queue[bytes | None] | None = None
         self._pcmu_tx_buf = PcmuFrameBuffer()
+        self._downlink_q: queue.Queue[Any] = queue.Queue(maxsize=2000)
+        self._downlink_thread: threading.Thread | None = None
+        self._downlink_flush_done = threading.Event()
+        self._downlink_epoch = 0
         self._transcript: list[dict[str, Any]] = []
         self._assistant_buf = ""
         self._recorder: CallRecorder | None = None
@@ -188,6 +199,7 @@ class SipAgentBridge:
         self._t0 = time.perf_counter()
         if self._recorder:
             self._recorder.mark_start()
+        self._start_downlink_worker()
 
         session_ready = asyncio.Event()
 
@@ -306,6 +318,7 @@ class SipAgentBridge:
             outcome_error = str(exc)
             session.hangup(reason="agent_error")
         finally:
+            self._stop_downlink_worker()
             try:
                 await client.disconnect()
             except Exception:
@@ -385,9 +398,7 @@ class SipAgentBridge:
         session = self._session
         pcm_bytes = self._opening_part_pcm24_bytes
         duration_sec = pcm_bytes / float(AGENT_TTS_RATE * 2) if pcm_bytes > 0 else 0.0
-        tail = self._pcmu_tx_buf.flush_pad_silence()
-        if tail and session:
-            session.enqueue_pcmu(tail)
+        await self._flush_downlink_pad()
 
         if session:
             timeout = max(2.0, duration_sec + 3.0)
@@ -444,10 +455,8 @@ class SipAgentBridge:
         """
         pcm_bytes = self._opening_part_pcm24_bytes
         duration_sec = pcm_bytes / float(AGENT_TTS_RATE * 2) if pcm_bytes > 0 else 0.0
-        tail = self._pcmu_tx_buf.flush_pad_silence()
         session = self._session
-        if tail and session:
-            session.enqueue_pcmu(tail)
+        await self._flush_downlink_pad()
 
         pending = session.downlink_tx_queue_size() if session else 0
         t0 = time.monotonic()
@@ -591,8 +600,104 @@ class SipAgentBridge:
         self._transcript.append(entry)
         self._publish_transcript()
 
+    def _start_downlink_worker(self) -> None:
+        if self._downlink_thread and self._downlink_thread.is_alive():
+            return
+        self._downlink_thread = threading.Thread(
+            target=self._downlink_worker_loop,
+            name=f"sip-dl-{self.call_id[:8]}",
+            daemon=True,
+        )
+        self._downlink_thread.start()
+        LOG.info("downlink TTS worker started call_id=%s", self.call_id)
+
+    def _stop_downlink_worker(self) -> None:
+        try:
+            self._downlink_q.put_nowait(_DOWNLINK_STOP)
+        except queue.Full:
+            try:
+                self._downlink_q.get_nowait()
+            except queue.Empty:
+                pass
+            try:
+                self._downlink_q.put_nowait(_DOWNLINK_STOP)
+            except queue.Full:
+                pass
+        t = self._downlink_thread
+        if t and t.is_alive():
+            t.join(timeout=2.0)
+        self._downlink_thread = None
+
+    def _downlink_put(self, item: Any) -> None:
+        while True:
+            try:
+                self._downlink_q.put(item, timeout=0.5)
+                return
+            except queue.Full:
+                if self._session is None:
+                    return
+                continue
+
+    def _downlink_worker_loop(self) -> None:
+        """Convert TTS PCM→PCMU and enqueue with RTP soft 1x pacing (off asyncio)."""
+        buf = PcmuFrameBuffer()
+        while True:
+            try:
+                item = self._downlink_q.get(timeout=0.5)
+            except queue.Empty:
+                continue
+            if item is _DOWNLINK_STOP:
+                break
+            if item is _DOWNLINK_CLEAR:
+                buf = PcmuFrameBuffer()
+                self._pcmu_tx_buf = PcmuFrameBuffer()
+                continue
+            if item is _DOWNLINK_FLUSH:
+                tail = buf.flush_pad_silence()
+                session = self._session
+                if tail and session:
+                    session.enqueue_pcmu(tail)
+                self._downlink_flush_done.set()
+                continue
+            if not isinstance(item, (bytes, bytearray)) or not item:
+                continue
+            session = self._session
+            if not session:
+                continue
+            epoch = self._downlink_epoch
+            try:
+                pcmu = agent_tts_to_telephony(bytes(item), tts_rate=AGENT_TTS_RATE)
+            except Exception:
+                LOG.exception("TTS→PCMU failed")
+                continue
+            if epoch != self._downlink_epoch:
+                buf = PcmuFrameBuffer()
+                continue
+            for frame in buf.push(pcmu):
+                if epoch != self._downlink_epoch:
+                    buf = PcmuFrameBuffer()
+                    break
+                session.enqueue_pcmu(frame)
+
+    async def _flush_downlink_pad(self) -> None:
+        self._downlink_flush_done.clear()
+        self._downlink_put(_DOWNLINK_FLUSH)
+        await asyncio.to_thread(self._downlink_flush_done.wait, 2.0)
+
     def _clear_downlink(self, reason: str) -> None:
         """Drop pending PCMU so a new AI utterance does not overlap stale TTS."""
+        self._downlink_epoch += 1
+        drained_ingress = 0
+        while True:
+            try:
+                self._downlink_q.get_nowait()
+                drained_ingress += 1
+            except queue.Empty:
+                break
+        try:
+            self._downlink_q.put_nowait(_DOWNLINK_CLEAR)
+        except queue.Full:
+            pass
         self._pcmu_tx_buf = PcmuFrameBuffer()
         dropped = 0
         if self._session:
@@ -600,12 +705,13 @@ class SipAgentBridge:
                 dropped = self._session.clear_downlink_audio()
             except Exception:
                 LOG.debug("clear_downlink_audio failed", exc_info=True)
-        if dropped:
+        if dropped or drained_ingress:
             LOG.info(
-                "cleared downlink TTS call_id=%s reason=%s dropped_frames=%d",
+                "cleared downlink TTS call_id=%s reason=%s dropped_frames=%d ingress=%d",
                 self.call_id,
                 reason,
                 dropped,
+                drained_ingress,
             )
 
     def _on_barge_in(self, _item_id: str) -> None:
@@ -699,14 +805,9 @@ class SipAgentBridge:
             self._opening_tts_started.set()
         if (self._opening_active or self._opening_uplink_pending) and self._opening_tts_start_ms is None:
             self._opening_tts_start_ms = self._rel_ms()
-        # Record AI at 16k for consistent mixed track rate.
+        # Record AI immediately (wall-clock); telephony path is paced separately.
         if self._recorder:
             pcm16 = resample_pcm16(pcm24k, AGENT_TTS_RATE, AGENT_IN_RATE)
             self._recorder.append_ai(pcm16)
-        try:
-            pcmu = agent_tts_to_telephony(pcm24k, tts_rate=AGENT_TTS_RATE)
-        except Exception:
-            LOG.exception("TTS→PCMU failed")
-            return
-        for frame in self._pcmu_tx_buf.push(pcmu):
-            self._session.enqueue_pcmu(frame)
+        # Worker converts + RTP soft 1x enqueue (must not block duplex recv loop).
+        self._downlink_put(bytes(pcm24k))

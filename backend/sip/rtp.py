@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import queue
 import socket
 import struct
@@ -13,6 +14,20 @@ from collections.abc import Callable
 from backend.sip.codec import PCMU_FRAME_BYTES, PCMU_SILENCE
 
 LOG = logging.getLogger(__name__)
+
+# ~20ms PCMU frames. Hard cap ≈ 60s; soft pace keeps ~1s ahead of realtime sender.
+_DEFAULT_TX_QUEUE_FRAMES = 3000
+_DEFAULT_TX_PACE_HIGH_FRAMES = 50
+
+
+def _env_int(name: str, default: int) -> int:
+    raw = (os.environ.get(name) or "").strip()
+    if not raw:
+        return default
+    try:
+        return max(1, int(raw))
+    except ValueError:
+        return default
 
 
 def rtp_packet(seq: int, ts: int, ssrc: int, payload: bytes, *, marker: bool = False) -> bytes:
@@ -66,6 +81,10 @@ class RtpSession:
 
     TX: prefer queued payloads (AI TTS); otherwise silence keepalive.
     RX: invoke on_payload(pcmu_bytes) for each complete RTP payload.
+
+    Soft 1x pacing: enqueue blocks when TX is already ~pace_high ahead of the
+    20ms sender, instead of bursting then dropping oldest on Full (that caused
+    mid-utterance garble on phones while recordings still looked fine).
     """
 
     def __init__(
@@ -91,7 +110,11 @@ class RtpSession:
         self.rx_count = 0
         self.tx_count = 0
         self.on_payload = on_payload
-        self._tx_q: queue.Queue[bytes | None] = queue.Queue(maxsize=500)
+        self._tx_queue_max = _env_int("SIP_RTP_TX_QUEUE_FRAMES", _DEFAULT_TX_QUEUE_FRAMES)
+        self._pace_high = _env_int("SIP_RTP_TX_PACE_HIGH_FRAMES", _DEFAULT_TX_PACE_HIGH_FRAMES)
+        if self._pace_high >= self._tx_queue_max:
+            self._pace_high = max(1, self._tx_queue_max // 2)
+        self._tx_q: queue.Queue[bytes | None] = queue.Queue(maxsize=self._tx_queue_max)
         self._stop = threading.Event()
         self._tx_thread: threading.Thread | None = None
         self._rx_thread: threading.Thread | None = None
@@ -101,28 +124,42 @@ class RtpSession:
         self._rx_thread = threading.Thread(target=self._recv_loop, name="rtp-rx", daemon=True)
         self._tx_thread.start()
         self._rx_thread.start()
+        LOG.info(
+            "RTP TX queue max_frames=%s pace_high=%s (~%.1fs soft lead)",
+            self._tx_queue_max,
+            self._pace_high,
+            self._pace_high * 0.02,
+        )
+
+    def _put_tx_frame(self, frame: bytes) -> bool:
+        """Enqueue one 20ms PCMU frame with soft 1x pacing; never drop on Full."""
+        if not frame or self._stop.is_set():
+            return False
+        # Soft realtime: wait while already ~pace_high ahead of the sender.
+        while not self._stop.is_set() and self._tx_q.qsize() >= self._pace_high:
+            time.sleep(0.01)
+        while not self._stop.is_set():
+            try:
+                self._tx_q.put(frame, timeout=0.2)
+                return True
+            except queue.Full:
+                # Hard cap: wait for send_loop — never drop oldest TTS frames.
+                continue
+        return False
 
     def enqueue_pcmu(self, payload: bytes) -> None:
-        """Queue one or more PCMU frames (multiples of 160 preferred)."""
+        """Queue one or more PCMU frames (multiples of 160 preferred).
+
+        May block briefly for soft 1x pacing. Never drops frames when full.
+        """
         if not payload or self._stop.is_set():
             return
-        # Split into 20ms frames so ptime stays aligned.
         offset = 0
         while offset + PCMU_FRAME_BYTES <= len(payload):
             frame = payload[offset : offset + PCMU_FRAME_BYTES]
             offset += PCMU_FRAME_BYTES
-            try:
-                self._tx_q.put_nowait(frame)
-            except queue.Full:
-                try:
-                    self._tx_q.get_nowait()
-                except queue.Empty:
-                    pass
-                try:
-                    self._tx_q.put_nowait(frame)
-                except queue.Full:
-                    break
-        # Drop trailing partial frame (caller should use PcmuFrameBuffer).
+            if not self._put_tx_frame(frame):
+                return
 
     def clear_tx_queue(self) -> int:
         """Drop queued TTS frames (barge-in / new utterance). Returns dropped count."""
@@ -133,7 +170,6 @@ class RtpSession:
             except queue.Empty:
                 break
             if item is None:
-                # Preserve stop sentinel.
                 try:
                     self._tx_q.put_nowait(None)
                 except queue.Full:
@@ -151,9 +187,7 @@ class RtpSession:
         if n <= 0 or self._stop.is_set():
             return
         for _ in range(n):
-            try:
-                self._tx_q.put_nowait(PCMU_SILENCE)
-            except queue.Full:
+            if not self._put_tx_frame(PCMU_SILENCE):
                 break
 
     def wait_tx_idle(
@@ -228,7 +262,6 @@ class RtpSession:
             self.rx_count += 1
             if self.rx_count == 1:
                 LOG.info("RTP first packet from %s len=%s", addr, len(data))
-            # Skip RTP header (12 + CSRC*4); ignore extensions for now.
             cc = data[0] & 0x0F
             header_len = 12 + cc * 4
             if data[0] & 0x10:  # extension
