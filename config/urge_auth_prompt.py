@@ -10,6 +10,9 @@ from typing import Any
 IDENTITY_BRAND_SELF = "BRAND_SELF"
 IDENTITY_CLIENT = "CLIENT_IDENTITY"
 IDENTITY_CHANNEL = "CHANNEL_BRAND"
+# 白标一族：渠道白标 ≡ 客户白标（同一话术）。
+# 业务：下单客户 A 要以「A 的客户 B」名义发起背调；电话自称 B，禁止提芝麻/受托。
+# BRAND_SELF：直客三要素——我方品牌 + 受委托方委托。
 _WHITE_LABEL = {IDENTITY_CLIENT, IDENTITY_CHANNEL}
 
 DEFAULT_SPEAKING_STYLE = (
@@ -76,9 +79,11 @@ def build_urge_auth_opening_parts(
         f"大概占用您两分钟，现在方便吗？"
     )
     if white:
+        # client_name = 对外自称品牌（客户 B）
         self_name = brand_or_client
         part2 = f"我是{self_name}的智能语音助手，为您办理入职背景调查。"
     else:
+        # client_name = 委托方；our_brand_name = 我方品牌
         part2 = (
             f"我是{our_brand}的智能语音助手，受{brand_or_client}委托，"
             f"协助您完成入职背景调查。"
@@ -141,7 +146,8 @@ def build_urge_auth_system_role(
 ) -> str:
     """Build scenario-constrained system_role for 催授权 duplex dialogue."""
     name = (candidate_name or "候选人").strip()
-    # client_name: brand_self=委托方BU；白标族=客户/渠道品牌自称
+    # 白标：client_name = 对外自称品牌（客户 B）
+    # BRAND_SELF：client_name = 委托方；our_brand_name = 我方品牌
     brand_or_client = (client_name or "用人单位").strip()
     our_brand = (our_brand_name or "芝麻背调").strip()
     mode = _norm_identity(identity_mode)
@@ -186,7 +192,9 @@ def build_urge_auth_system_role(
         self_name = brand_or_client
         role_line = (
             f"你是「{self_name}」的智能语音助手，正在以{self_name}名义给候选人打电话，"
-            f"办理入职前背景调查授权确认。话术中禁止出现第三方背调机构名称，禁止说「受某某委托」。"
+            f"办理入职前背景调查授权确认。"
+            f"本通为白标：下单方客户以其客户「{self_name}」名义发起；"
+            f"话术中禁止出现第三方背调机构名称，禁止说「受某某委托」。"
         )
         assistant_bridge = f"「{self_name}招聘，关于{name}的入职背景调查，请转接本人。」"
         trust_verify = (
@@ -214,7 +222,8 @@ def build_urge_auth_system_role(
         self_name = our_brand
         role_line = (
             f"你是「{self_name}」的智能语音助手，受「{brand_or_client}」委托，"
-            f"正在给候选人打电话确认入职前背调授权。必须说明受托关系。"
+            f"正在给候选人打电话确认入职前背调授权。"
+            f"本通为直客三要素口径：我方品牌={self_name}，委托方={brand_or_client}；必须说明受托关系。"
         )
         assistant_bridge = f"「{self_name}背调，关于{name}的入职背景调查，请转接本人。」"
         trust_verify = (
@@ -239,6 +248,14 @@ def build_urge_auth_system_role(
         )
         feedback_team = "委托方"
         identity_mode_label = IDENTITY_BRAND_SELF
+
+    if white:
+        identity_slots_block = f"- 对外自称品牌（客户B）：{self_name}"
+    else:
+        identity_slots_block = (
+            f"- 我方品牌：{self_name}\n"
+            f"- 委托方：{brand_or_client}"
+        )
 
     # --- anchors ---
     when_bit = f"{when}" if when else "此前"
@@ -300,8 +317,7 @@ def build_urge_auth_system_role(
 
 【本次任务锚点（勿虚构、勿更改）】
 - 候选人称呼：{name}
-- 自称品牌：{self_name}
-- {"委托方（候选人认识的颗粒度）" if not white else "客户/渠道品牌（白标自称）"}：{brand_or_client}
+{identity_slots_block}
 - 已发送渠道：{channel}
 - 邀请主题：{subject}
 - 发送时间锚点：{when or "（未提供具体时间，用「此前」）"}
@@ -428,6 +444,8 @@ def urge_auth_slots_from_payload(payload: dict[str, Any]) -> dict[str, Any]:
         )
 
     identity = _norm_identity(str(p.get("identity_mode") or IDENTITY_CLIENT))
+    # 白标：对外自称品牌（客户 B）；BRAND_SELF：委托方。
+    # CHANNEL_BRAND 与 CLIENT_IDENTITY 同族；channel_brand_name 仅作自称覆盖（兼容旧字段）。
     client = str(
         p.get("client_name")
         or p.get("employer")
@@ -435,8 +453,7 @@ def urge_auth_slots_from_payload(payload: dict[str, Any]) -> dict[str, Any]:
         or p.get("channel_brand_name")
         or ""
     )
-    # CHANNEL_BRAND may pass channel brand under dedicated key
-    if identity == IDENTITY_CHANNEL and p.get("channel_brand_name"):
+    if identity in _WHITE_LABEL and p.get("channel_brand_name"):
         client = str(p.get("channel_brand_name") or client)
 
     invite_channel = str(

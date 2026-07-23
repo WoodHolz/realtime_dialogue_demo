@@ -71,27 +71,24 @@
       <input id="file" type="file" accept=".xlsx,.xlsm" />
       <div class="row">
         <div>
-          <label for="client">委托方 / 自称品牌</label>
-          <input id="client" type="text" value="比赛日科技" />
-        </div>
-        <div>
           <label for="identityMode">身份模式</label>
           <select id="identityMode">
-            <option value="CLIENT_IDENTITY">CLIENT_IDENTITY（客户白标）</option>
-            <option value="CHANNEL_BRAND">CHANNEL_BRAND（渠道白标）</option>
-            <option value="BRAND_SELF" selected>BRAND_SELF（芝麻背调自称+受托）</option>
+            <option value="CLIENT_IDENTITY">白标（以客户B名义）</option>
+            <option value="BRAND_SELF" selected>芝麻背调 + 受托（直客三要素）</option>
           </select>
+          <p class="hint">白标：下单客户 A 以客户 B 名义外呼（渠道白标=客户白标）。直客：我方品牌 + 受委托方委托。</p>
+        </div>
+        <div>
+          <label for="client" id="clientLabel">委托方</label>
+          <input id="client" type="text" value="比赛日科技" />
         </div>
       </div>
-      <div class="row">
+      <div class="row" id="ourBrandWrap">
         <div>
-          <label for="ourBrand">我方品牌（BRAND_SELF）</label>
+          <label for="ourBrand">我方品牌</label>
           <input id="ourBrand" type="text" value="芝麻背调" />
         </div>
-      </div>
-      <label for="channelBrand">渠道品牌名（CHANNEL_BRAND，可覆盖委托方）</label>
-      <input id="channelBrand" type="text" placeholder="仅 CHANNEL_BRAND 时填写" />
-      <!-- API Key 字段默认隐藏；需要鉴权时再在页面显示 #apiKeyWrap -->
+      </div>      <!-- API Key 字段默认隐藏；需要鉴权时再在页面显示 #apiKeyWrap -->
       <div id="apiKeyWrap" style="display:none">
         <label for="apiKey">X-API-Key（可选）</label>
         <input id="apiKey" type="password" placeholder="PARTNER_API_KEY 为空可留空" autocomplete="off" />
@@ -140,8 +137,9 @@
         apiKey: document.getElementById("apiKey"),
         identityMode: document.getElementById("identityMode"),
         client: document.getElementById("client"),
+        clientLabel: document.getElementById("clientLabel"),
         ourBrand: document.getElementById("ourBrand"),
-        channelBrand: document.getElementById("channelBrand"),
+        ourBrandWrap: document.getElementById("ourBrandWrap"),
         uploadBtn: document.getElementById("uploadBtn"),
         startBtn: document.getElementById("startBtn"),
         refreshBtn: document.getElementById("refreshBtn"),
@@ -151,6 +149,14 @@
         tbody: document.getElementById("tbody"),
       };
       var pollTimer = null;
+
+      function syncIdentityFields() {
+        var brandSelf = el.identityMode.value === "BRAND_SELF";
+        if (el.ourBrandWrap) el.ourBrandWrap.style.display = brandSelf ? "" : "none";
+        if (el.clientLabel) {
+          el.clientLabel.textContent = brandSelf ? "委托方" : "对外自称品牌（客户B）";
+        }
+      }
 
       function headers(json) {
         var h = {};
@@ -239,12 +245,12 @@
         if (!id) return;
         el.startBtn.disabled = true;
         try {
+          var brandSelf = el.identityMode.value === "BRAND_SELF";
           var body = {
             stagger_sec: 0.5,
             identity_mode: el.identityMode.value,
             client_name: (el.client.value || "").trim() || "比赛日科技",
-            our_brand_name: (el.ourBrand.value || "").trim() || "芝麻背调",
-            channel_brand_name: (el.channelBrand.value || "").trim(),
+            our_brand_name: brandSelf ? ((el.ourBrand.value || "").trim() || "芝麻背调") : "",
           };
           var resp = await fetch(API + "/batches/" + id + "/start", {
             method: "POST",
@@ -265,6 +271,9 @@
       el.refreshBtn.addEventListener("click", function () {
         refresh().catch(function (e) { setStatus(String(e.message || e), true); });
       });
+
+      el.identityMode.addEventListener("change", syncIdentityFields);
+      syncIdentityFields();
 
       el.exportBtn.addEventListener("click", async function () {
         var id = (el.batchId.value || "").trim();

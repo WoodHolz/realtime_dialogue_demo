@@ -20,7 +20,6 @@ from zoneinfo import ZoneInfo
 
 from config.urge_auth_prompt import (
     IDENTITY_BRAND_SELF,
-    IDENTITY_CHANNEL,
     _WHITE_LABEL,
     _norm_identity,
 )
@@ -32,7 +31,9 @@ DEFAULT_SPEAKING_STYLE = (
     "严格按本剧本分支推进，不要扩展无关业务讲解。"
 )
 
-# 与 urge_auth 同源；tmp-prod 演示默认走 BRAND_SELF。品牌/用人单位必须由 payload 注入，禁止模块内写死具体名称。
+# 与 urge_auth 同源。
+# 白标（CLIENT_IDENTITY / CHANNEL_BRAND 同族）：对外自称品牌=客户 B；禁止提芝麻/受托。
+# BRAND_SELF：直客三要素——我方品牌 + 受委托方委托。品牌/用人单位必须由 payload 注入。
 DEFAULT_IDENTITY_MODE = IDENTITY_BRAND_SELF
 
 
@@ -115,7 +116,9 @@ def build_tmp_prod_compliance_opening(
     """确认本人后的合规开场（不预播，由模型在对方确认后说）。
 
     开场只问「现在方便吗」；「是否收到短信」是事由说明，等对方确认方便后再单独问。
-    身份台词族与 urge_auth 对齐：白标自称客户/渠道；BRAND_SELF 自称我方并说明受托。
+    身份台词族与 urge_auth 对齐：
+    - 白标：client_name = 对外自称品牌（客户 B）
+    - BRAND_SELF：our_brand_name = 我方品牌，client_name = 委托方
     未注入的具体品牌/用人单位只用泛称占位，禁止回落到演示用公司名。
     """
     emp = _slot(employer, fallback="用人单位")
@@ -126,11 +129,13 @@ def build_tmp_prod_compliance_opening(
 
     # 身份介绍拆成两句，避免电话侧中段听感叠音；录音侧通常正常。
     if white:
+        # 对外自称品牌（客户 B）
         identity_bits = (
             f"您好，我是{brand_or_client}的智能语音助手。"
             f"正在协助办理您在{emp}的入职背景调查。"
         )
     elif our_brand:
+        # 我方品牌 + 委托方
         identity_bits = (
             f"您好，我是{our_brand}的智能语音助手。"
             f"受{brand_or_client}委托，正在协助办理您在{emp}的入职背景调查。"
@@ -191,6 +196,7 @@ def build_tmp_prod_system_role(
         role_line = (
             f"你是「{self_name}」的智能语音助手，正在以{self_name}名义给候选人打电话，"
             f"确认背调授权短信是否收到并推动完成授权。"
+            f"本通为白标：下单方客户以其客户「{self_name}」名义发起；"
             f"话术中禁止出现第三方背调机构名称，禁止说「受某某委托」。"
             f"禁止编造任务卡未提供的品牌名或用人单位名称。"
         )
@@ -201,8 +207,8 @@ def build_tmp_prod_system_role(
             role_line = (
                 f"你是「{self_name}」的智能语音助手，受「{brand_or_client}」委托，"
                 f"正在给候选人打电话，确认背调授权短信是否收到并推动完成授权。"
-                f"必须说明受托关系；不要展开深度背调讲解。"
-                f"禁止编造任务卡未提供的品牌名或用人单位名称。"
+                f"本通为直客三要素口径：我方品牌={self_name}，委托方={brand_or_client}；必须说明受托关系。"
+                f"不要展开深度背调讲解。禁止编造任务卡未提供的品牌名或用人单位名称。"
             )
         else:
             role_line = (
@@ -218,6 +224,12 @@ def build_tmp_prod_system_role(
         brand_or_client if (_slot(client_name) or _slot(employer)) else "（未提供，禁止编造）"
     )
     emp_anchor = emp if _slot(employer) else "（未提供，禁止编造）"
+    if white:
+        client_slot_label = "对外自称品牌（客户B）"
+        brand_slot_label = "我方品牌（白标不用）"
+    else:
+        client_slot_label = "委托方"
+        brand_slot_label = "我方品牌"
 
     delivery_ask = "好的，请问您收到这个背调授权短信了吗？"
 
@@ -262,8 +274,8 @@ def build_tmp_prod_system_role(
 - 性别：{sex or "（未提供）"}
 - 手机号：{phone_s or "（未提供）"}
 - 用人单位：{emp_anchor}
-- 委托方 / 自称品牌：{brand_or_client_anchor}
-- 我方品牌：{our_brand_anchor}
+- {client_slot_label}：{brand_or_client_anchor}
+- {brand_slot_label}：{our_brand_anchor}
 - 身份模式：{identity_mode_label}
 
 {preplayed_note}
@@ -351,14 +363,15 @@ def tmp_prod_slots_from_payload(payload: dict[str, Any]) -> dict[str, Any]:
     trigger = stamp_trigger_beijing(p)
 
     identity = _norm_identity(str(p.get("identity_mode") or DEFAULT_IDENTITY_MODE))
+    # 白标：对外自称品牌（客户 B）；BRAND_SELF：委托方。
+    # CHANNEL_BRAND ≡ CLIENT_IDENTITY；channel_brand_name 仅作自称覆盖（兼容旧字段）。
     client = _slot(
         p.get("client_name")
         or p.get("employer")
         or p.get("brand_name")
         or p.get("channel_brand_name")
     )
-    # CHANNEL_BRAND：渠道品牌名非空时覆盖自称
-    if identity == IDENTITY_CHANNEL and p.get("channel_brand_name"):
+    if identity in _WHITE_LABEL and p.get("channel_brand_name"):
         client = _slot(p.get("channel_brand_name")) or client
 
     employer = _slot(p.get("employer")) or client

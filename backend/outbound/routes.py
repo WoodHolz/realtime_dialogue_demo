@@ -36,16 +36,19 @@ class CreateCallRequest(BaseModel):
     gender: str = Field(default="", description="性别（tmp_prod 场景可选）")
     client_name: str = Field(
         default="",
-        description="brand_self=委托方BU名；白标/渠道名义=自称品牌名；tmp_prod 亦可作用人单位回退",
+        description="白标=对外自称品牌（客户B）；BRAND_SELF=委托方；tmp_prod 亦可作用人单位回退",
     )
     identity_mode: str = Field(
         default="CLIENT_IDENTITY",
-        description="BRAND_SELF | CLIENT_IDENTITY | CHANNEL_BRAND（后两者共用白标台词族）",
+        description=(
+            "白标 CLIENT_IDENTITY / CHANNEL_BRAND（同族，以客户B名义）；"
+            "直客 BRAND_SELF（我方品牌+受托）"
+        ),
     )
-    our_brand_name: str = Field(default="芝麻背调", description="仅 BRAND_SELF 自称用")
+    our_brand_name: str = Field(default="芝麻背调", description="仅 BRAND_SELF 我方品牌")
     channel_brand_name: str = Field(
         default="",
-        description="CHANNEL_BRAND 时渠道方名；非空则覆盖 client_name 作为自称",
+        description="兼容旧字段：白标时非空则覆盖 client_name 作为对外自称品牌（客户B）",
     )
     invite_channel: str = Field(default="短信", description="已发送渠道文案，如 短信 / 短信和邮箱")
     send_channel: str = Field(default="", description="同 invite_channel；优先于 invite_channel")

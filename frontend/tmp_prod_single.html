@@ -159,22 +159,22 @@
 
           <div class="row">
             <div>
-              <label for="client">委托方 / 自称品牌</label>
-              <input id="client" type="text" value="比赛日科技" />
-            </div>
-            <div>
               <label for="identityMode">身份模式</label>
               <select id="identityMode">
-                <option value="CLIENT_IDENTITY">CLIENT_IDENTITY（客户白标）</option>
-                <option value="CHANNEL_BRAND">CHANNEL_BRAND（渠道白标）</option>
-                <option value="BRAND_SELF" selected>BRAND_SELF（芝麻背调自称+受托）</option>
+                <option value="CLIENT_IDENTITY">白标（以客户B名义）</option>
+                <option value="BRAND_SELF" selected>芝麻背调 + 受托（直客三要素）</option>
               </select>
+              <p class="hint">白标：下单客户 A 以客户 B 名义外呼（渠道白标=客户白标）。直客：我方品牌 + 受委托方委托。</p>
+            </div>
+            <div>
+              <label for="client" id="clientLabel">委托方</label>
+              <input id="client" type="text" value="比赛日科技" />
             </div>
           </div>
 
           <div class="row">
-            <div>
-              <label for="ourBrand">我方品牌（BRAND_SELF）</label>
+            <div id="ourBrandWrap">
+              <label for="ourBrand">我方品牌</label>
               <input id="ourBrand" type="text" value="芝麻背调" />
             </div>
             <div id="apiKeyWrap">
@@ -182,10 +182,6 @@
               <input id="apiKey" type="password" placeholder="PARTNER_API_KEY 为空可留空" autocomplete="off" />
             </div>
           </div>
-
-          <label for="channelBrand">渠道品牌名（CHANNEL_BRAND，可覆盖委托方）</label>
-          <input id="channelBrand" type="text" placeholder="仅 CHANNEL_BRAND 时填写" />
-
           <h2 style="margin-top:1.1rem;">开场白预览</h2>
           <div class="preview" id="openingPreview">填写槽位后自动预览…</div>
           <p class="hint">方案 A：系统只预播「确认本人」；合规开场由模型在确认后说。</p>
@@ -249,9 +245,10 @@
         gender: document.getElementById("gender"),
         employer: document.getElementById("employer"),
         client: document.getElementById("client"),
+        clientLabel: document.getElementById("clientLabel"),
         identityMode: document.getElementById("identityMode"),
         ourBrand: document.getElementById("ourBrand"),
-        channelBrand: document.getElementById("channelBrand"),
+        ourBrandWrap: document.getElementById("ourBrandWrap"),
         apiKey: document.getElementById("apiKey"),
         openingPreview: document.getElementById("openingPreview"),
         status: document.getElementById("status"),
@@ -304,16 +301,17 @@
         return URL.createObjectURL(await resp.blob());
       }
       function payloadFromForm() {
+        var brandSelf = el.identityMode.value === "BRAND_SELF";
         var body = {
           phone: normalizePhone(el.phone.value) || "13800000000",
           scenario: SCENARIO,
           candidate_name: (el.candidate.value || "").trim() || "张三",
           gender: (el.gender.value || "").trim(),
           employer: (el.employer.value || "").trim(),
+          // 白标：对外自称品牌(B)；BRAND_SELF：委托方
           client_name: (el.client.value || "").trim() || "比赛日科技",
           identity_mode: el.identityMode.value,
-          our_brand_name: (el.ourBrand.value || "").trim() || "芝麻背调",
-          channel_brand_name: (el.channelBrand.value || "").trim(),
+          our_brand_name: brandSelf ? ((el.ourBrand.value || "").trim() || "芝麻背调") : "",
         };
         return body;
       }
@@ -456,10 +454,22 @@
         }, 1500);
       }
 
-      ["candidate", "gender", "employer", "client", "ourBrand", "channelBrand", "phone"].forEach(function (id) {
+      function syncIdentityFields() {
+        var brandSelf = el.identityMode.value === "BRAND_SELF";
+        if (el.ourBrandWrap) el.ourBrandWrap.style.display = brandSelf ? "" : "none";
+        if (el.clientLabel) {
+          el.clientLabel.textContent = brandSelf ? "委托方" : "对外自称品牌（客户B）";
+        }
+      }
+
+      ["candidate", "gender", "employer", "client", "ourBrand", "phone"].forEach(function (id) {
         el[id].addEventListener("input", schedulePreview);
       });
-      el.identityMode.addEventListener("change", schedulePreview);
+      el.identityMode.addEventListener("change", function () {
+        syncIdentityFields();
+        schedulePreview();
+      });
+      syncIdentityFields();
       el.previewBtn.addEventListener("click", refreshOpeningPreview);
       el.btnStereo.addEventListener("click", function () { loadKind("stereo"); });
       el.btnUser.addEventListener("click", function () { loadKind("user"); });

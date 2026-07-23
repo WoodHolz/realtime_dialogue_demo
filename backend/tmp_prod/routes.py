@@ -29,11 +29,20 @@ def _auth(x_api_key: str | None) -> None:
 class StartBody(BaseModel):
     identity_mode: str = Field(
         default="BRAND_SELF",
-        description="BRAND_SELF | CLIENT_IDENTITY | CHANNEL_BRAND",
+        description=(
+            "白标 CLIENT_IDENTITY / CHANNEL_BRAND（同族，以客户B名义）；"
+            "直客 BRAND_SELF（我方品牌+受托）"
+        ),
     )
-    client_name: str = Field(default="比赛日科技", description="委托方 / 自称品牌")
-    our_brand_name: str = Field(default="芝麻背调", description="BRAND_SELF 我方品牌")
-    channel_brand_name: str = Field(default="", description="CHANNEL_BRAND 渠道品牌名")
+    client_name: str = Field(
+        default="比赛日科技",
+        description="白标=对外自称品牌（客户B）；BRAND_SELF=委托方",
+    )
+    our_brand_name: str = Field(default="芝麻背调", description="仅 BRAND_SELF 我方品牌")
+    channel_brand_name: str = Field(
+        default="",
+        description="兼容旧字段：白标时非空则覆盖 client_name 作为对外自称品牌（客户B）",
+    )
     stagger_sec: float = Field(
         default=0.5,
         ge=0,
