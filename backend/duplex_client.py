@@ -29,6 +29,8 @@ WS_URL = "wss://openspeech.bytedance.com/api/v3/duplex/realtime/dialogue"
 DUPLEX_MODEL = "1.2.6.0"
 DUPLEX_SILENCE_CHUNK = bytes(CHUNK_BYTES)
 DEFAULT_SPEAKER = "zh_male_xiaotian_jupiter_bigtts"
+# urge_auth / tmp_prod outbound SIP 默认音色（豆包 Jupiter bigtts）
+OUTBOUND_SPEAKER = "zh_female_vv_jupiter_bigtts"
 LEGACY_RESOURCE_ID = "volc.speech.dialog"
 LEGACY_APP_KEY = "PlgvMymc7f3tQnJ6"
 
@@ -154,6 +156,7 @@ class DuplexVoiceClient:
         self._session_speaking_style = ""
         self._session_bot_name = ""
         self._session_dialog_id = ""
+        self._session_voice = DEFAULT_SPEAKER
         self._session_end_smooth_window_ms = 1500
         self._session_recv_timeout = 10
 
@@ -261,8 +264,10 @@ class DuplexVoiceClient:
         end_smooth_window_ms: int = 1500,
         server_vad: bool = False,
         recv_timeout: int = 10,
+        voice: str = "",
     ) -> dict[str, Any]:
         base = DEFAULT_EXTENSION
+        speaker = (voice or DEFAULT_SPEAKER).strip() or DEFAULT_SPEAKER
         asr_extra = {
             **base["asr"]["extra"],
             "end_smooth_window_ms": end_smooth_window_ms,
@@ -277,7 +282,7 @@ class DuplexVoiceClient:
         }
         return {
             "asr": {**base["asr"], "extra": asr_extra},
-            "tts": base["tts"],
+            "tts": {**base["tts"], "speaker": speaker},
             "dialog": {
                 **base["dialog"],
                 "bot_name": bot_name,
@@ -306,12 +311,14 @@ class DuplexVoiceClient:
         server_vad: bool = False,
         end_smooth_window_ms: int = 1500,
         recv_timeout: int = 10,
+        voice: str = "",
     ) -> str:
         if not self._ws or self._ws_is_closed():
             raise RuntimeError("Not connected")
         session_id = dialog_id or str(uuid.uuid4())
         style = speaking_style or DEFAULT_SPEAKING_STYLE
         role = system_role or DEFAULT_SYSTEM_ROLE
+        speaker = (voice or DEFAULT_SPEAKER).strip() or DEFAULT_SPEAKER
         # Align with official demo: instructions only on session; dialog fields live in extension.
         instructions = role
         if style:
@@ -334,6 +341,7 @@ class DuplexVoiceClient:
             end_smooth_window_ms=end_smooth_window_ms,
             server_vad=server_vad,
             recv_timeout=recv_timeout,
+            voice=speaker,
         )
         session = {
             "id": session_id,
@@ -343,7 +351,7 @@ class DuplexVoiceClient:
                 "input": {"format": {"type": "pcm", "rate": 16000}},
                 "output": {
                     "format": {"type": "pcm_s16le", "rate": 24000},
-                    "voice": DEFAULT_SPEAKER,
+                    "voice": speaker,
                 },
             },
         }
@@ -361,6 +369,7 @@ class DuplexVoiceClient:
         self._session_speaking_style = style
         self._session_bot_name = bot_name
         self._session_dialog_id = dialog_id or session_id
+        self._session_voice = speaker
         self._session_end_smooth_window_ms = end_smooth_window_ms
         self._session_recv_timeout = recv_timeout
         await self.start_silence_keepalive()
@@ -396,6 +405,7 @@ class DuplexVoiceClient:
             speaking_style=self._session_speaking_style,
             bot_name=self._session_bot_name,
             dialog_id=self._session_dialog_id,
+            voice=self._session_voice,
             input_mod=resolved_input_mod,
             end_smooth_window_ms=smooth_ms,
             server_vad=server_vad,
