@@ -2,15 +2,39 @@
 """Unit tests for tmp-prod outcome extraction."""
 from __future__ import annotations
 
-from backend.tmp_prod.outcome import extract_tmp_prod_outcome
+from backend.tmp_prod.outcome import (
+    extract_tmp_prod_outcome,
+    normalize_promised_time_display,
+)
+
+# Call placed on 2026-07-23 Beijing → 明天 = 2026-07-24
+_TRIGGER = "2026-07-23T15:00:00+08:00"
 
 
 def _turns(*pairs: tuple[str, str]) -> list[dict[str, str]]:
     return [{"role": role, "text": text} for role, text in pairs]
 
 
-def test_reschedule_to_tomorrow_noon_uses_writeback_absolute_time():
-    """Opening 今天18点前 must not beat final 明天12点 / 内心 promised_time."""
+def test_normalize_relative_tomorrow_noon():
+    assert (
+        normalize_promised_time_display(
+            "明天中午12点前", trigger_beijing_at=_TRIGGER
+        )
+        == "2026年7月24日 12:00"
+    )
+
+
+def test_normalize_md_writeback_adds_year():
+    assert (
+        normalize_promised_time_display(
+            "7月24日 12:00", trigger_beijing_at=_TRIGGER
+        )
+        == "2026年7月24日 12:00"
+    )
+
+
+def test_reschedule_to_tomorrow_noon_uses_absolute_ymd():
+    """Opening 今天18点前 must not beat final 明天12点; xlsx gets full YMD."""
     transcript = _turns(
         (
             "assistant",
@@ -31,18 +55,18 @@ def test_reschedule_to_tomorrow_noon_uses_writeback_absolute_time():
         ("user", "那好，再见。再见。"),
         (
             "assistant",
-            "（内心回写：received_will_complete；promised_time=7月24日 12:00；time_precision=hour）",
+            "（内心回写：received_will_complete；promised_time=2026年7月24日 12:00；time_precision=hour）",
         ),
     )
-    out = extract_tmp_prod_outcome(transcript)
+    out = extract_tmp_prod_outcome(transcript, trigger_beijing_at=_TRIGGER)
     assert out["result"] == "received_will_complete"
-    assert out["promised_time"] == "7月24日 12:00"
-    assert "7月24日 12:00" in out["result_summary"]
+    assert out["promised_time"] == "2026年7月24日 12:00"
+    assert out["result_summary"] == "已收到短信并承诺完成时间：2026年7月24日 12:00"
+    assert "明天" not in out["promised_time"]
     assert "今天18点" not in out["promised_time"]
-    assert "今天18点" not in out["result_summary"]
 
 
-def test_spoken_confirmation_wins_without_writeback():
+def test_spoken_confirmation_normalizes_without_writeback():
     transcript = _turns(
         (
             "assistant",
@@ -60,10 +84,10 @@ def test_spoken_confirmation_wins_without_writeback():
         ),
         ("user", "收到了"),
     )
-    out = extract_tmp_prod_outcome(transcript)
+    out = extract_tmp_prod_outcome(transcript, trigger_beijing_at=_TRIGGER)
     assert out["result"] == "received_will_complete"
-    assert "明天中午12点前" in out["promised_time"]
-    assert "今天18点" not in out["promised_time"]
+    assert out["promised_time"] == "2026年7月24日 12:00"
+    assert "完成信息填写" not in out["promised_time"]
 
 
 def test_today_18_still_works_when_accepted():
@@ -79,6 +103,6 @@ def test_today_18_still_works_when_accepted():
             "（内心回写：received_will_complete；promised_time=7月23日 18:00；time_precision=hour）",
         ),
     )
-    out = extract_tmp_prod_outcome(transcript)
+    out = extract_tmp_prod_outcome(transcript, trigger_beijing_at=_TRIGGER)
     assert out["result"] == "received_will_complete"
-    assert out["promised_time"] == "7月23日 18:00"
+    assert out["promised_time"] == "2026年7月23日 18:00"

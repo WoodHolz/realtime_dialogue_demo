@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from datetime import datetime, timedelta
 from typing import Any
 
 # 结果码 → 交付可读说明（写入 result_summary / 可作 结果 列展示补充）
@@ -93,10 +94,23 @@ _WRITEBACK_PRECISION_RE = re.compile(
 )
 
 # 口播承诺时间：记录的是 / 约到 = 最终确认；尽量在 = 开场催办（易陈旧）
+# 只截到「点前/点/当天内」，避免拖进「完成信息填写…」
 _SPOKEN_PROMISED_RE = re.compile(
     r"(记录的是|约到|尽量在|按)"
-    r"([^，。！？\n]{0,24}?(?:\d{1,2}\s*[:：]\s*\d{2}|点前|点|当天内)[^，。！？\n]{0,8})"
+    r"((?:今天|明天)?[^，。！？\n]{0,12}?(?:\d{1,2}\s*[:：]\s*\d{2}|点前|点|当天内))"
 )
+
+_YMD_HM_RE = re.compile(
+    r"(\d{4})\s*年\s*(\d{1,2})\s*月\s*(\d{1,2})\s*日"
+    r"(?:\s*[^\d]{0,6})?(\d{1,2})\s*[:：]\s*(\d{2})"
+)
+_YMD_RE = re.compile(r"(\d{4})\s*年\s*(\d{1,2})\s*月\s*(\d{1,2})\s*日")
+_MD_HM_RE = re.compile(
+    r"(\d{1,2})\s*月\s*(\d{1,2})\s*日\s*(\d{1,2})\s*[:：]\s*(\d{2})"
+)
+_MD_RE = re.compile(r"(\d{1,2})\s*月\s*(\d{1,2})\s*日")
+_HM_COLON_RE = re.compile(r"(\d{1,2})\s*[:：]\s*(\d{2})")
+_HM_DIAN_RE = re.compile(r"(中午|下午|上午)?\s*(\d{1,2})\s*点")
 
 
 def _role_of(turn: dict[str, Any]) -> str:
@@ -161,16 +175,129 @@ def _extract_spoken_promised(ai_text: str) -> str:
     return (chosen.group(2) or "").strip()
 
 
+def _year_for_md(trigger: datetime, month: int, day: int) -> int:
+    """Pick year for M月D日 relative to trigger (today/tomorrow / same calendar year)."""
+    today = trigger.replace(hour=0, minute=0, second=0, microsecond=0)
+    tomorrow = today + timedelta(days=1)
+    if (today.month, today.day) == (month, day):
+        return today.year
+    if (tomorrow.month, tomorrow.day) == (month, day):
+        return tomorrow.year
+    # Dec 31 → Jan 1 next year etc.
+    try:
+        candidate = today.replace(month=month, day=day)
+    except ValueError:
+        return today.year
+    if candidate < today - timedelta(days=180):
+        return today.year + 1
+    if candidate > today + timedelta(days=180):
+        return today.year - 1
+    return today.year
+
+
+def _parse_clock(text: str) -> tuple[int, int] | None:
+    m = _HM_COLON_RE.search(text or "")
+    if m:
+        return int(m.group(1)), int(m.group(2))
+    m = _HM_DIAN_RE.search(text or "")
+    if not m:
+        return None
+    period = m.group(1) or ""
+    hour = int(m.group(2))
+    if period == "下午" and 1 <= hour <= 11:
+        hour += 12
+    if period == "中午" and hour == 12:
+        hour = 12
+    return hour, 0
+
+
+def normalize_promised_time_display(
+    raw: str,
+    *,
+    trigger_beijing_at: str | datetime | None = None,
+) -> str:
+    """Normalize promised time for xlsx: e.g. 2026年7月24日 12:00."""
+    text = (raw or "").strip()
+    if not text:
+        return ""
+
+    from config.tmp_prod_prompt import format_ymd_cn, parse_trigger_beijing
+
+    trigger = parse_trigger_beijing(trigger_beijing_at)
+    today = trigger.replace(hour=0, minute=0, second=0, microsecond=0)
+    tomorrow = today + timedelta(days=1)
+
+    m = _YMD_HM_RE.search(text)
+    if m:
+        y, mo, d, h, mi = (int(x) for x in m.groups())
+        return f"{y}年{mo}月{d}日 {h:02d}:{mi:02d}"
+
+    m = _MD_HM_RE.search(text)
+    if m:
+        mo, d, h, mi = (int(x) for x in m.groups())
+        y = _year_for_md(trigger, mo, d)
+        return f"{y}年{mo}月{d}日 {h:02d}:{mi:02d}"
+
+    m = _YMD_RE.search(text)
+    if m and not _parse_clock(text):
+        y, mo, d = (int(x) for x in m.groups())
+        return f"{y}年{mo}月{d}日"
+
+    m = _MD_RE.search(text)
+    if m and not _parse_clock(text):
+        mo, d = int(m.group(1)), int(m.group(2))
+        y = _year_for_md(trigger, mo, d)
+        return f"{y}年{mo}月{d}日"
+
+    day_base: datetime | None = None
+    if "今天" in text:
+        day_base = today
+    elif "明天" in text:
+        day_base = tomorrow
+
+    if day_base is not None:
+        if "当天内" in text and not _parse_clock(text):
+            return format_ymd_cn(day_base)
+        clock = _parse_clock(text)
+        if clock:
+            h, mi = clock
+            return f"{format_ymd_cn(day_base)} {h:02d}:{mi:02d}"
+
+    return text
+
+
+def _pack_promise_outcome(
+    *,
+    code: str,
+    promised: str,
+    email: str,
+    trigger_beijing_at: str | datetime | None,
+) -> dict[str, str]:
+    display = normalize_promised_time_display(
+        promised, trigger_beijing_at=trigger_beijing_at
+    )
+    return {
+        "result": code,
+        "result_summary": RESULT_LABELS_CN[code] + (f"：{display}" if display else ""),
+        "email": email,
+        "promised_time": display,
+    }
+
+
 def extract_tmp_prod_outcome(
     transcript: list[dict[str, Any]] | None,
     *,
     fallback_result: str = "completed",
     fallback_summary: str = "",
+    trigger_beijing_at: str | datetime | None = None,
 ) -> dict[str, str]:
     """Heuristic extract of tmp-prod business fields from call transcript.
 
     Returns keys aligned with ContactJob / xlsx:
       result, result_summary, email, promised_time
+
+    promised_time is normalized to absolute Beijing calendar form, e.g.
+    ``2026年7月24日 12:00``, using ``trigger_beijing_at`` as the today/tomorrow anchor.
     """
     turns = [t for t in (transcript or []) if isinstance(t, dict)]
     if not turns:
@@ -253,12 +380,12 @@ def extract_tmp_prod_outcome(
                 or ("当天内" in promised and "点" not in promised)
             )
         code = "promised_day_only" if day_only else "received_will_complete"
-        return {
-            "result": code,
-            "result_summary": RESULT_LABELS_CN[code] + (f"：{promised}" if promised else ""),
-            "email": email,
-            "promised_time": promised,
-        }
+        return _pack_promise_outcome(
+            code=code,
+            promised=promised,
+            email=email,
+            trigger_beijing_at=trigger_beijing_at,
+        )
 
     if promised and ("收到" in all_text or "短信" in all_text):
         day_only = (
@@ -266,27 +393,33 @@ def extract_tmp_prod_outcome(
             or ("当天内" in promised and "点" not in promised)
         )
         code = "promised_day_only" if day_only else "received_will_complete"
-        return {
-            "result": code,
-            "result_summary": RESULT_LABELS_CN[code] + (f"：{promised}" if promised else ""),
-            "email": email,
-            "promised_time": promised,
-        }
+        return _pack_promise_outcome(
+            code=code,
+            promised=promised,
+            email=email,
+            trigger_beijing_at=trigger_beijing_at,
+        )
 
     if wb_result and wb_result in RESULT_LABELS_CN:
+        display = normalize_promised_time_display(
+            promised, trigger_beijing_at=trigger_beijing_at
+        )
         return {
             "result": wb_result,
             "result_summary": RESULT_LABELS_CN[wb_result]
-            + (f"：{promised}" if promised else ""),
+            + (f"：{display}" if display else ""),
             "email": email,
-            "promised_time": promised,
+            "promised_time": display,
         }
 
+    display = normalize_promised_time_display(
+        promised, trigger_beijing_at=trigger_beijing_at
+    )
     return {
         "result": fallback_result or "completed",
         "result_summary": fallback_summary
         or RESULT_LABELS_CN.get(fallback_result or "", "")
         or RESULT_LABELS_CN["completed"],
         "email": email,
-        "promised_time": promised,
+        "promised_time": display,
     }

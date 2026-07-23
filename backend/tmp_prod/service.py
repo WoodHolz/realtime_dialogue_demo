@@ -211,10 +211,14 @@ async def dial_one_contact(
 
         fallback_result = getattr(finished, "result", None) or "completed"
         fallback_summary = getattr(finished, "result_summary", "") or ""
+        payload = getattr(finished, "payload", None) or {}
+        if not isinstance(payload, dict):
+            payload = {}
         outcome = extract_tmp_prod_outcome(
             transcript,
             fallback_result=fallback_result,
             fallback_summary=fallback_summary,
+            trigger_beijing_at=payload.get("trigger_beijing_at") or "",
         )
         err = getattr(finished, "error", "") or ""
         status = "failed" if getattr(finished, "status", "") == "failed" else "completed"

@@ -101,10 +101,10 @@ def build_day_anchors(trigger: datetime) -> dict[str, str]:
         "offer_tomorrow_12": "明天中午12点前",
         "offer_tomorrow_14": "明天下午2点前",
         "tomorrow_day_only": "明天当天内",
-        # 内心回写用（勿整段念给对方）
-        "deadline_today_18_writeback": f"{format_md(today)} 18:00",
-        "offer_tomorrow_12_writeback": f"{format_md(tomorrow)} 12:00",
-        "offer_tomorrow_14_writeback": f"{format_md(tomorrow)} 14:00",
+        # 内心回写用（勿整段念给对方）——xlsx 要带年份的绝对时间
+        "deadline_today_18_writeback": f"{format_ymd_cn(today)} 18:00",
+        "offer_tomorrow_12_writeback": f"{format_ymd_cn(tomorrow)} 12:00",
+        "offer_tomorrow_14_writeback": f"{format_ymd_cn(tomorrow)} 14:00",
     }
 
 
@@ -303,7 +303,7 @@ def build_tmp_prod_system_role(
 4) 对方仍不行：问「那您明天能不能完成？方便说一个确切时间点吗？」（要到明天某点/上午/下午具体时刻）
 5) 若始终拿不到小时级准确时间（只会说「明天」「这两天」「晚点」等）：
    - 口播收线：说明先按天记录，后续由顾问老师跟进确认
-   - 内心回写用天级：如 promised_day={anchors['tomorrow_md']} / time_precision=day（不要编造具体钟点）
+   - 内心回写用天级：如 promised_day={anchors['tomorrow_ymd']} / time_precision=day（不要编造具体钟点）
 
 【任务锚点】
 - 候选人姓名：{name}
@@ -352,8 +352,8 @@ def build_tmp_prod_system_role(
   - 中午不行：【AI】那改到{anchors['offer_tomorrow_14']}可以吗？
     - 可以：【AI】好的，我记录的是{anchors['offer_tomorrow_14']}完成信息填写和授权。辛苦您了，谢谢。→ 内心 promised_time={anchors['offer_tomorrow_14_writeback']}；time_precision=hour
     - 仍不行：【AI】那您明天能不能完成？方便跟我说一个确切时间吗？我这边记下来。
-      - 对方给出确切时刻：口播复述只用「明天×点」相对说法（勿再叠月日）；内心 promised_time 可写 {anchors['tomorrow_md']} + 对方时刻 → time_precision=hour
-      - 仍给不出确切时刻：【AI】好的，那我先按{anchors['tomorrow_day_only']}帮您登记，后续会有顾问老师跟您确认具体时间，辛苦您了。→ time_precision=day，promised_day={anchors['tomorrow_md']}
+      - 对方给出确切时刻：口播复述只用「明天×点」相对说法（勿再叠月日）；内心 promised_time 可写 {anchors['tomorrow_ymd']} + 对方时刻 → time_precision=hour
+      - 仍给不出确切时刻：【AI】好的，那我先按{anchors['tomorrow_day_only']}帮您登记，后续会有顾问老师跟您确认具体时间，辛苦您了。→ time_precision=day，promised_day={anchors['tomorrow_ymd']}
 - ⚠ 路径翻转：任意时刻对方改口「其实没收到 / 找不到短信」→ 立刻离开本分支，进入【没有收到授权短信】；下一句必须问邮箱地址。
 
 ■ 没有收到授权短信（⚠ 强制采邮箱，不可跳过）

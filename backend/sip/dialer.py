@@ -308,10 +308,12 @@ async def _run_sip_bridged_call(
         if is_tmp_prod_scenario(task.scenario):
             from backend.tmp_prod.outcome import extract_tmp_prod_outcome
 
+            payload = task.payload if isinstance(task.payload, dict) else {}
             extracted = extract_tmp_prod_outcome(
                 outcome.transcript,
                 fallback_result="completed",
                 fallback_summary=summary,
+                trigger_beijing_at=payload.get("trigger_beijing_at") or "",
             )
             result_code = extracted.get("result") or "completed"
             summary = extracted.get("result_summary") or summary
