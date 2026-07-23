@@ -351,32 +351,80 @@ class SipAgentBridge:
                     self.call_id,
                 )
             if idx + 1 < len(self.opening_parts):
-                await self._wait_opening_part_playback_drain(idx + 1)
-        # Last part: open uplink promptly (do not wait full playback drain).
-        await asyncio.sleep(0.15)
+                # Between parts: drain TX queue + short silence gap (anti-overlap).
+                await self._wait_opening_part_playback_drain(
+                    idx + 1, breath_ms=160, wait_full_idle=True
+                )
+            else:
+                # Last part: wait until queued audio is on the wire, then open uplink.
+                await self._wait_opening_part_playback_drain(
+                    idx + 1, breath_ms=0, wait_full_idle=True
+                )
         self._accept_uplink = True
         self._opening_uplink_pending = False
         self._emit("audio_mode_ready")
         LOG.info("opening TTS all parts done call_id=%s; uplink enabled", self.call_id)
 
-    async def _wait_opening_part_playback_drain(self, part_idx: int) -> None:
-        """Wait for RTP downlink to finish current part before next SayHello."""
+    async def _wait_opening_part_playback_drain(
+        self,
+        part_idx: int,
+        *,
+        breath_ms: int = 160,
+        wait_full_idle: bool = True,
+    ) -> None:
+        """Wait until RTP TX queue is empty before next SayHello / uplink.
+
+        Do not use estimated TTS duration sleep: generation end ≠ phone playback end.
+        Barge-in / normal turns still use clear_downlink — this path is drain only.
+        """
         pcm_bytes = self._opening_part_pcm24_bytes
         duration_sec = pcm_bytes / float(AGENT_TTS_RATE * 2) if pcm_bytes > 0 else 0.0
-        # Server TTS done != phone finished playing; add margin for RTP queue + jitter.
-        drain_sec = max(0.55, duration_sec + 0.35)
         tail = self._pcmu_tx_buf.flush_pad_silence()
-        if tail and self._session:
-            self._session.enqueue_pcmu(tail)
+        session = self._session
+        if tail and session:
+            session.enqueue_pcmu(tail)
+
+        pending = session.downlink_tx_queue_size() if session else 0
+        t0 = time.monotonic()
+        idle_ok = True
+        if wait_full_idle and session:
+            # Cap wait: audio duration + 3s slack (network / scheduler).
+            timeout = max(2.0, duration_sec + 3.0)
+            idle_ok = await asyncio.to_thread(
+                session.wait_downlink_idle,
+                timeout_sec=timeout,
+                quiet_frames=2,
+            )
+
+        # Optional breath gap between parts (not used after last part).
+        breath_frames = max(0, int(round(breath_ms / 20.0)))
+        if breath_frames and session:
+            session.enqueue_silence_frames(breath_frames)
+            await asyncio.to_thread(
+                session.wait_downlink_idle,
+                timeout_sec=max(1.0, breath_ms / 1000.0 + 0.5),
+                quiet_frames=1,
+            )
+
+        elapsed = time.monotonic() - t0
         LOG.info(
-            "opening part %d playback drain call_id=%s pcm24k=%d est=%.2fs wait=%.2fs",
+            "opening part %d TX idle call_id=%s pcm24k=%d est=%.2fs pending0=%d "
+            "idle_ok=%s breath_ms=%d elapsed=%.2fs",
             part_idx,
             self.call_id,
             pcm_bytes,
             duration_sec,
-            drain_sec,
+            pending,
+            idle_ok,
+            breath_ms,
+            elapsed,
         )
-        await asyncio.sleep(drain_sec)
+        if not idle_ok:
+            LOG.warning(
+                "opening part %d TX idle timeout call_id=%s; continuing",
+                part_idx,
+                self.call_id,
+            )
 
     def _enqueue_uplink(self, item: bytes | None) -> None:
         q = self._uplink_q

@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """tmp-prod 临时演示剧本 — 硬编码话术 + 外呼触发日（北京时间）注入。
 
-开场：人名已确认，不再问「是不是本人」；系统预播整段开场，分 3 段 TTS（段间短停，防电话侧叠音，同 urge_auth）。
+开场：人名已确认，不再问「是不是本人」；系统预播一整段开场（叠音由电话侧 TX 队列排空处理，不在此拆段）。
 
 主流程顺序：开场问候与介绍（只问方便）→ 方便后再问是否收到短信
 → 已收到催办时间 / 没收到采邮箱；翻找时约 15 秒静默后追问；先收到后改口没收到须切回采邮箱。
@@ -117,9 +117,9 @@ def build_tmp_prod_opening_parts(
     identity_mode: str = DEFAULT_IDENTITY_MODE,
     **_ignored: Any,
 ) -> list[str]:
-    """系统预播：整段开场拆 3 段 TTS（同 urge_auth opening_parts + agent_bridge 段间 drain）。
+    """系统预播：一整段开场（单段 SayHello）。
 
-    口播连读是一整段；TTS 按句切分并在段间等待播放 drain，避免电话侧中段叠音。
+    电话侧叠音由 agent_bridge TX 队列排空处理，剧本侧不再拆段。
     """
     name = (candidate_name or "候选人").strip()
     emp = _slot(employer, fallback="用人单位")
@@ -128,21 +128,26 @@ def build_tmp_prod_opening_parts(
     mode = _norm_identity(identity_mode)
     white = mode in _WHITE_LABEL
 
-    part1 = f"您好，{name}，"
     if white:
-        part1 += f"我是{brand_or_client}的 AI 语音助手，"
-        part2 = f"正在协助办理您在{emp}的入职背景调查。"
+        identity = (
+            f"您好，{name}，我是{brand_or_client}的 AI 语音助手，"
+            f"正在协助办理您在{emp}的入职背景调查。"
+        )
     elif our_brand:
-        part1 += f"我是{our_brand}的 AI 语音助手，"
-        part2 = f"受{brand_or_client}委托，正在协助办理您在{emp}的入职背景调查。"
+        identity = (
+            f"您好，{name}，我是{our_brand}的 AI 语音助手，"
+            f"受{brand_or_client}委托，正在协助办理您在{emp}的入职背景调查。"
+        )
     else:
-        part1 += "我是 AI 语音助手，"
-        part2 = f"受{brand_or_client}委托，正在协助办理您在{emp}的入职背景调查。"
-    part3 = (
-        "今天联系您，是想确认一下您是否收到此前发送的背调授权短信，"
-        "大约占用您两分钟，现在方便吗？"
-    )
-    return [part1, part2, part3]
+        identity = (
+            f"您好，{name}，我是 AI 语音助手，"
+            f"受{brand_or_client}委托，正在协助办理您在{emp}的入职背景调查。"
+        )
+    return [
+        identity
+        + "今天联系您，是想确认一下您是否收到此前发送的背调授权短信，"
+        + "大约占用您两分钟，现在方便吗？"
+    ]
 
 
 def build_tmp_prod_compliance_opening(

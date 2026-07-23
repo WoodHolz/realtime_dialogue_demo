@@ -142,6 +142,50 @@ class RtpSession:
             dropped += 1
         return dropped
 
+    def tx_queue_size(self) -> int:
+        """Approximate number of PCMU frames still waiting to be sent."""
+        return self._tx_q.qsize()
+
+    def enqueue_silence_frames(self, n: int) -> None:
+        """Enqueue n × 20ms PCMU silence frames (breath gap / pad)."""
+        if n <= 0 or self._stop.is_set():
+            return
+        for _ in range(n):
+            try:
+                self._tx_q.put_nowait(PCMU_SILENCE)
+            except queue.Full:
+                break
+
+    def wait_tx_idle(
+        self,
+        *,
+        timeout_sec: float = 30.0,
+        quiet_frames: int = 2,
+        poll_sec: float = 0.02,
+    ) -> bool:
+        """Block until TX queue is empty and quiet_frames silence ticks have passed.
+
+        TTS generation end ≠ phone playback end: PCMU may still sit in _tx_q.
+        After the queue drains, wait a few send-loop ticks so the last dequeued
+        frame has also been put on the wire.
+
+        Returns True if idle reached, False on timeout or stop.
+        """
+        deadline = time.monotonic() + max(0.0, timeout_sec)
+        quiet_need = max(0, int(quiet_frames))
+        quiet_got = 0
+        while not self._stop.is_set():
+            if self._tx_q.qsize() > 0:
+                quiet_got = 0
+            else:
+                quiet_got += 1
+                if quiet_got >= quiet_need:
+                    return True
+            if time.monotonic() >= deadline:
+                return False
+            time.sleep(poll_sec)
+        return False
+
     def _send_loop(self) -> None:
         next_t = time.monotonic()
         while not self._stop.is_set():

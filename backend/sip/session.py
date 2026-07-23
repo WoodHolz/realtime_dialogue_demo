@@ -95,6 +95,26 @@ class SipCallSession:
             return 0
         return self.rtp.clear_tx_queue()
 
+    def downlink_tx_queue_size(self) -> int:
+        if not self.rtp:
+            return 0
+        return self.rtp.tx_queue_size()
+
+    def enqueue_silence_frames(self, n: int) -> None:
+        if self.rtp:
+            self.rtp.enqueue_silence_frames(n)
+
+    def wait_downlink_idle(
+        self,
+        *,
+        timeout_sec: float = 30.0,
+        quiet_frames: int = 2,
+    ) -> bool:
+        """Block until AI TTS RTP queue has drained (see RtpSession.wait_tx_idle)."""
+        if not self.rtp:
+            return True
+        return self.rtp.wait_tx_idle(timeout_sec=timeout_sec, quiet_frames=quiet_frames)
+
     def _release_prebound_rtp(self) -> None:
         sock = self._rtp_sock
         self._rtp_sock = None
