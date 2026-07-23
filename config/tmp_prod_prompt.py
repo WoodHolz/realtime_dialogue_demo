@@ -18,6 +18,13 @@ from datetime import datetime, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
 
+from config.urge_auth_prompt import (
+    IDENTITY_BRAND_SELF,
+    IDENTITY_CHANNEL,
+    _WHITE_LABEL,
+    _norm_identity,
+)
+
 BJ = ZoneInfo("Asia/Shanghai")
 
 DEFAULT_SPEAKING_STYLE = (
@@ -25,8 +32,14 @@ DEFAULT_SPEAKING_STYLE = (
     "严格按本剧本分支推进，不要扩展无关业务讲解。"
 )
 
-EMPLOYER_DEFAULT = "比赛日科技"
-BRAND = "芝麻背调"
+# 与 urge_auth 同源；tmp-prod 演示默认走 BRAND_SELF。品牌/用人单位必须由 payload 注入，禁止模块内写死具体名称。
+DEFAULT_IDENTITY_MODE = IDENTITY_BRAND_SELF
+
+
+def _slot(value: str | None, *, fallback: str = "") -> str:
+    """Trim slot; never invent a concrete brand/employer name."""
+    text = str(value or "").strip()
+    return text if text else fallback
 
 
 def beijing_now() -> datetime:
@@ -90,31 +103,62 @@ def build_tmp_prod_opening(*, candidate_name: str, employer: str = "", **_ignore
     return f"您好，请问是{name}本人吗？"
 
 
-def build_tmp_prod_compliance_opening(*, candidate_name: str = "", employer: str = "", **_ignored: Any) -> str:
+def build_tmp_prod_compliance_opening(
+    *,
+    candidate_name: str = "",
+    employer: str = "",
+    client_name: str = "",
+    our_brand_name: str = "",
+    identity_mode: str = DEFAULT_IDENTITY_MODE,
+    **_ignored: Any,
+) -> str:
     """确认本人后的合规开场（不预播，由模型在对方确认后说）。
 
     开场只问「现在方便吗」；「是否收到短信」是事由说明，等对方确认方便后再单独问。
+    身份台词族与 urge_auth 对齐：白标自称客户/渠道；BRAND_SELF 自称我方并说明受托。
+    未注入的具体品牌/用人单位只用泛称占位，禁止回落到演示用公司名。
     """
-    emp = (employer or EMPLOYER_DEFAULT).strip() or EMPLOYER_DEFAULT
+    emp = _slot(employer, fallback="用人单位")
+    brand_or_client = _slot(client_name) or emp
+    our_brand = _slot(our_brand_name)
+    mode = _norm_identity(identity_mode)
+    white = mode in _WHITE_LABEL
+
     # 身份介绍拆成两句，避免电话侧中段听感叠音；录音侧通常正常。
+    if white:
+        identity_bits = (
+            f"您好，我是{brand_or_client}的智能语音助手。"
+            f"正在协助办理您在{emp}的入职背景调查。"
+        )
+    elif our_brand:
+        identity_bits = (
+            f"您好，我是{our_brand}的智能语音助手。"
+            f"受{brand_or_client}委托，正在协助办理您在{emp}的入职背景调查。"
+        )
+    else:
+        identity_bits = (
+            f"您好，我是智能语音助手。"
+            f"受{brand_or_client}委托，正在协助办理您在{emp}的入职背景调查。"
+        )
     return (
-        f"您好，我是{BRAND}的智能语音助手。"
-        f"正在协助办理您在{emp}的入职背景调查。"
-        f"为保证服务质量，本次通话将会录音。"
-        f"今天联系您，是想确认一下您是否收到此前发送的背调授权短信，"
-        f"大约占用您两分钟，现在方便吗？"
+        identity_bits
+        + "今天联系您，是想确认一下您是否收到此前发送的背调授权短信，"
+        + "大约占用您两分钟，现在方便吗？"
     )
 
 
 def build_tmp_prod_opening_parts(*, candidate_name: str, employer: str = "", **_ignored: Any) -> list[str]:
     """方案 A：系统只预播「确认本人」一句。"""
-    return [build_tmp_prod_opening(candidate_name=candidate_name, employer=employer)]
+    return [build_tmp_prod_opening(candidate_name=candidate_name, employer=employer, **_ignored)]
 
 
 def build_tmp_prod_system_role(
     *,
     candidate_name: str = "",
     employer: str = "",
+    client_name: str = "",
+    our_brand_name: str = "",
+    identity_mode: str = DEFAULT_IDENTITY_MODE,
     gender: str = "",
     phone: str = "",
     trigger_beijing_at: str = "",
@@ -122,15 +166,58 @@ def build_tmp_prod_system_role(
     **_ignored: Any,
 ) -> str:
     name = (candidate_name or "候选人").strip()
-    emp = (employer or EMPLOYER_DEFAULT).strip() or EMPLOYER_DEFAULT
+    emp = _slot(employer, fallback="用人单位")
+    brand_or_client = _slot(client_name) or emp
+    our_brand = _slot(our_brand_name)
+    mode = _norm_identity(identity_mode)
+    white = mode in _WHITE_LABEL
     sex = (gender or "").strip()
     phone_s = (phone or "").strip()
     # 必须使用「本通外呼触发时刻」的北京时间，禁止通话中再取 wall clock。
     trigger = parse_trigger_beijing(trigger_beijing_at)
     anchors = build_day_anchors(trigger)
     trigger_str = trigger.strftime("%Y-%m-%d %H:%M:%S")
-    identity_ask = build_tmp_prod_opening(candidate_name=name, employer=emp)
-    compliance = build_tmp_prod_compliance_opening(candidate_name=name, employer=emp)
+    identity_ask = build_tmp_prod_opening(candidate_name=name, employer=_slot(employer))
+    compliance = build_tmp_prod_compliance_opening(
+        candidate_name=name,
+        employer=_slot(employer),
+        client_name=_slot(client_name),
+        our_brand_name=our_brand,
+        identity_mode=mode,
+    )
+
+    if white:
+        self_name = brand_or_client
+        role_line = (
+            f"你是「{self_name}」的智能语音助手，正在以{self_name}名义给候选人打电话，"
+            f"确认背调授权短信是否收到并推动完成授权。"
+            f"话术中禁止出现第三方背调机构名称，禁止说「受某某委托」。"
+            f"禁止编造任务卡未提供的品牌名或用人单位名称。"
+        )
+        identity_mode_label = mode
+    else:
+        self_name = our_brand or "智能语音助手"
+        if our_brand:
+            role_line = (
+                f"你是「{self_name}」的智能语音助手，受「{brand_or_client}」委托，"
+                f"正在给候选人打电话，确认背调授权短信是否收到并推动完成授权。"
+                f"必须说明受托关系；不要展开深度背调讲解。"
+                f"禁止编造任务卡未提供的品牌名或用人单位名称。"
+            )
+        else:
+            role_line = (
+                f"你是智能语音助手，受「{brand_or_client}」委托，"
+                f"正在给候选人打电话，确认背调授权短信是否收到并推动完成授权。"
+                f"必须说明受托关系；任务卡未提供我方品牌名时，禁止自称具体背调机构名称。"
+                f"不要展开深度背调讲解。"
+            )
+        identity_mode_label = IDENTITY_BRAND_SELF
+
+    our_brand_anchor = our_brand or "（未提供，禁止编造）"
+    brand_or_client_anchor = (
+        brand_or_client if (_slot(client_name) or _slot(employer)) else "（未提供，禁止编造）"
+    )
+    emp_anchor = emp if _slot(employer) else "（未提供，禁止编造）"
 
     delivery_ask = "好的，请问您收到这个背调授权短信了吗？"
 
@@ -149,8 +236,8 @@ def build_tmp_prod_system_role(
 2）确认本人后再说合规开场：「{compliance}」"""
 
     return f"""【角色设定】
-你是「{BRAND}」的智能语音助手，正在给候选人打电话，确认背调授权短信是否收到并推动完成授权。
-本通为临时演示产品，严格按下列分支话术推进，不要引入其它品牌，不要展开深度背调讲解。
+{role_line}
+严格按下列分支话术推进。identity_mode={identity_mode_label}。
 
 【外呼触发日（北京时间，天级锚点）⚠ 唯一日历源】
 - 本通触发时刻：{trigger_str}（Asia/Shanghai）——仅用于定「今天/明天」，通话中禁止再取系统当前时间
@@ -174,7 +261,10 @@ def build_tmp_prod_system_role(
 - 候选人姓名：{name}
 - 性别：{sex or "（未提供）"}
 - 手机号：{phone_s or "（未提供）"}
-- 用人单位：{emp}
+- 用人单位：{emp_anchor}
+- 委托方 / 自称品牌：{brand_or_client_anchor}
+- 我方品牌：{our_brand_anchor}
+- 身份模式：{identity_mode_label}
 
 {preplayed_note}
 
@@ -185,7 +275,7 @@ def build_tmp_prod_system_role(
 4. 不要承诺当场发短信/邮件；邮箱路径只登记，说明稍后会发。
 5. ⚠ 邮箱硬约束（最高优先级之一）：对方表示「没收到 / 找不到短信」时，下一句必须主动要对方的常用邮箱地址；未听到对方报出邮箱前，禁止说补发、禁止说「官方邮箱 / 系统邮箱 / 预留邮箱 / 我们邮箱给您发」。
 6. 禁止威胁施压、禁止复读同一整句。
-7. 合规开场（AI 身份 + 录音告知 + 来电事由 + 现在方便吗）整段只说一次，禁止开场复读。
+7. 合规开场（AI 身份 + 来电事由 + 现在方便吗）整段只说一次，禁止开场复读。
 8. 复述承诺时间时必须带上触发日历换算出的月日（例如「{anchors['tomorrow_md']}中午12点前」），不要只说「明天」含糊收线（除非已落到天级兜底）。
 9. 翻找等待：对方说「我看看 / 我翻一下 / 稍等」时，允许静默等对方；约 15 秒仍无实质回复，再轻声追问「您找到了吗？有没有看到授权短信？」；禁止对方刚说要找就立刻连问或改分支。
 
@@ -253,11 +343,32 @@ def build_tmp_prod_system_role(
 
 
 def tmp_prod_slots_from_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    """Map partner API / batch payload → build_tmp_prod_* kwargs.
+
+    不在此回落具体演示品牌名；缺槽位保持空串，由话术层用泛称占位并禁止编造。
+    """
     p = payload or {}
     trigger = stamp_trigger_beijing(p)
+
+    identity = _norm_identity(str(p.get("identity_mode") or DEFAULT_IDENTITY_MODE))
+    client = _slot(
+        p.get("client_name")
+        or p.get("employer")
+        or p.get("brand_name")
+        or p.get("channel_brand_name")
+    )
+    # CHANNEL_BRAND：渠道品牌名非空时覆盖自称
+    if identity == IDENTITY_CHANNEL and p.get("channel_brand_name"):
+        client = _slot(p.get("channel_brand_name")) or client
+
+    employer = _slot(p.get("employer")) or client
+
     return {
         "candidate_name": str(p.get("candidate_name") or p.get("name") or ""),
-        "employer": str(p.get("employer") or p.get("client_name") or EMPLOYER_DEFAULT),
+        "employer": employer,
+        "client_name": client,
+        "our_brand_name": _slot(p.get("our_brand_name") or p.get("our_brand")),
+        "identity_mode": identity,
         "gender": str(p.get("gender") or ""),
         "phone": str(p.get("phone") or ""),
         "trigger_beijing_at": trigger,
