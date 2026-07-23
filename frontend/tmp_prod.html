@@ -137,7 +137,6 @@
         apiKey: document.getElementById("apiKey"),
         identityMode: document.getElementById("identityMode"),
         client: document.getElementById("client"),
-        clientLabel: document.getElementById("clientLabel"),
         ourBrand: document.getElementById("ourBrand"),
         ourBrandWrap: document.getElementById("ourBrandWrap"),
         uploadBtn: document.getElementById("uploadBtn"),
@@ -153,9 +152,6 @@
       function syncIdentityFields() {
         var brandSelf = el.identityMode.value === "BRAND_SELF";
         if (el.ourBrandWrap) el.ourBrandWrap.style.display = brandSelf ? "" : "none";
-        if (el.clientLabel) {
-          el.clientLabel.textContent = brandSelf ? "委托方" : "对外自称品牌（客户B）";
-        }
       }
 
       function headers(json) {

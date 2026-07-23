@@ -199,7 +199,7 @@
 
       <div class="row">
         <div>
-          <label for="client" id="clientLabel">对外自称品牌（客户B）</label>
+          <label for="client" id="clientLabel">委托方</label>
           <input id="client" type="text" value="比赛日科技" />
         </div>
         <div id="ourBrandWrap" style="display:none">
@@ -302,7 +302,6 @@
         phone: document.getElementById("phone"),
         candidate: document.getElementById("candidate"),
         client: document.getElementById("client"),
-        clientLabel: document.getElementById("clientLabel"),
         identityMode: document.getElementById("identityMode"),
         ourBrand: document.getElementById("ourBrand"),
         ourBrandWrap: document.getElementById("ourBrandWrap"),
@@ -351,9 +350,6 @@
       function syncIdentityFields() {
         var brandSelf = el.identityMode.value === "BRAND_SELF";
         if (el.ourBrandWrap) el.ourBrandWrap.style.display = brandSelf ? "" : "none";
-        if (el.clientLabel) {
-          el.clientLabel.textContent = brandSelf ? "委托方" : "对外自称品牌（客户B）";
-        }
       }
 
       function payloadFromForm() {

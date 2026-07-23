@@ -245,7 +245,6 @@
         gender: document.getElementById("gender"),
         employer: document.getElementById("employer"),
         client: document.getElementById("client"),
-        clientLabel: document.getElementById("clientLabel"),
         identityMode: document.getElementById("identityMode"),
         ourBrand: document.getElementById("ourBrand"),
         ourBrandWrap: document.getElementById("ourBrandWrap"),
@@ -457,9 +456,6 @@
       function syncIdentityFields() {
         var brandSelf = el.identityMode.value === "BRAND_SELF";
         if (el.ourBrandWrap) el.ourBrandWrap.style.display = brandSelf ? "" : "none";
-        if (el.clientLabel) {
-          el.clientLabel.textContent = brandSelf ? "委托方" : "对外自称品牌（客户B）";
-        }
       }
 
       ["candidate", "gender", "employer", "client", "ourBrand", "phone"].forEach(function (id) {
