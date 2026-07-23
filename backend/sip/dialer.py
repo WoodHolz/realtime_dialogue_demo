@@ -304,9 +304,27 @@ async def _run_sip_bridged_call(
         summary = "通话结束"
         if outcome.transcript:
             summary = f"通话结束，共 {len(outcome.transcript)} 条转写"
+        result_code = "completed"
+        if is_tmp_prod_scenario(task.scenario):
+            from backend.tmp_prod.outcome import extract_tmp_prod_outcome
+
+            extracted = extract_tmp_prod_outcome(
+                outcome.transcript,
+                fallback_result="completed",
+                fallback_summary=summary,
+            )
+            result_code = extracted.get("result") or "completed"
+            summary = extracted.get("result_summary") or summary
+            # Stash structured fields for batch / partner consumers.
+            tel["business"] = {
+                "result": result_code,
+                "result_summary": summary,
+                "email": extracted.get("email") or "",
+                "promised_time": extracted.get("promised_time") or "",
+            }
         await complete_call(
             call_id,
-            result="completed",
+            result=result_code,
             result_summary=summary,
             transcript=outcome.transcript,
             turn_timings=outcome.turn_timings,

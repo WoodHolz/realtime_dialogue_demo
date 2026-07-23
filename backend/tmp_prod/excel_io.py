@@ -106,6 +106,7 @@ def write_results_xlsx(rows: list[dict[str, Any]]) -> bytes:
         "失败原因",
         "承诺完成时间",
         "登记邮箱",
+        "交付跟进",
         "最近call_id",
         "转写摘要",
         "双声道录音(L用户/R AI)",
@@ -128,6 +129,8 @@ def write_results_xlsx(rows: list[dict[str, Any]]) -> bytes:
             recs = r.get("recordings") or {}
             if isinstance(recs, dict):
                 stereo = str(recs.get("stereo") or "")
+        result = str(r.get("result") or "")
+        delivery_followup = "是" if result == "no_email_feedback" else ""
         ws.append(
             [
                 r.get("employer", ""),
@@ -135,12 +138,13 @@ def write_results_xlsx(rows: list[dict[str, Any]]) -> bytes:
                 r.get("gender", ""),
                 r.get("phone", ""),
                 r.get("status", ""),
-                r.get("result", ""),
+                result,
                 r.get("result_summary", ""),
                 r.get("attempt", 0),
                 r.get("fail_reason", ""),
                 r.get("promised_time", ""),
                 r.get("email", ""),
+                delivery_followup,
                 r.get("last_call_id", ""),
                 summary,
                 stereo,

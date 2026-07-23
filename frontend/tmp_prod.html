@@ -116,7 +116,7 @@
           <thead>
             <tr>
               <th>用人单位</th><th>姓名</th><th>性别</th><th>手机</th>
-              <th>状态</th><th>结果</th><th>尝试</th><th>失败原因</th><th>call_id</th><th>双声道录音</th>
+              <th>状态</th><th>结果</th><th>结果说明</th><th>尝试</th><th>失败原因</th><th>call_id</th><th>双声道录音</th>
             </tr>
           </thead>
           <tbody id="tbody"></tbody>
@@ -176,6 +176,7 @@
             "<td>" + (c.phone || "") + "</td>" +
             "<td><span class='tag'>" + (c.status || "") + "</span></td>" +
             "<td>" + (c.result || "") + "</td>" +
+            "<td style='max-width:220px'>" + (c.result_summary || "") + "</td>" +
             "<td>" + (c.attempt || 0) + "</td>" +
             "<td>" + (c.fail_reason || "") + "</td>" +
             "<td>" + (c.last_call_id || "") + "</td>" +

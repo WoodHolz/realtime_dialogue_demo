@@ -207,15 +207,25 @@ async def dial_one_contact(
                 **rec_fields,
             )
     else:
-        result = getattr(finished, "result", None) or "completed"
+        from backend.tmp_prod.outcome import extract_tmp_prod_outcome
+
+        fallback_result = getattr(finished, "result", None) or "completed"
+        fallback_summary = getattr(finished, "result_summary", "") or ""
+        outcome = extract_tmp_prod_outcome(
+            transcript,
+            fallback_result=fallback_result,
+            fallback_summary=fallback_summary,
+        )
         err = getattr(finished, "error", "") or ""
         status = "failed" if getattr(finished, "status", "") == "failed" else "completed"
         store.update_contact(
             batch_id,
             contact.contact_id,
             status=status,
-            result=result,
-            result_summary=getattr(finished, "result_summary", "") or "",
+            result=outcome.get("result") or fallback_result,
+            result_summary=outcome.get("result_summary") or fallback_summary,
+            email=outcome.get("email") or "",
+            promised_time=outcome.get("promised_time") or "",
             fail_reason=err if status == "failed" else "",
             next_retry_at="",
             **rec_fields,

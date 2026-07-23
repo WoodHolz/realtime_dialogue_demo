@@ -1,9 +1,9 @@
 # -*- coding: utf-8 -*-
 """tmp-prod 临时演示剧本 — 硬编码话术 + 外呼触发日（北京时间）注入。
 
-开场方案 A（临时）：系统只预播「确认本人」；合规开场等对方确认后再由模型说。
+开场：人名已确认，不再问「是不是本人」；系统预播整段开场，分 3 段 TTS（段间短停，防电话侧叠音，同 urge_auth）。
 
-主流程顺序：确认本人 → 合规开场（只问方便）→ 方便后再问是否收到短信
+主流程顺序：开场问候与介绍（只问方便）→ 方便后再问是否收到短信
 → 已收到催办时间 / 没收到采邮箱；翻找时约 15 秒静默后追问；先收到后改口没收到须切回采邮箱。
 
 时间口径（天级锚点 + 小时级争取）：
@@ -84,7 +84,11 @@ def format_ymd_cn(dt: datetime) -> str:
 
 
 def build_day_anchors(trigger: datetime) -> dict[str, str]:
-    """Day-level calendar anchors from trigger Beijing time."""
+    """Day-level calendar anchors from trigger Beijing time.
+
+    口播用相对说法（今天/明天 + 几点），不要再叠「×月×日」以免听感重复。
+    月日只留在 today_md / tomorrow_md 等日历字段：对方追问几号、或内心回写时用。
+    """
     today = trigger.astimezone(BJ).replace(hour=0, minute=0, second=0, microsecond=0)
     tomorrow = today + timedelta(days=1)
     return {
@@ -92,16 +96,53 @@ def build_day_anchors(trigger: datetime) -> dict[str, str]:
         "today_md": format_md(today),
         "tomorrow_ymd": format_ymd_cn(tomorrow),
         "tomorrow_md": format_md(tomorrow),
-        "deadline_today_18": f"今天18点前（{format_md(today)} 18:00）",
-        "offer_tomorrow_12": f"明天中午12点前（{format_md(tomorrow)} 12:00）",
-        "offer_tomorrow_14": f"明天下午2点前（{format_md(tomorrow)} 14:00）",
-        "tomorrow_day_only": f"明天（{format_md(tomorrow)}）当天内",
+        # 口播台词（禁止再附带月日括号）
+        "deadline_today_18": "今天18点前",
+        "offer_tomorrow_12": "明天中午12点前",
+        "offer_tomorrow_14": "明天下午2点前",
+        "tomorrow_day_only": "明天当天内",
+        # 内心回写用（勿整段念给对方）
+        "deadline_today_18_writeback": f"{format_md(today)} 18:00",
+        "offer_tomorrow_12_writeback": f"{format_md(tomorrow)} 12:00",
+        "offer_tomorrow_14_writeback": f"{format_md(tomorrow)} 14:00",
     }
 
 
-def build_tmp_prod_opening(*, candidate_name: str, employer: str = "", **_ignored: Any) -> str:
+def build_tmp_prod_opening_parts(
+    *,
+    candidate_name: str,
+    employer: str = "",
+    client_name: str = "",
+    our_brand_name: str = "",
+    identity_mode: str = DEFAULT_IDENTITY_MODE,
+    **_ignored: Any,
+) -> list[str]:
+    """系统预播：整段开场拆 3 段 TTS（同 urge_auth opening_parts + agent_bridge 段间 drain）。
+
+    口播连读是一整段；TTS 按句切分并在段间等待播放 drain，避免电话侧中段叠音。
+    """
     name = (candidate_name or "候选人").strip()
-    return f"您好，请问是{name}本人吗？"
+    emp = _slot(employer, fallback="用人单位")
+    brand_or_client = _slot(client_name) or emp
+    our_brand = _slot(our_brand_name)
+    mode = _norm_identity(identity_mode)
+    white = mode in _WHITE_LABEL
+
+    part1 = f"您好，{name}，"
+    if white:
+        part1 += f"我是{brand_or_client}的 AI 语音助手，"
+        part2 = f"正在协助办理您在{emp}的入职背景调查。"
+    elif our_brand:
+        part1 += f"我是{our_brand}的 AI 语音助手，"
+        part2 = f"受{brand_or_client}委托，正在协助办理您在{emp}的入职背景调查。"
+    else:
+        part1 += "我是 AI 语音助手，"
+        part2 = f"受{brand_or_client}委托，正在协助办理您在{emp}的入职背景调查。"
+    part3 = (
+        "今天联系您，是想确认一下您是否收到此前发送的背调授权短信，"
+        "大约占用您两分钟，现在方便吗？"
+    )
+    return [part1, part2, part3]
 
 
 def build_tmp_prod_compliance_opening(
@@ -113,48 +154,37 @@ def build_tmp_prod_compliance_opening(
     identity_mode: str = DEFAULT_IDENTITY_MODE,
     **_ignored: Any,
 ) -> str:
-    """确认本人后的合规开场（不预播，由模型在对方确认后说）。
-
-    开场只问「现在方便吗」；「是否收到短信」是事由说明，等对方确认方便后再单独问。
-    身份台词族与 urge_auth 对齐：
-    - 白标：client_name = 对外自称品牌（客户 B）
-    - BRAND_SELF：our_brand_name = 我方品牌，client_name = 委托方
-    未注入的具体品牌/用人单位只用泛称占位，禁止回落到演示用公司名。
-    """
-    emp = _slot(employer, fallback="用人单位")
-    brand_or_client = _slot(client_name) or emp
-    our_brand = _slot(our_brand_name)
-    mode = _norm_identity(identity_mode)
-    white = mode in _WHITE_LABEL
-
-    # 身份介绍拆成两句，避免电话侧中段听感叠音；录音侧通常正常。
-    if white:
-        # 对外自称品牌（客户 B）
-        identity_bits = (
-            f"您好，我是{brand_or_client}的智能语音助手。"
-            f"正在协助办理您在{emp}的入职背景调查。"
+    """完整开场白（问候 + 身份 + 事由 + 现在方便吗），供预览 / opening_line。"""
+    return "".join(
+        build_tmp_prod_opening_parts(
+            candidate_name=candidate_name or "候选人",
+            employer=employer,
+            client_name=client_name,
+            our_brand_name=our_brand_name,
+            identity_mode=identity_mode,
+            **_ignored,
         )
-    elif our_brand:
-        # 我方品牌 + 委托方
-        identity_bits = (
-            f"您好，我是{our_brand}的智能语音助手。"
-            f"受{brand_or_client}委托，正在协助办理您在{emp}的入职背景调查。"
-        )
-    else:
-        identity_bits = (
-            f"您好，我是智能语音助手。"
-            f"受{brand_or_client}委托，正在协助办理您在{emp}的入职背景调查。"
-        )
-    return (
-        identity_bits
-        + "今天联系您，是想确认一下您是否收到此前发送的背调授权短信，"
-        + "大约占用您两分钟，现在方便吗？"
     )
 
 
-def build_tmp_prod_opening_parts(*, candidate_name: str, employer: str = "", **_ignored: Any) -> list[str]:
-    """方案 A：系统只预播「确认本人」一句。"""
-    return [build_tmp_prod_opening(candidate_name=candidate_name, employer=employer, **_ignored)]
+def build_tmp_prod_opening(
+    *,
+    candidate_name: str,
+    employer: str = "",
+    client_name: str = "",
+    our_brand_name: str = "",
+    identity_mode: str = DEFAULT_IDENTITY_MODE,
+    **_ignored: Any,
+) -> str:
+    """完整开场白（parts 拼接），供预览 / opening_line。"""
+    return build_tmp_prod_compliance_opening(
+        candidate_name=candidate_name,
+        employer=employer,
+        client_name=client_name,
+        our_brand_name=our_brand_name,
+        identity_mode=identity_mode,
+        **_ignored,
+    )
 
 
 def build_tmp_prod_system_role(
@@ -182,8 +212,7 @@ def build_tmp_prod_system_role(
     trigger = parse_trigger_beijing(trigger_beijing_at)
     anchors = build_day_anchors(trigger)
     trigger_str = trigger.strftime("%Y-%m-%d %H:%M:%S")
-    identity_ask = build_tmp_prod_opening(candidate_name=name, employer=_slot(employer))
-    compliance = build_tmp_prod_compliance_opening(
+    full_opening = build_tmp_prod_compliance_opening(
         candidate_name=name,
         employer=_slot(employer),
         client_name=_slot(client_name),
@@ -234,18 +263,19 @@ def build_tmp_prod_system_role(
     delivery_ask = "好的，请问您收到这个背调授权短信了吗？"
 
     if opening_preplayed:
-        preplayed_note = f"""【开场已由系统先播（方案 A）】
-系统只播过一句：「{identity_ask}」
-- 禁止再问「是不是本人 / 请问是{name}本人吗」整句复读。
-- 对方确认本人后，立刻说合规开场（下面完整台词，只说一次）：
-「{compliance}」
-- 对方否认本人 / 不是本人：礼貌结束，勿播合规开场。
-- 对方已直接说方便：可跳过合规里「现在方便吗」，立刻进入送达确认：「{delivery_ask}」
-- 对方已直接说收到/没收到短信：可跳过「现在方便吗」与送达确认追问，按对应分支推进。"""
+        preplayed_note = f"""【开场已由系统先播】
+系统已播完整开场：「{full_opening}」
+- 人名已确认，禁止再问「是不是本人 / 请问是{name}本人吗」。
+- 禁止再念问候或合规开场（AI 身份 + 来电事由 + 现在方便吗），整段只说一次。
+- **只等对方是否方便**。
+- 对方已直接说方便：立刻进入送达确认：「{delivery_ask}」
+- 对方已直接说收到/没收到短信：可跳过「现在方便吗」与送达确认追问，按对应分支推进。
+- 对方主动说不是本人 / 打错了：礼貌结束，勿继续背调细节。"""
     else:
         preplayed_note = f"""【开场】
-1）先说：「{identity_ask}」
-2）确认本人后再说合规开场：「{compliance}」"""
+人名已确认，无需再问是否本人。直接说完整开场（只说一次）：
+「{full_opening}」
+然后只等对方是否方便。"""
 
     return f"""【角色设定】
 {role_line}
@@ -255,8 +285,9 @@ def build_tmp_prod_system_role(
 - 本通触发时刻：{trigger_str}（Asia/Shanghai）——仅用于定「今天/明天」，通话中禁止再取系统当前时间
 - 「今天」= {anchors['today_ymd']}（{anchors['today_md']}）
 - 「明天」= {anchors['tomorrow_ymd']}（{anchors['tomorrow_md']}）
-- 默认催办截止（首轮）：{anchors['deadline_today_18']}
+- 默认催办截止（首轮口播）：{anchors['deadline_today_18']}（内心回写={anchors['deadline_today_18_writeback']}）
 - 若对方问今天/明天几号：按上表回答，禁止自行换算
+- ⚠ 口播时间只说「今天/明天 + 几点」，禁止再说一遍「×月×日×点」叠读（例如不要说「今天18点前，7月23日18点前」）
 
 【完成时间敲定阶梯（PM 口径，必须遵守）】
 目标：尽量拿到「未来某个具体到小时」的完成时间；实在拿不到才退到「天级」给交付顾问。
@@ -288,14 +319,13 @@ def build_tmp_prod_system_role(
 5. ⚠ 邮箱硬约束（最高优先级之一）：对方表示「没收到 / 找不到短信」时，下一句必须主动要对方的常用邮箱地址；未听到对方报出邮箱前，禁止说补发、禁止说「官方邮箱 / 系统邮箱 / 预留邮箱 / 我们邮箱给您发」。
 6. 禁止威胁施压、禁止复读同一整句。
 7. 合规开场（AI 身份 + 来电事由 + 现在方便吗）整段只说一次，禁止开场复读。
-8. 复述承诺时间时必须带上触发日历换算出的月日（例如「{anchors['tomorrow_md']}中午12点前」），不要只说「明天」含糊收线（除非已落到天级兜底）。
+8. 口播复述承诺时间只用「今天/明天 + 几点」（如「明天中午12点前」）；禁止再叠读月日（不要「明天12点前，7月24日12点前」）。月日仅在对方追问「今天/明天是几号」或内心回写时使用。
 9. 翻找等待：对方说「我看看 / 我翻一下 / 稍等」时，允许静默等对方；约 15 秒仍无实质回复，再轻声追问「您找到了吗？有没有看到授权短信？」；禁止对方刚说要找就立刻连问或改分支。
 
 【主流程】
 
-■ 确认本人
-- 不是本人 / 无法接通本人：礼貌结束，不要向第三方透露背调细节。
-- 确认本人 → 说合规开场（若系统已预播确认本人句，则不要再问本人）→ **只等对方是否方便**。
+■ 开场后（人名已确认，不再核身）
+- 开场只问方便；若对方主动说不是本人 / 打错了：礼貌结束，不要向第三方透露背调细节。
 - 不方便：快速约定晚点再联系并收线（本演示不做复杂改约调度）。
 - 方便：进入【送达确认】（此时才问是否收到短信）。
 
@@ -309,15 +339,15 @@ def build_tmp_prod_system_role(
 【AI】好的，辛苦您尽快打开短信，按照页面提示完善个人信息并完成授权。为了不影响后续背调进度，请您尽量在{anchors['deadline_today_18']}完成。您看可以吗？
 - 对方答应今天 18 点前完成：
 【AI】好的，我为您记录了，辛苦您按时完成，谢谢。
-→ 内心：promised_time={anchors['today_md']} 18:00；time_precision=hour → 请对方挂机收线。
+→ 内心：promised_time={anchors['deadline_today_18_writeback']}；time_precision=hour → 请对方挂机收线。
 - 对方无法在今天 18 点前完成 / 说明天再弄：
   进入【完成时间敲定阶梯】第 2 步起：
   【AI】好的，理解。那我先帮您约到{anchors['offer_tomorrow_12']}，您看可以吗？
-  - 可以：【AI】好的，我记录的是{anchors['offer_tomorrow_12']}完成信息填写和授权。辛苦您了，谢谢。→ time_precision=hour
+  - 可以：【AI】好的，我记录的是{anchors['offer_tomorrow_12']}完成信息填写和授权。辛苦您了，谢谢。→ 内心 promised_time={anchors['offer_tomorrow_12_writeback']}；time_precision=hour
   - 中午不行：【AI】那改到{anchors['offer_tomorrow_14']}可以吗？
-    - 可以：复述 14:00 承诺 → time_precision=hour
+    - 可以：【AI】好的，我记录的是{anchors['offer_tomorrow_14']}完成信息填写和授权。辛苦您了，谢谢。→ 内心 promised_time={anchors['offer_tomorrow_14_writeback']}；time_precision=hour
     - 仍不行：【AI】那您明天能不能完成？方便跟我说一个确切时间吗？我这边记下来。
-      - 对方给出确切时刻：复述「{{承诺完成时间}}」（换算到 {anchors['tomorrow_md']} 或对方说的日期）→ time_precision=hour
+      - 对方给出确切时刻：口播复述只用「明天×点」相对说法（勿再叠月日）；内心 promised_time 可写 {anchors['tomorrow_md']} + 对方时刻 → time_precision=hour
       - 仍给不出确切时刻：【AI】好的，那我先按{anchors['tomorrow_day_only']}帮您登记，后续会有顾问老师跟您确认具体时间，辛苦您了。→ time_precision=day，promised_day={anchors['tomorrow_md']}
 - ⚠ 路径翻转：任意时刻对方改口「其实没收到 / 找不到短信」→ 立刻离开本分支，进入【没有收到授权短信】；下一句必须问邮箱地址。
 
@@ -339,18 +369,21 @@ def build_tmp_prod_system_role(
 第 3 步｜邮箱确认无误后（此时才可以说登记后会发）
 【AI】好的，已经为您登记。稍后请您留意收件箱和垃圾邮件箱，收到授权通知后，请尽量在{anchors['deadline_today_18']}完善信息并完成授权，谢谢。
   - 若对方表示赶不及今天 18 点：再按【完成时间敲定阶梯】处理，然后收线。
-  - 若对方答应今天 18 点：内心 email_registered + promised_time={anchors['today_md']} 18:00；time_precision=hour → 请对方挂机收线。
+  - 若对方答应今天 18 点：内心 email_registered + promised_time={anchors['deadline_today_18_writeback']}；time_precision=hour → 请对方挂机收线。
 
 第 4 步｜对方明确不愿提供邮箱（只有对方拒绝给地址时才走）
-【AI】没关系，我先记录您没有收到短信的情况，并反馈相关人员处理。后续请您留意补发通知，收到后及时完善信息并完成授权，谢谢。
-→ 内心：no_email_feedback → 请对方挂机收线。
+【AI】好的，祝您生活愉快，再见。
+→ 内心回写（勿念）：result=no_email_feedback；delivery_needed=true
+→ 含义：候选人拒绝提供邮箱，需交付顾问跟进处理（补发/联系），然后挂机收线。
 
 【结束时内心标签（勿念给对方）】
 归纳结果标签之一，并尽量带时间精度：
 - received_will_complete（已承诺小时级，含今天18点/明天12点/14点/对方确切时刻）
 - promised_day_only（只有天级，无小时；供交付顾问跟进）
-- email_registered / no_email_feedback / not_convenient / not_self / unclear
-同时在内心记下：time_precision=hour|day；promised_time 或 promised_day（用上面注入的月日，勿编造）。
+- email_registered（已登记邮箱）
+- no_email_feedback（拒绝提供邮箱 → 必须回写，供交付跟进；口播只用「好的，祝您生活愉快，再见」）
+- not_convenient / not_self / unclear
+同时在内心记下：time_precision=hour|day；promised_time 或 promised_day（用上面注入的月日，勿编造）；email（若已确认）。
 """
 
 
