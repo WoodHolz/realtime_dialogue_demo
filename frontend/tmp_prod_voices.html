@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>tmp-prod · 豆包音色选型</title>
+  <title>tmp-prod · 豆包音色试听</title>
   <style>
     :root {
       --bg: #f2f4f3;
@@ -14,6 +14,9 @@
       --accent-soft: #e7f2ed;
       --card: #ffffff;
       --selected: #0d5c45;
+      --danger: #9b2c2c;
+      --user: #0f766e;
+      --ai: #b45309;
     }
     * { box-sizing: border-box; }
     body {
@@ -25,7 +28,7 @@
         var(--bg);
       min-height: 100vh;
     }
-    main { width: min(1100px, calc(100% - 2rem)); margin: 2rem auto 3rem; }
+    main { width: min(1180px, calc(100% - 2rem)); margin: 2rem auto 3rem; }
     h1 { margin: 0 0 0.35rem; font-size: 1.6rem; }
     .lead { color: var(--muted); margin: 0 0 1.25rem; line-height: 1.5; }
     .nav {
@@ -34,13 +37,22 @@
     }
     .nav a { color: var(--accent); text-decoration: none; }
     .nav a:hover { text-decoration: underline; }
+    .layout {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(300px, 380px);
+      gap: 1rem;
+      align-items: start;
+    }
+    @media (max-width: 960px) {
+      .layout { grid-template-columns: 1fr; }
+    }
     .sticky {
       position: sticky; top: 0; z-index: 5;
-      background: rgba(242, 244, 243, 0.92);
+      background: rgba(242, 244, 243, 0.94);
       backdrop-filter: blur(8px);
       border-bottom: 1px solid var(--line);
-      margin: 0 -1rem 1.25rem;
-      padding: 0.85rem 1rem;
+      margin: 0 0 1rem;
+      padding: 0.85rem 0;
     }
     .selected-bar {
       display: flex; flex-wrap: wrap; gap: 0.75rem 1.25rem;
@@ -53,12 +65,12 @@
       padding: 0.1rem 0.35rem; border-radius: 4px;
     }
     .actions { display: flex; flex-wrap: wrap; gap: 0.5rem; }
-    button, .btn {
+    button {
       font: inherit; border: 0; border-radius: 8px; padding: 0.55rem 0.9rem;
       background: var(--accent); color: #fff; font-weight: 600; cursor: pointer;
-      text-decoration: none; display: inline-flex; align-items: center;
     }
-    button.secondary, .btn.secondary { background: #2f3d36; }
+    button.secondary { background: #2f3d36; }
+    button.danger { background: var(--danger); }
     button:disabled { opacity: 0.55; cursor: not-allowed; }
     .filters {
       display: flex; flex-wrap: wrap; gap: 0.5rem; margin-bottom: 1rem;
@@ -78,16 +90,11 @@
       padding: 1rem 1.1rem 1.15rem;
       margin-bottom: 1rem;
     }
-    .scene h2 {
-      margin: 0 0 0.75rem;
-      font-size: 1.05rem;
-    }
-    .scene .count {
-      color: var(--muted); font-weight: 500; font-size: 0.85rem;
-    }
+    .scene h2 { margin: 0 0 0.75rem; font-size: 1.05rem; }
+    .scene .count { color: var(--muted); font-weight: 500; font-size: 0.85rem; }
     .grid {
       display: grid;
-      grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+      grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
       gap: 0.65rem;
     }
     .voice {
@@ -109,7 +116,7 @@
     .voice .name { font-weight: 700; font-size: 0.95rem; margin-bottom: 0.25rem; }
     .voice .vt {
       font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-      font-size: 0.72rem; color: var(--muted); word-break: break-all; line-height: 1.35;
+      font-size: 0.7rem; color: var(--muted); word-break: break-all; line-height: 1.35;
     }
     .voice .lang {
       display: inline-block; margin-top: 0.4rem;
@@ -117,18 +124,62 @@
       background: #fff; border: 1px solid #b8d9ce;
       border-radius: 999px; padding: 0.05rem 0.45rem;
     }
-    .hint { font-size: 0.8rem; color: var(--muted); margin-top: 0.75rem; line-height: 1.45; }
+    .panel {
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      padding: 1rem 1.1rem 1.15rem;
+      position: sticky;
+      top: 5.5rem;
+    }
+    .panel h2 {
+      margin: 0 0 0.65rem;
+      font-size: 0.95rem;
+      color: var(--muted);
+      letter-spacing: 0.02em;
+      text-transform: uppercase;
+    }
+    .status {
+      white-space: pre-wrap; font-size: 0.84rem; line-height: 1.45;
+      background: #f7faf8; border: 1px solid var(--line); border-radius: 8px;
+      padding: 0.7rem; min-height: 2.8rem; margin: 0.6rem 0;
+      word-break: break-word;
+    }
+    .status.err { color: var(--danger); background: #fff5f5; }
+    .tx {
+      max-height: 360px; overflow: auto; margin-top: 0.5rem;
+      border: 1px solid var(--line); border-radius: 8px; background: #fafcfb;
+    }
+    .tx-item {
+      padding: 0.6rem 0.7rem; border-bottom: 1px solid var(--line);
+      font-size: 0.84rem; line-height: 1.45;
+    }
+    .tx-item:last-child { border-bottom: 0; }
+    .badge {
+      display: inline-block; padding: 0.05rem 0.4rem; border-radius: 999px;
+      font-weight: 700; font-size: 0.68rem; margin-right: 0.35rem;
+    }
+    .badge.user { background: #ccfbf1; color: var(--user); }
+    .badge.ai { background: #ffedd5; color: var(--ai); }
+    .empty { color: var(--muted); font-size: 0.82rem; padding: 0.75rem; }
+    .hint { font-size: 0.8rem; color: var(--muted); margin-top: 0.65rem; line-height: 1.45; }
+    .live { display: inline-flex; align-items: center; gap: 0.35rem; font-size: 0.8rem; color: var(--accent); }
+    .dot {
+      width: 0.55rem; height: 0.55rem; border-radius: 50%;
+      background: #94a3b8;
+    }
+    .dot.on { background: #16a34a; box-shadow: 0 0 0 3px rgba(22, 163, 74, 0.2); }
   </style>
 </head>
 <body>
   <main>
     <nav class="nav">
       <a id="linkBatch" href="./">← 批量演示</a>
-      <a id="linkSingle" href="./single">单人测试</a>
+      <a id="linkSingle" href="./single">单人外呼</a>
     </nav>
-    <h1>tmp-prod · 豆包音色选型</h1>
+    <h1>tmp-prod · 豆包音色试听</h1>
     <p class="lead">
-      给 PM 挑选 tmp-prod 外呼用的豆包音色（S2S-Omni / SC 2.0 / O 2.0）。选中后可跳到单人测试页直接外呼试听。
+      选音色后在本页直接开麦对话（豆包 duplex），不必外呼。适合 PM 快速对比 S2S-Omni / SC 2.0 / O 2.0。
     </p>
 
     <div class="sticky">
@@ -136,16 +187,29 @@
         <div class="selected-meta" id="selectedMeta">加载中…</div>
         <div class="actions">
           <button type="button" class="secondary" id="copyBtn">复制 voice_type</button>
-          <a class="btn" id="goSingle" href="./single">用此音色去单人测试 →</a>
+          <button type="button" id="startBtn">开始试听对话</button>
+          <button type="button" class="danger" id="stopBtn" disabled>结束</button>
         </div>
       </div>
     </div>
 
-    <div class="filters" id="filters"></div>
-    <div id="catalog"></div>
-    <p class="hint">
-      默认外呼音色为 vivi（<code>zh_female_vv_jupiter_bigtts</code>）。选择会写入本机 localStorage，单人测试 / 批量页会自动带上。
-    </p>
+    <div class="layout">
+      <section>
+        <div class="filters" id="filters"></div>
+        <div id="catalog"></div>
+      </section>
+      <aside>
+        <section class="panel">
+          <h2>网页对话</h2>
+          <div class="live"><span class="dot" id="liveDot"></span><span id="liveLabel">未连接</span></div>
+          <div class="status" id="status">选音色后点「开始试听对话」。浏览器会请求麦克风权限。</div>
+          <div class="tx" id="txBox"><div class="empty">对话开始后显示转写</div></div>
+          <p class="hint">
+            接通后会先让 AI 说一两句方便听音色；之后你直接说话即可。换音色请先结束再开新会话。
+          </p>
+        </section>
+      </aside>
+    </div>
   </main>
 
   <script type="application/json" id="voices-boot"><!--__TMP_PROD_VOICES_BOOT_JSON__--></script>
@@ -154,6 +218,12 @@
       var pathPrefix = location.pathname.indexOf("/s2s/") === 0 || location.pathname === "/s2s"
         ? "/s2s" : "";
       var STORAGE_KEY = "tmp_prod_voice_type";
+      var VOICE_LAB_SYSTEM_ROLE =
+        "你是芝麻背调催授权场景的外呼语音助手（音色试听模式）。" +
+        "说话自然、简洁，像真人电话沟通。每次回答控制在一两句以内，方便用户对比音色。" +
+        "不要提及你在试听，也不要输出列表或长说明。";
+      var VOICE_LAB_STYLE = "口语化、礼貌、语速适中，句子短。";
+      var GREET_QUERY = "请用一两句自然口语打个招呼，方便我试听你的音色。不要长篇大论。";
 
       document.getElementById("linkBatch").href = pathPrefix + "/tmp-prod";
       document.getElementById("linkSingle").href = pathPrefix + "/tmp-prod/single";
@@ -176,8 +246,13 @@
         catalog: document.getElementById("catalog"),
         filters: document.getElementById("filters"),
         selectedMeta: document.getElementById("selectedMeta"),
-        goSingle: document.getElementById("goSingle"),
         copyBtn: document.getElementById("copyBtn"),
+        startBtn: document.getElementById("startBtn"),
+        stopBtn: document.getElementById("stopBtn"),
+        status: document.getElementById("status"),
+        txBox: document.getElementById("txBox"),
+        liveDot: document.getElementById("liveDot"),
+        liveLabel: document.getElementById("liveLabel"),
       };
 
       var activeScene = "all";
@@ -192,22 +267,18 @@
       });
       if (!voiceIndex[selected]) selected = defaultVoice;
 
-      function updateSelectedBar() {
-        var meta = voiceIndex[selected] || { name: selected, voice_type: selected, lang: "", scene: "" };
-        el.selectedMeta.innerHTML =
-          "当前选择：<strong>" + escapeHtml(meta.name) + "</strong>" +
-          (meta.scene ? (" · " + escapeHtml(meta.scene)) : "") +
-          (meta.lang ? (" · " + escapeHtml(meta.lang)) : "") +
-          "<br/><code>" + escapeHtml(meta.voice_type) + "</code>";
-        el.goSingle.href =
-          pathPrefix + "/tmp-prod/single?voice=" + encodeURIComponent(selected);
-        localStorage.setItem(STORAGE_KEY, selected);
-        document.querySelectorAll(".voice").forEach(function (node) {
-          node.classList.toggle("picked", node.getAttribute("data-vt") === selected);
-          var input = node.querySelector("input");
-          if (input) input.checked = node.getAttribute("data-vt") === selected;
-        });
-      }
+      var ws = null;
+      var mediaStream = null;
+      var audioContext = null;
+      var processorNode = null;
+      var ttsContext = null;
+      var ttsQueue = [];
+      var ttsPlaying = false;
+      var greeted = false;
+      var sessionActive = false;
+      var aiBuf = "";
+      var TTS_SAMPLE_RATE = 24000;
+      var TARGET_SAMPLE_RATE = 16000;
 
       function escapeHtml(s) {
         return String(s)
@@ -215,6 +286,31 @@
           .replace(/</g, "&lt;")
           .replace(/>/g, "&gt;")
           .replace(/"/g, "&quot;");
+      }
+
+      function setStatus(text, isErr) {
+        el.status.textContent = text;
+        el.status.classList.toggle("err", !!isErr);
+      }
+
+      function setLive(on, label) {
+        el.liveDot.classList.toggle("on", !!on);
+        el.liveLabel.textContent = label || (on ? "通话中" : "未连接");
+      }
+
+      function updateSelectedBar() {
+        var meta = voiceIndex[selected] || { name: selected, voice_type: selected, lang: "", scene: "" };
+        el.selectedMeta.innerHTML =
+          "当前选择：<strong>" + escapeHtml(meta.name) + "</strong>" +
+          (meta.scene ? (" · " + escapeHtml(meta.scene)) : "") +
+          (meta.lang ? (" · " + escapeHtml(meta.lang)) : "") +
+          "<br/><code>" + escapeHtml(meta.voice_type) + "</code>";
+        localStorage.setItem(STORAGE_KEY, selected);
+        document.querySelectorAll(".voice").forEach(function (node) {
+          node.classList.toggle("picked", node.getAttribute("data-vt") === selected);
+          var input = node.querySelector("input");
+          if (input) input.checked = node.getAttribute("data-vt") === selected;
+        });
       }
 
       function renderFilters() {
@@ -262,6 +358,9 @@
               "<span class='lang'>" + escapeHtml(v.lang || "") + "</span>";
             label.addEventListener("click", function (e) {
               e.preventDefault();
+              if (sessionActive && v.voice_type !== selected) {
+                setStatus("会话进行中。要换音色请先点「结束」，再选新音色重开。");
+              }
               selected = v.voice_type;
               updateSelectedBar();
             });
@@ -270,6 +369,241 @@
           section.appendChild(grid);
           el.catalog.appendChild(section);
         });
+      }
+
+      function clearTx() {
+        el.txBox.innerHTML = "<div class='empty'>对话开始后显示转写</div>";
+        aiBuf = "";
+      }
+
+      function appendTx(role, text, replaceLastSameRole) {
+        text = (text || "").trim();
+        if (!text) return;
+        var empty = el.txBox.querySelector(".empty");
+        if (empty) empty.remove();
+        var last = el.txBox.lastElementChild;
+        if (
+          replaceLastSameRole &&
+          last &&
+          last.getAttribute("data-role") === role
+        ) {
+          last.querySelector(".body").textContent = text;
+          el.txBox.scrollTop = el.txBox.scrollHeight;
+          return;
+        }
+        var div = document.createElement("div");
+        div.className = "tx-item";
+        div.setAttribute("data-role", role);
+        div.innerHTML =
+          "<span class='badge " + (role === "user" ? "user" : "ai") + "'>" +
+          (role === "user" ? "你" : "AI") +
+          "</span><span class='body'></span>";
+        div.querySelector(".body").textContent = text;
+        el.txBox.appendChild(div);
+        el.txBox.scrollTop = el.txBox.scrollHeight;
+      }
+
+      function flushTTSQueue() {
+        ttsQueue = [];
+        ttsPlaying = false;
+      }
+
+      function playTTSChunk(pcmS16) {
+        if (!pcmS16 || pcmS16.length === 0) return;
+        if (!ttsContext) {
+          ttsContext = new (window.AudioContext || window.webkitAudioContext)({
+            sampleRate: TTS_SAMPLE_RATE,
+          });
+        }
+        if (ttsContext.state === "suspended") ttsContext.resume().catch(function () {});
+        var len = pcmS16.length / 2;
+        var buf = ttsContext.createBuffer(1, len, TTS_SAMPLE_RATE);
+        var ch = buf.getChannelData(0);
+        var view = new DataView(pcmS16.buffer, pcmS16.byteOffset, pcmS16.byteLength);
+        for (var i = 0; i < len; i++) ch[i] = view.getInt16(i * 2, true) / 0x8000;
+        var src = ttsContext.createBufferSource();
+        src.buffer = buf;
+        src.connect(ttsContext.destination);
+        src.onended = function () { playNextInQueue(); };
+        src.start();
+      }
+
+      function playNextInQueue() {
+        if (ttsQueue.length === 0) {
+          ttsPlaying = false;
+          return;
+        }
+        var chunk = ttsQueue.shift();
+        ttsPlaying = true;
+        playTTSChunk(chunk);
+      }
+
+      function enqueueTTS(pcmS16) {
+        ttsQueue.push(pcmS16);
+        if (!ttsPlaying) playNextInQueue();
+      }
+
+      function startMic(stream) {
+        var ctx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 48000 });
+        var src = ctx.createMediaStreamSource(stream);
+        var rate = ctx.sampleRate;
+        var buffer = [];
+        var outSamples = 320;
+        var frameLen = Math.floor((rate / TARGET_SAMPLE_RATE) * outSamples);
+        var processor = ctx.createScriptProcessor(2048, 1, 1);
+        processor.onaudioprocess = function (e) {
+          if (!ws || ws.readyState !== WebSocket.OPEN) return;
+          var input = e.inputBuffer.getChannelData(0);
+          for (var i = 0; i < input.length; i++) buffer.push(input[i]);
+          while (buffer.length >= frameLen) {
+            var block = buffer.splice(0, frameLen);
+            var down = [];
+            var step = (frameLen - 1) / (outSamples - 1) || 0;
+            for (var j = 0; j < outSamples; j++) {
+              down.push(block[Math.min(Math.floor(j * step), frameLen - 1)] || 0);
+            }
+            var s16 = new ArrayBuffer(down.length * 2);
+            var v = new DataView(s16);
+            for (var k = 0; k < down.length; k++) {
+              var s = Math.max(-1, Math.min(1, down[k]));
+              v.setInt16(k * 2, s < 0 ? s * 0x8000 : s * 0x7fff, true);
+            }
+            ws.send(s16);
+          }
+        };
+        src.connect(processor);
+        processor.connect(ctx.destination);
+        return { ctx: ctx, processor: processor };
+      }
+
+      function stopMic() {
+        if (processorNode) {
+          try { processorNode.disconnect(); } catch (e) {}
+          processorNode = null;
+        }
+        if (audioContext) {
+          try { audioContext.close(); } catch (e) {}
+          audioContext = null;
+        }
+        if (mediaStream) {
+          mediaStream.getTracks().forEach(function (t) { t.stop(); });
+          mediaStream = null;
+        }
+      }
+
+      function stopSession() {
+        sessionActive = false;
+        greeted = false;
+        flushTTSQueue();
+        stopMic();
+        if (ws) {
+          try { ws.close(); } catch (e) {}
+          ws = null;
+        }
+        el.startBtn.disabled = false;
+        el.stopBtn.disabled = true;
+        setLive(false, "未连接");
+      }
+
+      async function startSession() {
+        if (sessionActive) return;
+        el.startBtn.disabled = true;
+        el.stopBtn.disabled = false;
+        clearTx();
+        flushTTSQueue();
+        greeted = false;
+        setStatus("请求麦克风权限…");
+        setLive(false, "连接中");
+        try {
+          mediaStream = await navigator.mediaDevices.getUserMedia({
+            audio: {
+              echoCancellation: true,
+              noiseSuppression: true,
+              autoGainControl: true,
+            },
+          });
+        } catch (err) {
+          setStatus("无法打开麦克风：" + (err.message || err), true);
+          el.startBtn.disabled = false;
+          el.stopBtn.disabled = true;
+          return;
+        }
+
+        var protocol = location.protocol === "https:" ? "wss:" : "ws:";
+        var url = protocol + "//" + location.host + pathPrefix + "/ws";
+        setStatus("连接 " + url + "\nvoice=" + selected);
+        ws = new WebSocket(url);
+        ws.binaryType = "arraybuffer";
+        sessionActive = true;
+
+        ws.onopen = function () {
+          ws.send(JSON.stringify({
+            mode: "e2e",
+            duplex_server_vad: true,
+            voice: selected,
+            system_role: VOICE_LAB_SYSTEM_ROLE,
+            speaking_style: VOICE_LAB_STYLE,
+            external_followup_enabled: false,
+            auto_501_from_asr_enabled: false,
+          }));
+          setStatus("正在建立豆包会话…\nvoice=" + selected);
+        };
+
+        ws.onmessage = function (ev) {
+          if (typeof ev.data !== "string") {
+            enqueueTTS(new Uint8Array(ev.data));
+            return;
+          }
+          var msg = {};
+          try { msg = JSON.parse(ev.data); } catch (e) { return; }
+          if (msg.type === "ready") {
+            setLive(true, "通话中");
+            setStatus(
+              "已就绪，可以说了。\nsession=" + (msg.session_id || "") +
+              "\nvoice=" + selected
+            );
+            if (mediaStream && !processorNode) {
+              var nodes = startMic(mediaStream);
+              audioContext = nodes.ctx;
+              processorNode = nodes.processor;
+            }
+            if (!greeted && ws && ws.readyState === WebSocket.OPEN) {
+              greeted = true;
+              ws.send(JSON.stringify({ type: "chat_text_query", content: GREET_QUERY }));
+              appendTx("user", "（系统）请打个招呼试听音色", false);
+            }
+          } else if (msg.type === "start_session_config") {
+            setStatus(
+              "会话配置：voice=" + (msg.voice || selected) +
+              " · vad=" + msg.duplex_server_vad +
+              " · mode=" + msg.mode
+            );
+          } else if (msg.type === "asr") {
+            appendTx("user", msg.text || "", !!msg.is_interim);
+          } else if (msg.type === "asr_ended") {
+            if (msg.final_text) appendTx("user", msg.final_text, true);
+          } else if (msg.type === "chat") {
+            aiBuf += msg.content || "";
+            appendTx("ai", aiBuf, true);
+          } else if (msg.type === "chat_end") {
+            if (aiBuf) appendTx("ai", aiBuf, true);
+            aiBuf = "";
+          } else if (msg.type === "barge_in") {
+            flushTTSQueue();
+          } else if (msg.type === "error") {
+            setStatus(String(msg.message || "error"), true);
+          }
+        };
+
+        ws.onclose = function () {
+          if (sessionActive) {
+            setStatus("连接已关闭");
+          }
+          stopSession();
+        };
+        ws.onerror = function () {
+          setStatus("WebSocket 错误", true);
+        };
       }
 
       el.copyBtn.addEventListener("click", function () {
@@ -281,6 +615,11 @@
         } else {
           prompt("voice_type", selected);
         }
+      });
+      el.startBtn.addEventListener("click", function () { startSession(); });
+      el.stopBtn.addEventListener("click", function () {
+        setStatus("已结束试听");
+        stopSession();
       });
 
       renderFilters();

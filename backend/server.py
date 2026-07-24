@@ -853,6 +853,9 @@ async def websocket_endpoint(websocket: WebSocket):
     external_followup_enabled = True
     duplex_server_vad = DEFAULT_DUPLEX_SERVER_VAD
     duplex_end_smooth_ms = DEFAULT_DUPLEX_END_SMOOTH_MS
+    from backend.duplex_client import DEFAULT_SPEAKER as _WS_DEFAULT_SPEAKER
+
+    session_voice = _WS_DEFAULT_SPEAKER
     client: DuplexVoiceClient | None = None
     # 标记当前这一轮模型回复（文本/音频）是否还在进行中，主要用于 one-shot 501 防止抢占打断
     reply_in_progress = False
@@ -1706,6 +1709,7 @@ async def websocket_endpoint(websocket: WebSocket):
                 input_mod="audio" if duplex_server_vad else ("text" if mode == "t2s" else "audio"),
                 server_vad=duplex_server_vad,
                 end_smooth_window_ms=duplex_end_smooth_ms,
+                voice=session_voice,
             )
             sessions.get(conn_id, {})["session_id"] = new_sid
             seen_llm_start_reply_ids.clear()
@@ -2194,6 +2198,18 @@ async def websocket_endpoint(websocket: WebSocket):
             duplex_server_vad = _resolve_duplex_server_vad(cfg, DEFAULT_DUPLEX_SERVER_VAD)
             if duplex_server_vad and mode != "semi":
                 mode = "e2e"
+            raw_voice = (cfg.get("voice") or cfg.get("voice_type") or "").strip()
+            if raw_voice:
+                from backend.doubao_voices import resolve_voice
+
+                try:
+                    session_voice = resolve_voice(raw_voice, default=_WS_DEFAULT_SPEAKER)
+                except ValueError as exc:
+                    await websocket.send_text(
+                        json.dumps({"type": "error", "message": str(exc)}, ensure_ascii=False)
+                    )
+                    await websocket.close()
+                    return
         except json.JSONDecodeError:
             pass
 
@@ -2232,10 +2248,11 @@ async def websocket_endpoint(websocket: WebSocket):
         input_mod = "audio" if duplex_server_vad else ("text" if mode == "t2s" else "audio")
         duplex_input_mod = input_mod
         LOG.info(
-            "StartSession with mode=%s input_mod=%s duplex_server_vad=%s",
+            "StartSession with mode=%s input_mod=%s duplex_server_vad=%s voice=%s",
             mode,
             input_mod,
             duplex_server_vad,
+            session_voice,
         )
         session_id = await client.start_session(
             system_role=prompt_manager.get_system_role(),
@@ -2243,6 +2260,7 @@ async def websocket_endpoint(websocket: WebSocket):
             input_mod=input_mod,
             server_vad=duplex_server_vad,
             end_smooth_window_ms=duplex_end_smooth_ms,
+            voice=session_voice,
         )
         client.start_receive_loop()
         sessions[conn_id] = {
@@ -2262,6 +2280,7 @@ async def websocket_endpoint(websocket: WebSocket):
                 "duplex_server_vad": duplex_server_vad,
                 "end_smooth_window_ms": duplex_end_smooth_ms,
                 "session_id": session_id,
+                "voice": session_voice,
                 "api_version": "duplex-3.0",
                 "auth_mode": client.auth_mode(),
                 "model": "1.2.6.0",
