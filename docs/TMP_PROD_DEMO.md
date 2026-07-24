@@ -13,7 +13,7 @@
 
 `/tmp-prod` 与 `/tmp-prod/`、`/tmp-prod/single` 与 `/tmp-prod/single/` 均直接返回页面，避免反代下 307 丢前缀。
 
-单人页走 `POST /outbound/v1/calls`（`scenario=tmp_prod_auth_demo`）。通话结束后可回放双声道录音并查看 ASR / AI 转写。录音：`GET /outbound/v1/calls/{id}/recording/stereo`。
+单人页走 `POST /tmp-prod/single/calls`（内部建 1 人批次 + harness）。通话结束后可回放双声道录音并查看 ASR / AI 转写；改约/未接通会入队到点再拨。轮询：`GET /tmp-prod/single/batches/{batch_id}`。录音仍可用：`GET /outbound/v1/calls/{id}/recording/stereo`。
 
 ## 流程
 
@@ -77,3 +77,6 @@ OUTBOUND_DRY_RUN=false           # 真实外呼时关闭
 - `POST /tmp-prod/batches/{id}/start`
 - `GET  /tmp-prod/batches/{id}`（含 `harness_actions` 队列）
 - `GET  /tmp-prod/batches/{id}/export.xlsx`
+- `POST /tmp-prod/single/calls`（单人测试，走 harness）
+- `GET  /tmp-prod/single/batches/{batch_id}`（单人轮询：contact + call + harness）
+- `GET  /tmp-prod/calls/{call_id}/export.xlsx`

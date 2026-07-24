@@ -133,6 +133,37 @@ def test_outcome_not_convenient_keeps_promised_time():
     assert out["promised_time"] == "2026年7月24日 16:00"
 
 
+def test_outcome_not_convenient_five_minutes():
+    out = extract_tmp_prod_outcome(
+        [
+            {"role": "assistant", "text": "大约占用您两分钟，现在方便吗？"},
+            {"role": "user", "text": "不方便，5分钟后再打"},
+            {
+                "role": "assistant",
+                "text": (
+                    "好的，那大约5分钟后再联系您。"
+                    "（内心回写：result=not_convenient；promised_in_minutes=5；time_precision=hour）"
+                ),
+            },
+        ],
+        trigger_beijing_at="2026-07-24T10:00:00+08:00",
+    )
+    assert out["result"] == "not_convenient"
+    # Absolute clock near now; must have hour:minute
+    assert "年" in out["promised_time"] and ":" in out["promised_time"]
+
+
+def test_normalize_relative_minutes_phrase():
+    from backend.tmp_prod.outcome import absolute_from_relative_minutes, normalize_promised_time_display
+
+    abs_disp = absolute_from_relative_minutes(5, anchor=datetime(2026, 7, 24, 15, 0, tzinfo=BJ))
+    assert abs_disp == "2026年7月24日 15:05"
+    assert "15:10" in normalize_promised_time_display(
+        "10分钟后再联系",
+        relative_minutes=10,
+    ) or normalize_promised_time_display("10分钟后") != "10分钟后"
+
+
 def test_reschedule_prompt_inject():
     slots = tmp_prod_slots_from_payload(
         {

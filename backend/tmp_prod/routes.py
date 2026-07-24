@@ -19,7 +19,12 @@ from backend.tmp_prod.excel_io import (
     read_contacts_from_xlsx,
     write_results_xlsx,
 )
-from backend.tmp_prod.service import ensure_tmp_prod_env, run_batch
+from backend.tmp_prod.service import (
+    ensure_tmp_prod_env,
+    run_batch,
+    single_contact_snapshot,
+    start_single_dial,
+)
 from backend.tmp_prod.store import get_batch_store
 
 LOG = logging.getLogger(__name__)
@@ -65,6 +70,61 @@ class StartBody(BaseModel):
         default="",
         description="豆包 TTS voice_type；空则外呼默认音色。见 GET /tmp-prod/voice-catalog",
     )
+
+
+class SingleCallBody(BaseModel):
+    phone: str = Field(..., min_length=3, description="被叫手机号")
+    candidate_name: str = Field(default="张三")
+    gender: str = Field(default="")
+    employer: str = Field(default="")
+    identity_mode: str = Field(default="BRAND_SELF")
+    client_name: str = Field(default="比赛日科技")
+    our_brand_name: str = Field(default="芝麻背调")
+    channel_brand_name: str = Field(default="")
+    voice: str = Field(default="", description="豆包 TTS voice_type")
+    scenario: str = Field(default="tmp_prod_auth_demo", description="固定 tmp_prod；忽略其他值")
+
+
+@router.post("/single/calls")
+async def start_single_call(
+    body: SingleCallBody,
+    x_api_key: str | None = Header(default=None, alias="X-API-Key"),
+) -> dict[str, Any]:
+    """单人测试：走与批量相同的 harness（未接通重试 / 改约到点再拨）。"""
+    _auth(x_api_key)
+    try:
+        voice = resolve_voice(body.voice)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    try:
+        started = await start_single_dial(
+            phone=body.phone,
+            candidate_name=body.candidate_name,
+            gender=body.gender,
+            employer=body.employer,
+            identity_mode=body.identity_mode,
+            client_name=body.client_name,
+            our_brand_name=body.our_brand_name,
+            channel_brand_name=body.channel_brand_name,
+            voice=voice,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return started
+
+
+@router.get("/single/batches/{batch_id}")
+async def get_single_batch(
+    batch_id: str,
+    contact_id: str | None = None,
+    x_api_key: str | None = Header(default=None, alias="X-API-Key"),
+) -> dict[str, Any]:
+    """单人页轮询：contact + 最新 call + harness_actions。"""
+    _auth(x_api_key)
+    snap = single_contact_snapshot(batch_id, contact_id)
+    if not snap:
+        raise HTTPException(status_code=404, detail="batch/contact not found")
+    return snap
 
 
 def render_tmp_prod_page() -> HTMLResponse:

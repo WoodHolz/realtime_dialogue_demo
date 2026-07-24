@@ -92,6 +92,17 @@ _WRITEBACK_PRECISION_RE = re.compile(
     r"time_precision\s*=\s*(hour|day)",
     re.IGNORECASE,
 )
+_WRITEBACK_IN_MINUTES_RE = re.compile(
+    r"promised_in_minutes\s*=\s*(\d{1,4})",
+    re.IGNORECASE,
+)
+
+# 「5分钟后 / 过10分钟 / 半小时后 / 一小时后」
+_REL_MINUTES_RE = re.compile(
+    r"(?:过|再过)?\s*(\d{1,4})\s*分钟\s*(?:之?后|后再|以后|再(?:联系|打|来))?",
+)
+_REL_HALF_HOUR_RE = re.compile(r"半\s*小时\s*(?:之?后|后再)?")
+_REL_ONE_HOUR_RE = re.compile(r"(?:一|1)\s*小时\s*(?:之?后|后再)?")
 
 # 口播承诺时间：记录的是 / 约到 = 最终确认；尽量在 = 开场催办（易陈旧）
 # 只截到「点前/点/当天内」，避免拖进「完成信息填写…」
@@ -157,12 +168,43 @@ def _parse_writeback(ai_text: str) -> dict[str, str]:
     promised_time = _last_group(_WRITEBACK_PROMISED_TIME_RE, text)
     promised_day = _last_group(_WRITEBACK_PROMISED_DAY_RE, text)
     precision = _last_group(_WRITEBACK_PRECISION_RE, text).lower()
+    in_minutes = _last_group(_WRITEBACK_IN_MINUTES_RE, text)
     return {
         "result": result if result in RESULT_LABELS_CN else "",
         "promised_time": promised_time,
         "promised_day": promised_day,
         "time_precision": precision,
+        "promised_in_minutes": in_minutes,
     }
+
+
+def _extract_relative_minutes(text: str) -> int | None:
+    """Return minutes offset from phrases like 5分钟后 / 半小时后."""
+    raw = text or ""
+    matches = list(_REL_MINUTES_RE.finditer(raw))
+    if matches:
+        try:
+            return max(1, int(matches[-1].group(1)))
+        except ValueError:
+            pass
+    if _REL_HALF_HOUR_RE.search(raw):
+        return 30
+    if _REL_ONE_HOUR_RE.search(raw):
+        return 60
+    return None
+
+
+def absolute_from_relative_minutes(
+    minutes: int,
+    *,
+    anchor: datetime | None = None,
+) -> str:
+    """Convert N minutes from now (Beijing) to display ``YYYY年M月D日 HH:MM``."""
+    from config.tmp_prod_prompt import beijing_now, format_ymd_cn
+
+    base = anchor or beijing_now()
+    due = base + timedelta(minutes=max(1, int(minutes)))
+    return f"{format_ymd_cn(due)} {due.hour:02d}:{due.minute:02d}"
 
 
 def _extract_spoken_promised(ai_text: str) -> str:
@@ -215,13 +257,25 @@ def normalize_promised_time_display(
     raw: str,
     *,
     trigger_beijing_at: str | datetime | None = None,
+    relative_minutes: int | None = None,
 ) -> str:
     """Normalize promised time for xlsx: e.g. 2026年7月24日 12:00."""
+    if relative_minutes is not None:
+        try:
+            return absolute_from_relative_minutes(int(relative_minutes))
+        except (TypeError, ValueError):
+            pass
+
     text = (raw or "").strip()
     if not text:
         return ""
 
     from config.tmp_prod_prompt import format_ymd_cn, parse_trigger_beijing
+
+    # Relative phrases first (5分钟后 / 半小时后)
+    rel = _extract_relative_minutes(text)
+    if rel is not None:
+        return absolute_from_relative_minutes(rel)
 
     trigger = parse_trigger_beijing(trigger_beijing_at)
     today = trigger.replace(hour=0, minute=0, second=0, microsecond=0)
@@ -352,12 +406,28 @@ def extract_tmp_prod_outcome(
         # 仅在开场问方便后对方明确不方便时标记；避免误伤「邮箱不方便给」
         if not asked_email:
             writeback_nc = _parse_writeback(ai_text)
+            rel_mins: int | None = None
+            if writeback_nc.get("promised_in_minutes"):
+                try:
+                    rel_mins = int(writeback_nc["promised_in_minutes"])
+                except ValueError:
+                    rel_mins = None
+            if rel_mins is None:
+                rel_mins = _extract_relative_minutes(
+                    (writeback_nc.get("promised_time") or "")
+                    + "\n"
+                    + ai_text
+                    + "\n"
+                    + user_text
+                )
             promised_nc = (
                 writeback_nc.get("promised_time")
                 or _extract_spoken_promised(ai_text)
             )
             display_nc = normalize_promised_time_display(
-                promised_nc, trigger_beijing_at=trigger_beijing_at
+                promised_nc,
+                trigger_beijing_at=trigger_beijing_at,
+                relative_minutes=rel_mins,
             )
             return {
                 "result": "not_convenient",
@@ -368,11 +438,21 @@ def extract_tmp_prod_outcome(
             }
 
     writeback = _parse_writeback(ai_text)
+    rel_from_wb: int | None = None
+    if writeback.get("promised_in_minutes"):
+        try:
+            rel_from_wb = int(writeback["promised_in_minutes"])
+        except ValueError:
+            rel_from_wb = None
     promised = (
         writeback.get("promised_time")
         or writeback.get("promised_day")
         or _extract_spoken_promised(ai_text)
     )
+    if rel_from_wb is None:
+        rel_from_wb = _extract_relative_minutes(
+            (promised or "") + "\n" + ai_text + "\n" + user_text
+        )
     wb_result = writeback.get("result") or ""
     precision = writeback.get("time_precision") or ""
 
@@ -411,7 +491,9 @@ def extract_tmp_prod_outcome(
 
     if wb_result and wb_result in RESULT_LABELS_CN:
         display = normalize_promised_time_display(
-            promised, trigger_beijing_at=trigger_beijing_at
+            promised,
+            trigger_beijing_at=trigger_beijing_at,
+            relative_minutes=rel_from_wb if wb_result == "not_convenient" else None,
         )
         return {
             "result": wb_result,
@@ -422,7 +504,9 @@ def extract_tmp_prod_outcome(
         }
 
     display = normalize_promised_time_display(
-        promised, trigger_beijing_at=trigger_beijing_at
+        promised,
+        trigger_beijing_at=trigger_beijing_at,
+        relative_minutes=rel_from_wb,
     )
     return {
         "result": fallback_result or "completed",

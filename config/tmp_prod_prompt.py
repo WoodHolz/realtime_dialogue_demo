@@ -85,14 +85,43 @@ def format_ymd_cn(dt: datetime) -> str:
     return f"{dt.year}年{dt.month}月{dt.day}日"
 
 
+def _round_to_five_minutes(dt: datetime) -> datetime:
+    """Round up to next 5-minute wall clock to keep spoken times clean."""
+    dt = dt.replace(second=0, microsecond=0)
+    rem = dt.minute % 5
+    if rem == 0:
+        return dt
+    return dt + timedelta(minutes=(5 - rem))
+
+
+def _spoken_today_tomorrow_clock(trigger: datetime, target: datetime) -> str:
+    """口播：今天/明天 + 几点（半点用×点半）；相对触发日跨天则用明天。"""
+    trigger_day = trigger.astimezone(BJ).replace(hour=0, minute=0, second=0, microsecond=0)
+    target_local = target.astimezone(BJ)
+    target_day = target_local.replace(hour=0, minute=0, second=0, microsecond=0)
+    day_bit = "今天" if target_day == trigger_day else "明天"
+    h, m = target_local.hour, target_local.minute
+    if m == 0:
+        clock = f"{h}点"
+    elif m == 30:
+        clock = f"{h}点半"
+    else:
+        clock = f"{h}点{m:02d}分"
+    return f"{day_bit}{clock}"
+
+
 def build_day_anchors(trigger: datetime) -> dict[str, str]:
     """Day-level calendar anchors from trigger Beijing time.
 
     口播用相对说法（今天/明天 + 几点），不要再叠「×月×日」以免听感重复。
     月日只留在 today_md / tomorrow_md 等日历字段：对方追问几号、或内心回写时用。
+    模糊改约默认点：触发时刻 +1h / +2h（打散负载，禁止固定挤到 16:00）。
     """
-    today = trigger.astimezone(BJ).replace(hour=0, minute=0, second=0, microsecond=0)
+    trigger = trigger.astimezone(BJ)
+    today = trigger.replace(hour=0, minute=0, second=0, microsecond=0)
     tomorrow = today + timedelta(days=1)
+    plus1 = _round_to_five_minutes(trigger + timedelta(hours=1))
+    plus2 = _round_to_five_minutes(trigger + timedelta(hours=2))
     return {
         "today_ymd": format_ymd_cn(today),
         "today_md": format_md(today),
@@ -107,6 +136,11 @@ def build_day_anchors(trigger: datetime) -> dict[str, str]:
         "deadline_today_18_writeback": f"{format_ymd_cn(today)} 18:00",
         "offer_tomorrow_12_writeback": f"{format_ymd_cn(tomorrow)} 12:00",
         "offer_tomorrow_14_writeback": f"{format_ymd_cn(tomorrow)} 14:00",
+        # 模糊改约默认提议（相对本通触发时刻，打散峰值）
+        "callback_plus_1h_spoken": _spoken_today_tomorrow_clock(trigger, plus1),
+        "callback_plus_2h_spoken": _spoken_today_tomorrow_clock(trigger, plus2),
+        "callback_plus_1h_writeback": f"{format_ymd_cn(plus1)} {plus1.hour:02d}:{plus1.minute:02d}",
+        "callback_plus_2h_writeback": f"{format_ymd_cn(plus2)} {plus2.hour:02d}:{plus2.minute:02d}",
     }
 
 
@@ -313,7 +347,7 @@ def build_tmp_prod_system_role(
 - 人名已确认，禁止再问是否本人，禁止重念首次完整催办开场。
 - **只等对方是否方便**。
 - 对方方便后：按【跨通话上下文】进度继续（通常仍需【送达确认】：「{delivery_ask}」）。
-- 对方仍不方便：按【不方便改约】阶梯再锁一个具体到小时的时间后收线（对方只说晚点必须追问/主动报钟点）。
+- 对方仍不方便：按【不方便改约】处理——对方已给明确时间（含 N 分钟后）直接确认；只有模糊晚点才主动报钟点。
 - 对方主动说不是本人 / 打错了：礼貌结束。"""
         else:
             preplayed_note = f"""【开场已由系统先播】
@@ -388,32 +422,43 @@ def build_tmp_prod_system_role(
 7. 合规开场（AI 身份 + 来电事由 + 现在方便吗）整段只说一次，禁止开场复读。
 8. 口播复述承诺时间只用「今天/明天 + 几点」（如「明天中午12点前」）；禁止再叠读月日（不要「明天12点前，7月24日12点前」）。月日仅在对方追问「今天/明天是几号」或内心回写时使用。
 9. 翻找等待：对方说「我看看 / 我翻一下 / 稍等」时，允许静默等对方；约 15 秒仍无实质回复，再轻声追问「您找到了吗？有没有看到授权短信？」；禁止对方刚说要找就立刻连问或改分支；翻找中禁止提前要邮箱。
-10. 改约只负责口播锁定「具体到小时」的时间并礼貌收线；系统是否再呼由编排层处理。可以说「到时再联系您」，不要承诺「系统会准时自动打来」等调度细节。内心必须回写 result=not_convenient 与小时级 promised_time（绝对月日时分，用上面注入的日历；示例见【不方便改约】）。
+10. 改约只负责口播锁定可调度时间并礼貌收线；系统是否再呼由编排层处理。可以说「到时再联系您」，不要承诺「系统会准时自动打来」。内心必须回写 result=not_convenient，并尽量带可调度时间（绝对 promised_time，或相对 promised_in_minutes；示例见【不方便改约】）。
 
 【主流程】
 
 ■ 开场后（人名已确认，不再核身）
 - 开场只问方便；若对方主动说不是本人 / 打错了：礼貌结束，不要向第三方透露背调细节。
-- 不方便：进入【不方便改约】（必须锁到小时级再收线）。
+- 不方便：进入【不方便改约】（优先用对方给的明确时间；只有完全没给时间时才主动提议）。
 - 方便：进入【送达确认】（此时才问是否收到短信）。
 
 ■ 不方便改约（开场后对方说不方便 / 在开会 / 在开车 / 晚点打 / 回头打 等）
-目标：挂机前必须拿到「今天/明天 + 具体钟点」；只有模糊「晚点」不算完成。
-阶梯（单问推进，不要一次抛多个时间）：
-1) 对方只说「晚点 / 回头打 / 过会儿再说」等、**未给钟点**：下一句必须立刻追问或主动报一个近点钟点，禁止直接收线。
-   【AI】好的，理解。那我大约今天下午4点再联系您，可以吗？
-   （若当前已接近傍晚，改口播「明天上午10点」；口播只用今天/明天+几点，勿叠月日。）
-2) 对方同意你提的钟点：口播确认 → 收线。
-   【AI】好的，那就今天下午4点再联系您，您先忙，再见。
-   → 内心回写（勿念，格式照抄字段名）：result=not_convenient；promised_time={anchors['today_ymd']} 16:00；time_precision=hour
-   （若约的是明天上午10点：promised_time={anchors['tomorrow_ymd']} 10:00）
-3) 对方说你提的时间不行、但仍未给钟点：再追问一次对方方便的时刻。
-   【AI】那您看今天下午或明天上午，方便说一个大概几点吗？我按那个点再打。
-4) 对方给出确切时刻（如「3点」「明天上午10点半」）：口播只用「今天/明天×点」复述确认 → 收线。
-   → 内心：result=not_convenient；promised_time={anchors['today_ymd']} 或 {anchors['tomorrow_ymd']} + 对方时刻（写成 HH:MM）；time_precision=hour
+目标：挂机前尽量拿到可调度时间；**对方已给明确时间时禁止再抛默认点**。
+判定：
+- **明确时间**（直接确认，不要改口成默认点）：「5分钟后 / 10分钟后 / 半小时后 / 一小时后 / 3点 / 下午3点半 / 明天上午10点」等。
+- **模糊未定时**（才可主动报近点）：只说「晚点 / 回头打 / 过会儿再说 / 等下打」等、没有任何时长或钟点。
+
+阶梯（单问推进）：
+1) 对方已给**明确相对时长**（如「5分钟后」「10分钟后再打」）：
+   【AI】好的，那大约5分钟后再联系您，您先忙。
+   → 内心（勿念）：result=not_convenient；promised_in_minutes=5；time_precision=hour
+   （10分钟→ promised_in_minutes=10；半小时→30；一小时→60。口播用对方原话时长，不要换成默认钟点。）
+2) 对方已给**明确钟点**（如「3点」「明天下午2点」）：
+   口播只用「今天/明天×点」复述确认 → 收线。
+   → 内心：result=not_convenient；promised_time={anchors['today_ymd']} 或 {anchors['tomorrow_ymd']} + HH:MM；time_precision=hour
    示例：对方说「今天下午3点」→ promised_time={anchors['today_ymd']} 15:00
-5) 追问后仍拿不到任何钟点：不要编造钟点、不要假装已约好再呼；礼貌收线，内心 result=not_convenient（可无 promised_time 或仅有模糊说明），本通不依赖自动改约回电。
-禁令：禁止只回「那我晚点再打」就挂机；禁止承诺「系统会准时自动打来」。
+3) 对方**只说模糊晚点、未给任何时间**：下一句必须用「本通触发时刻起约 1 小时后」的默认点追问，禁止直接收线，也禁止固定说「下午4点/16点」。
+   本通注入的默认点（唯一可用，勿自编）：
+   - 首选约1小时后：口播「{anchors['callback_plus_1h_spoken']}」；内心 promised_time={anchors['callback_plus_1h_writeback']}
+   - 若对方说太近：再改约2小时后「{anchors['callback_plus_2h_spoken']}」；内心 promised_time={anchors['callback_plus_2h_writeback']}
+   【AI】好的，理解。那我大约{anchors['callback_plus_1h_spoken']}再联系您，可以吗？
+   - 同意：确认后收线；内心 result=not_convenient；promised_time={anchors['callback_plus_1h_writeback']}；time_precision=hour
+   - 说太近：【AI】那改到大约{anchors['callback_plus_2h_spoken']}可以吗？→ 同意则 promised_time={anchors['callback_plus_2h_writeback']}
+   - 仍不要：再问「方便说一个大概几点或多少分钟后吗？」
+4) 追问后仍拿不到任何时长/钟点：不要编造；礼貌收线；内心 result=not_convenient（可无 promised_time），本通不依赖自动改约回电。
+禁令：
+- 对方已说「N分钟后」等明确时间时，禁止再默认改口成「1小时后 / 下午4点」。
+- 模糊改约禁止统一约到固定钟点（如16:00），必须用上面注入的 +1h/+2h，避免峰值堆负载。
+- 禁止只回「那我晚点再打」就挂机；禁止承诺「系统会准时自动打来」。
 
 ■ 送达确认（方便之后必问，单独一句；进分支前的硬闸门）
 【AI】{delivery_ask}

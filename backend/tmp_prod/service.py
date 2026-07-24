@@ -554,3 +554,140 @@ async def run_batch(
     out = store.get(batch_id)
     assert out
     return out
+
+
+async def start_single_dial(
+    *,
+    phone: str,
+    candidate_name: str = "",
+    gender: str = "",
+    employer: str = "",
+    identity_mode: str = "BRAND_SELF",
+    client_name: str = "比赛日科技",
+    our_brand_name: str = "芝麻背调",
+    channel_brand_name: str = "",
+    voice: str = "",
+) -> dict[str, Any]:
+    """Create a 1-contact batch and dial via harness-aware dial_one_contact."""
+    ensure_tmp_prod_env()
+    phone = (phone or "").strip()
+    if not phone:
+        raise ValueError("phone is required")
+    store = get_batch_store()
+    batch = store.create_batch(
+        [
+            {
+                "employer": (employer or client_name or "").strip(),
+                "name": (candidate_name or "候选人").strip() or "候选人",
+                "gender": (gender or "").strip(),
+                "phone": phone,
+            }
+        ],
+        source_name="single",
+    )
+    batch.status = "running"
+    store.save(batch)
+    contact = batch.contacts[0]
+
+    async def _run() -> None:
+        try:
+            await dial_one_contact(
+                batch.batch_id,
+                contact,
+                store=store,
+                identity_mode=identity_mode,
+                client_name=client_name,
+                our_brand_name=our_brand_name,
+                channel_brand_name=channel_brand_name,
+                voice=voice,
+            )
+        except Exception as exc:
+            LOG.exception("tmp-prod single dial failed batch=%s", batch.batch_id)
+            store.update_contact(
+                batch.batch_id,
+                contact.contact_id,
+                status="failed",
+                result="call_failed",
+                fail_reason=str(exc),
+                result_summary=str(exc),
+            )
+        finally:
+            _maybe_mark_batch_done(batch.batch_id, store)
+
+    asyncio.create_task(_run(), name=f"tmp-prod-single-{batch.batch_id}")
+    return {
+        "batch_id": batch.batch_id,
+        "contact_id": contact.contact_id,
+        "status": "running",
+        "phone": phone,
+        "scenario": SCENARIO,
+        "voice": voice,
+        "message": "已开始单人外呼（走 harness：未接通重试 / 改约到点再拨）",
+    }
+
+
+def single_contact_snapshot(batch_id: str, contact_id: str | None = None) -> dict[str, Any] | None:
+    """Merge contact + latest outbound call + harness actions for single-page polling."""
+    store = get_batch_store()
+    batch = store.get(batch_id)
+    if not batch:
+        return None
+    contact = None
+    if contact_id:
+        contact = next((c for c in batch.contacts if c.contact_id == contact_id), None)
+    if contact is None and batch.contacts:
+        contact = batch.contacts[0]
+    if contact is None:
+        return None
+
+    from backend.outbound.store import get_call_store
+    from backend.tmp_prod.harness.store import get_action_store
+
+    call_payload: dict[str, Any] = {}
+    call_id = (contact.last_call_id or "").strip()
+    if call_id:
+        task = get_call_store().get(call_id)
+        if task:
+            call_payload = task.to_public_dict()
+
+    actions = [a.to_dict() for a in get_action_store().list_actions(batch_id=batch_id)]
+    pending = [
+        a
+        for a in actions
+        if a.get("status") in {"pending", "running"}
+        and a.get("contact_id") == contact.contact_id
+    ]
+    # Prefer live call transcript while in progress; fall back to contact copy.
+    transcript = call_payload.get("transcript") or list(contact.transcript or [])
+    status = str(call_payload.get("status") or contact.status)
+    # Contact-level waiting_* is the source of truth between calls.
+    if contact.status in {"waiting_retry", "waiting_callback"}:
+        status = contact.status
+
+    return {
+        "batch_id": batch_id,
+        "contact_id": contact.contact_id,
+        "contact_status": contact.status,
+        "batch_status": batch.status,
+        "attempt": contact.attempt,
+        "next_retry_at": contact.next_retry_at,
+        "pending_action_id": contact.pending_action_id,
+        "promised_time": contact.promised_time or "",
+        "email": contact.email or "",
+        "result": contact.result or call_payload.get("result") or "",
+        "result_summary": contact.result_summary or call_payload.get("result_summary") or "",
+        "call_id": call_id or call_payload.get("call_id") or "",
+        "call_ids": list(contact.call_ids),
+        "harness_actions": actions,
+        "pending_harness": pending,
+        "callback_context": dict(contact.callback_context or {}),
+        "call": call_payload,
+        "status": status,
+        "transcript": transcript,
+        "asr_interim": call_payload.get("asr_interim"),
+        "recording_urls": call_payload.get("recording_urls"),
+        "telephony": call_payload.get("telephony"),
+        "error": call_payload.get("error") or contact.fail_reason,
+        "scenario": SCENARIO,
+        "opening_line": call_payload.get("opening_line") or "",
+    }
