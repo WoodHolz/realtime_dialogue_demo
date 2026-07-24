@@ -133,7 +133,36 @@ def test_outcome_not_convenient_keeps_promised_time():
     assert out["promised_time"] == "2026年7月24日 16:00"
 
 
-def test_outcome_not_convenient_five_minutes():
+def test_outcome_callback_one_minute_not_marked_completed():
+    """「1分钟后再打」必须是 not_convenient，不能落成 completed + promised_time。"""
+    out = extract_tmp_prod_outcome(
+        [
+            {
+                "role": "assistant",
+                "text": "大约占用您两分钟，现在方便吗？",
+            },
+            {"role": "user", "text": "1分钟后再打吧"},
+            {
+                "role": "assistant",
+                "text": "好的，那大约1分钟后再联系您，您先忙。",
+            },
+        ],
+        fallback_result="completed",
+        fallback_summary="通话结束，共 3 条转写",
+        trigger_beijing_at="2026-07-24T16:56:00+08:00",
+    )
+    assert out["result"] == "not_convenient"
+    assert out["promised_time"]
+    assert ":" in out["promised_time"]
+    planned = plan_next_action(
+        outcome=out,
+        attempt=1,
+        is_no_answer=False,
+        now=datetime(2026, 7, 24, 8, 56, tzinfo=timezone.utc),
+    )
+    assert planned is not None
+    assert planned.type == ACTION_CALLBACK_RESCHEDULE
+
     out = extract_tmp_prod_outcome(
         [
             {"role": "assistant", "text": "大约占用您两分钟，现在方便吗？"},

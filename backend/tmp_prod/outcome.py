@@ -75,6 +75,30 @@ _NOT_CONVENIENT_HINTS = (
     "回头再打",
 )
 
+# 改约回电口吻（相对「完成授权截止」承诺）
+_CALLBACK_RESCHEDULE_HINTS = (
+    "再联系",
+    "再打",
+    "回头打",
+    "晚点打",
+    "过会儿再",
+    "分钟后",
+    "半小时后",
+    "一小时后",
+    "1小时后",
+)
+
+_COMPLETION_PROMISE_HINTS = (
+    "完成授权",
+    "完成信息",
+    "完善信息",
+    "信息填写",
+    "今天18点",
+    "明天中午",
+    "明天12",
+    "明天下午2",
+)
+
 # 模型「内心回写」漏进转写时的结构化字段（优先于口播启发式）
 _WRITEBACK_RESULT_RE = re.compile(
     r"(?:result\s*=\s*|内心回写[：:]\s*)([a-z_][a-z0-9_]*)",
@@ -205,6 +229,24 @@ def absolute_from_relative_minutes(
     base = anchor or beijing_now()
     due = base + timedelta(minutes=max(1, int(minutes)))
     return f"{format_ymd_cn(due)} {due.hour:02d}:{due.minute:02d}"
+
+
+def _looks_like_callback_reschedule(
+    *,
+    user_text: str,
+    ai_text: str,
+    relative_minutes: int | None,
+    writeback_result: str = "",
+) -> bool:
+    """True when talk is 'call me later', not 'I'll finish auth by time T'."""
+    if writeback_result == "not_convenient":
+        return True
+    if relative_minutes is not None and relative_minutes > 0:
+        return True
+    blob = f"{user_text}\n{ai_text}"
+    if any(h in blob for h in _COMPLETION_PROMISE_HINTS):
+        return False
+    return any(h in blob for h in _CALLBACK_RESCHEDULE_HINTS)
 
 
 def _extract_spoken_promised(ai_text: str) -> str:
@@ -498,6 +540,26 @@ def extract_tmp_prod_outcome(
         return {
             "result": wb_result,
             "result_summary": RESULT_LABELS_CN[wb_result]
+            + (f"：{display}" if display else ""),
+            "email": email,
+            "promised_time": display,
+        }
+
+    # 改约回电：常被 fallback 成 completed，但仍带了 promised_time（如「1分钟后再打」）
+    if _looks_like_callback_reschedule(
+        user_text=user_text,
+        ai_text=ai_text,
+        relative_minutes=rel_from_wb,
+        writeback_result=wb_result,
+    ):
+        display = normalize_promised_time_display(
+            promised,
+            trigger_beijing_at=trigger_beijing_at,
+            relative_minutes=rel_from_wb,
+        )
+        return {
+            "result": "not_convenient",
+            "result_summary": RESULT_LABELS_CN["not_convenient"]
             + (f"：{display}" if display else ""),
             "email": email,
             "promised_time": display,
