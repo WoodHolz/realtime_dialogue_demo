@@ -171,6 +171,16 @@ DOUBAO_VOICE_CATALOG: list[dict[str, Any]] = [
 DEFAULT_OUTBOUND_VOICE = OUTBOUND_SPEAKER
 
 
+def default_outbound_voice() -> str:
+    """Runtime default: config.json outbound.sip.voice (env override) → hardcoded fallback."""
+    try:
+        from backend.sip.config import resolve_outbound_voice
+
+        return resolve_outbound_voice() or DEFAULT_OUTBOUND_VOICE
+    except Exception:
+        return DEFAULT_OUTBOUND_VOICE
+
+
 def _index() -> dict[str, dict[str, str]]:
     out: dict[str, dict[str, str]] = {}
     for group in DOUBAO_VOICE_CATALOG:
@@ -195,7 +205,7 @@ ALLOWED_VOICE_TYPES = frozenset(VOICE_BY_TYPE.keys())
 
 
 def list_voice_catalog(*, default_voice: str = "") -> dict[str, Any]:
-    default = (default_voice or DEFAULT_OUTBOUND_VOICE).strip() or DEFAULT_OUTBOUND_VOICE
+    default = (default_voice or default_outbound_voice()).strip() or DEFAULT_OUTBOUND_VOICE
     return {
         "default_voice": default,
         "default_meta": VOICE_BY_TYPE.get(default),
@@ -207,7 +217,7 @@ def list_voice_catalog(*, default_voice: str = "") -> dict[str, Any]:
 def resolve_voice(voice: str | None, *, default: str = "") -> str:
     """空 → 默认音色；非空必须在白名单内，否则 ValueError。"""
     raw = (voice or "").strip()
-    fallback = (default or DEFAULT_OUTBOUND_VOICE).strip() or DEFAULT_OUTBOUND_VOICE
+    fallback = (default or default_outbound_voice()).strip() or DEFAULT_OUTBOUND_VOICE
     if not raw:
         return fallback
     if raw not in ALLOWED_VOICE_TYPES:

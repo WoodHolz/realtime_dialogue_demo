@@ -115,6 +115,15 @@
       "02160602068",
       "02160602069",
       "02160602112"
-    ]
+    ],
+    "sip": {
+      "description": "Non-secret SIP TTS/RTP tuning (voice, speed, soft 1x). Priority: env SIP_* > this block > defaults.",
+      "voice": "saturn_zh_female_nuanxinxuejie_tob",
+      "tts_speed": 80,
+      "tts_loudness": 0,
+      "rtp_tx_pace_enabled": false,
+      "rtp_tx_pace_high_frames": 50,
+      "rtp_tx_queue_frames": 3000
+    }
   }
 }

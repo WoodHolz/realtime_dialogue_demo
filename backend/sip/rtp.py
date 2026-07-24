@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-import os
 import queue
 import socket
 import struct
@@ -14,20 +13,6 @@ from collections.abc import Callable
 from backend.sip.codec import PCMU_FRAME_BYTES, PCMU_SILENCE
 
 LOG = logging.getLogger(__name__)
-
-# ~20ms PCMU frames. Hard cap ≈ 60s; soft pace keeps ~1s ahead of realtime sender.
-_DEFAULT_TX_QUEUE_FRAMES = 3000
-_DEFAULT_TX_PACE_HIGH_FRAMES = 50
-
-
-def _env_int(name: str, default: int) -> int:
-    raw = (os.environ.get(name) or "").strip()
-    if not raw:
-        return default
-    try:
-        return max(1, int(raw))
-    except ValueError:
-        return default
 
 
 def rtp_packet(seq: int, ts: int, ssrc: int, payload: bytes, *, marker: bool = False) -> bytes:
@@ -82,9 +67,10 @@ class RtpSession:
     TX: prefer queued payloads (AI TTS); otherwise silence keepalive.
     RX: invoke on_payload(pcmu_bytes) for each complete RTP payload.
 
-    Soft 1x pacing: enqueue blocks when TX is already ~pace_high ahead of the
-    20ms sender, instead of bursting then dropping oldest on Full (that caused
-    mid-utterance garble on phones while recordings still looked fine).
+    Soft 1x pacing (config.json outbound.sip.rtp_tx_pace_enabled / SIP_RTP_TX_PACE_ENABLED):
+    when on, enqueue blocks while TX is already ~pace_high ahead of the 20ms sender.
+    When off, frames still never drop on Full (blocking put) — only the soft lead-limit
+    is skipped.
     """
 
     def __init__(
@@ -110,10 +96,12 @@ class RtpSession:
         self.rx_count = 0
         self.tx_count = 0
         self.on_payload = on_payload
-        self._tx_queue_max = _env_int("SIP_RTP_TX_QUEUE_FRAMES", _DEFAULT_TX_QUEUE_FRAMES)
-        self._pace_high = _env_int("SIP_RTP_TX_PACE_HIGH_FRAMES", _DEFAULT_TX_PACE_HIGH_FRAMES)
-        if self._pace_high >= self._tx_queue_max:
-            self._pace_high = max(1, self._tx_queue_max // 2)
+        from backend.sip.config import resolve_rtp_tx_settings
+
+        rtp_tx = resolve_rtp_tx_settings()
+        self._tx_queue_max = int(rtp_tx["queue_frames"])
+        self._pace_enabled = bool(rtp_tx["pace_enabled"])
+        self._pace_high = int(rtp_tx["pace_high_frames"])
         self._tx_q: queue.Queue[bytes | None] = queue.Queue(maxsize=self._tx_queue_max)
         self._stop = threading.Event()
         self._tx_thread: threading.Thread | None = None
@@ -125,32 +113,32 @@ class RtpSession:
         self._tx_thread.start()
         self._rx_thread.start()
         LOG.info(
-            "RTP TX queue max_frames=%s pace_high=%s (~%.1fs soft lead)",
+            "RTP TX queue max_frames=%s pace_enabled=%s pace_high=%s (~%.1fs soft lead)",
             self._tx_queue_max,
+            self._pace_enabled,
             self._pace_high,
             self._pace_high * 0.02,
         )
 
     def _put_tx_frame(self, frame: bytes) -> bool:
-        """Enqueue one 20ms PCMU frame with soft 1x pacing; never drop on Full."""
+        """Enqueue one 20ms PCMU frame; never drop on Full. Soft 1x optional."""
         if not frame or self._stop.is_set():
             return False
-        # Soft realtime: wait while already ~pace_high ahead of the sender.
-        while not self._stop.is_set() and self._tx_q.qsize() >= self._pace_high:
-            time.sleep(0.01)
+        if self._pace_enabled:
+            while not self._stop.is_set() and self._tx_q.qsize() >= self._pace_high:
+                time.sleep(0.01)
         while not self._stop.is_set():
             try:
                 self._tx_q.put(frame, timeout=0.2)
                 return True
             except queue.Full:
-                # Hard cap: wait for send_loop — never drop oldest TTS frames.
                 continue
         return False
 
     def enqueue_pcmu(self, payload: bytes) -> None:
         """Queue one or more PCMU frames (multiples of 160 preferred).
 
-        May block briefly for soft 1x pacing. Never drops frames when full.
+        Never drops frames when full. Soft 1x pacing when rtp_tx_pace_enabled.
         """
         if not payload or self._stop.is_set():
             return

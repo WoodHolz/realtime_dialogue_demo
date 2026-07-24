@@ -160,7 +160,7 @@
 
           <label for="voice">豆包音色 voice_type</label>
           <select id="voice"></select>
-          <p class="hint" id="voiceHint">默认 vivi；完整目录见 <a id="voiceLabInline" href="./voices" style="color:var(--accent)">音色选型页</a>。</p>
+          <p class="hint" id="voiceHint">默认暖心学姐；完整目录见 <a id="voiceLabInline" href="./voices" style="color:var(--accent)">音色选型页</a>。</p>
 
           <div class="row">
             <div>
@@ -318,7 +318,7 @@
 
       function populateVoices() {
         var scenes = boot.voices || [];
-        var defaultVoice = boot.default_voice || "zh_female_vv_jupiter_bigtts";
+        var defaultVoice = boot.default_voice || "saturn_zh_female_nuanxinxuejie_tob";
         var fromQuery = (new URLSearchParams(location.search).get("voice") || "").trim();
         var fromStore = (localStorage.getItem(STORAGE_KEY) || "").trim();
         var preferred = fromQuery || fromStore || defaultVoice;
@@ -339,7 +339,7 @@
         if (!el.voice.options.length) {
           var fallback = document.createElement("option");
           fallback.value = defaultVoice;
-          fallback.textContent = "vivi (默认)";
+          fallback.textContent = "暖心学姐 (默认)";
           el.voice.appendChild(fallback);
         }
         if (known[preferred] || preferred === defaultVoice) {

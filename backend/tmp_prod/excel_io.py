@@ -150,6 +150,7 @@ def write_results_xlsx(rows: list[dict[str, Any]]) -> bytes:
     wb = Workbook()
     ws = wb.active
     ws.title = "外呼结果"
+    # 交付跟进 / 交付跟进结果放最后：前者系统回写「是」；后者留给交付手填（如是否再呼）。
     headers = [
         "用人单位",
         "姓名",
@@ -162,12 +163,13 @@ def write_results_xlsx(rows: list[dict[str, Any]]) -> bytes:
         "失败原因",
         "承诺完成时间",
         "登记邮箱",
-        "交付跟进",
         "最近call_id",
         "转写摘要",
         "双声道录音(L用户/R AI)",
         "录音目录",
         "更新时间",
+        "交付跟进",
+        "交付跟进结果",
     ]
     ws.append(headers)
     for r in rows:
@@ -186,7 +188,10 @@ def write_results_xlsx(rows: list[dict[str, Any]]) -> bytes:
             if isinstance(recs, dict):
                 stereo = str(recs.get("stereo") or "")
         result = str(r.get("result") or "")
+        # 仅拒提供邮箱 → 标记需交付跟进；其余为空。
         delivery_followup = "是" if result == "no_email_feedback" else ""
+        # 交付跟进结果：留给交付手填（是否再呼等），系统不写。
+        delivery_followup_result = str(r.get("delivery_followup_result") or "")
         ws.append(
             [
                 r.get("employer", ""),
@@ -200,12 +205,13 @@ def write_results_xlsx(rows: list[dict[str, Any]]) -> bytes:
                 r.get("fail_reason", ""),
                 r.get("promised_time", ""),
                 r.get("email", ""),
-                delivery_followup,
                 r.get("last_call_id", ""),
                 summary,
                 stereo,
                 r.get("recording_dir", ""),
                 r.get("updated_at", ""),
+                delivery_followup,
+                delivery_followup_result,
             ]
         )
     buf = BytesIO()

@@ -13,6 +13,7 @@ import asyncio
 import base64
 import json
 import logging
+import os
 import uuid
 from typing import Any, Callable
 
@@ -29,10 +30,57 @@ WS_URL = "wss://openspeech.bytedance.com/api/v3/duplex/realtime/dialogue"
 DUPLEX_MODEL = "1.2.6.0"
 DUPLEX_SILENCE_CHUNK = bytes(CHUNK_BYTES)
 DEFAULT_SPEAKER = "zh_male_xiaotian_jupiter_bigtts"
-# urge_auth / tmp_prod outbound SIP 默认音色（豆包 Jupiter bigtts）
-OUTBOUND_SPEAKER = "zh_female_vv_jupiter_bigtts"
+# Hardcoded fallback; prefer config.json outbound.sip.voice via resolve_outbound_voice().
+OUTBOUND_SPEAKER = "saturn_zh_female_nuanxinxuejie_tob"
+# Doubao audio.output.speed / loudness: [-50, 100]; 0=1.0x, 100=2.0x, -50=0.5x
+# Prefer config.json outbound.sip / SIP_TTS_* (see backend.sip.config).
+DEFAULT_TTS_SPEED = 80
+DEFAULT_TTS_LOUDNESS = 0
 LEGACY_RESOURCE_ID = "volc.speech.dialog"
 LEGACY_APP_KEY = "PlgvMymc7f3tQnJ6"
+
+
+def _clamp_tts_param(value: int | float | None, default: int) -> int:
+    try:
+        n = int(default if value is None else value)
+    except (TypeError, ValueError):
+        n = default
+    return max(-50, min(100, n))
+
+
+def resolve_tts_speed(speed: int | float | None = None) -> int:
+    if speed is not None:
+        return _clamp_tts_param(speed, DEFAULT_TTS_SPEED)
+    try:
+        from backend.sip.config import resolve_tts_audio_params
+
+        return int(resolve_tts_audio_params()["speed"])
+    except Exception:
+        raw = (os.environ.get("SIP_TTS_SPEED") or os.environ.get("DOUBAO_TTS_SPEED") or "").strip()
+        if raw:
+            try:
+                return _clamp_tts_param(int(raw), DEFAULT_TTS_SPEED)
+            except ValueError:
+                pass
+        return DEFAULT_TTS_SPEED
+
+
+def resolve_tts_loudness(loudness: int | float | None = None) -> int:
+    if loudness is not None:
+        return _clamp_tts_param(loudness, DEFAULT_TTS_LOUDNESS)
+    try:
+        from backend.sip.config import resolve_tts_audio_params
+
+        return int(resolve_tts_audio_params()["loudness"])
+    except Exception:
+        raw = (os.environ.get("SIP_TTS_LOUDNESS") or os.environ.get("DOUBAO_TTS_LOUDNESS") or "").strip()
+        if raw:
+            try:
+                return _clamp_tts_param(int(raw), DEFAULT_TTS_LOUDNESS)
+            except ValueError:
+                pass
+        return DEFAULT_TTS_LOUDNESS
+
 
 TYPE_SESSION_CREATE = "session.create"
 TYPE_SESSION_UPDATE = "session.update"
@@ -312,6 +360,8 @@ class DuplexVoiceClient:
         end_smooth_window_ms: int = 1500,
         recv_timeout: int = 10,
         voice: str = "",
+        speed: int | float | None = None,
+        loudness: int | float | None = None,
     ) -> str:
         if not self._ws or self._ws_is_closed():
             raise RuntimeError("Not connected")
@@ -319,6 +369,8 @@ class DuplexVoiceClient:
         style = speaking_style or DEFAULT_SPEAKING_STYLE
         role = system_role or DEFAULT_SYSTEM_ROLE
         speaker = (voice or DEFAULT_SPEAKER).strip() or DEFAULT_SPEAKER
+        tts_speed = resolve_tts_speed(speed)
+        tts_loudness = resolve_tts_loudness(loudness)
         # Align with official demo: instructions only on session; dialog fields live in extension.
         instructions = role
         if style:
@@ -352,6 +404,8 @@ class DuplexVoiceClient:
                 "output": {
                     "format": {"type": "pcm_s16le", "rate": 24000},
                     "voice": speaker,
+                    "speed": tts_speed,
+                    "loudness": tts_loudness,
                 },
             },
         }
@@ -362,6 +416,12 @@ class DuplexVoiceClient:
                 "session": session,
                 "extension": extension,
             }
+        )
+        LOG.info(
+            "session.create voice=%s speed=%s loudness=%s",
+            speaker,
+            tts_speed,
+            tts_loudness,
         )
         self._session_id = session_id
         self._user_audio_sent = False

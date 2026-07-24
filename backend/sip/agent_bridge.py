@@ -70,7 +70,7 @@ class SipAgentBridge:
         speaking_style: str = "",
         call_id: str = "",
         bot_name: str = "语音助手",
-        voice: str = OUTBOUND_SPEAKER,
+        voice: str = "",
         max_call_sec: float | None = None,
         opening_line: str | None = None,
         opening_parts: list[str] | None = None,
@@ -82,7 +82,8 @@ class SipAgentBridge:
         self.speaking_style = speaking_style
         self.call_id = call_id or "anon"
         self.bot_name = bot_name
-        self.voice = (voice or OUTBOUND_SPEAKER).strip() or OUTBOUND_SPEAKER
+        fallback_voice = (sip_config.voice or OUTBOUND_SPEAKER).strip() or OUTBOUND_SPEAKER
+        self.voice = (voice or "").strip() or fallback_voice
         self.max_call_sec = max_call_sec if max_call_sec is not None else sip_config.max_call_sec
         # 方案2: prefer explicit opening_line; fallback to config / legacy nudge.
         if opening_line is not None:
@@ -240,6 +241,8 @@ class SipAgentBridge:
                 server_vad=True,
                 recv_timeout=120,
                 voice=self.voice,
+                speed=self.sip_config.tts_speed,
+                loudness=self.sip_config.tts_loudness,
             )
             self._emit("agent_started", session_id=sid)
 

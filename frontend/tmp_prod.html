@@ -172,7 +172,7 @@
           var preferred =
             (localStorage.getItem(STORAGE_KEY) || "").trim() ||
             data.default_voice ||
-            "zh_female_vv_jupiter_bigtts";
+            "saturn_zh_female_nuanxinxuejie_tob";
           el.voice.innerHTML = "";
           (data.scenes || []).forEach(function (g) {
             var og = document.createElement("optgroup");
@@ -198,8 +198,8 @@
           localStorage.setItem(STORAGE_KEY, el.voice.value);
         } catch (e) {
           var fb2 = document.createElement("option");
-          fb2.value = "zh_female_vv_jupiter_bigtts";
-          fb2.textContent = "vivi（默认）";
+          fb2.value = "saturn_zh_female_nuanxinxuejie_tob";
+          fb2.textContent = "暖心学姐（默认）";
           el.voice.appendChild(fb2);
         }
       }
