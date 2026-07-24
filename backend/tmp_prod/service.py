@@ -311,15 +311,25 @@ async def dial_one_contact(
         email = outcome.get("email") or contact.email or ""
         promised_time = outcome.get("promised_time") or ""
 
-        planned = None
-        if not terminal_failed:
-            planned = plan_next_action(
-                outcome=outcome,
-                attempt=attempt,
-                max_attempts=MAX_ATTEMPTS,
-                is_no_answer=False,
-                source_call_id=source_call_id,
-                contact_email=email,
+        # Even if SIP status=failed (e.g. NORMAL_CLEARING after a real talk), still
+        # enqueue reschedule when outcome has a schedulable promised_time.
+        planned = plan_next_action(
+            outcome=outcome,
+            attempt=attempt,
+            max_attempts=MAX_ATTEMPTS,
+            is_no_answer=False,
+            source_call_id=source_call_id,
+            contact_email=email,
+        )
+        if planned is None:
+            LOG.info(
+                "tmp-prod harness skip enqueue contact=%s result=%s promised=%r "
+                "terminal_failed=%s transcript_turns=%s",
+                contact.contact_id,
+                outcome.get("result"),
+                promised_time,
+                terminal_failed,
+                len(transcript),
             )
 
         if planned:

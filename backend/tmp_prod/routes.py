@@ -85,6 +85,36 @@ class SingleCallBody(BaseModel):
     scenario: str = Field(default="tmp_prod_auth_demo", description="固定 tmp_prod；忽略其他值")
 
 
+@router.get("/single/calls")
+async def single_calls_usage() -> dict[str, Any]:
+    """Browser GET hits this; real dial is POST. Avoid confusing 404 under reverse proxies."""
+    return {
+        "ok": True,
+        "message": "单人外呼请用 POST /tmp-prod/single/calls（不要用浏览器直接打开此 URL）",
+        "page": "/tmp-prod/single",
+        "poll": "GET /tmp-prod/single/batches/{batch_id}",
+        "harness": "GET /tmp-prod/harness/actions",
+    }
+
+
+@router.get("/harness/actions")
+async def list_harness_actions(
+    batch_id: str | None = None,
+    status: str | None = None,
+    x_api_key: str | None = Header(default=None, alias="X-API-Key"),
+) -> dict[str, Any]:
+    """Debug: inspect durable NextAction queue (reschedule / retry)."""
+    _auth(x_api_key)
+    from backend.tmp_prod.harness.store import get_action_store
+
+    actions = get_action_store().list_actions(batch_id=batch_id, status=status)
+    return {
+        "count": len(actions),
+        "actions": [a.to_dict() for a in actions],
+        "path": str(get_action_store().path),
+    }
+
+
 @router.post("/single/calls")
 async def start_single_call(
     body: SingleCallBody,

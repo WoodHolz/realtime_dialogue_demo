@@ -46,6 +46,13 @@ async def execute_action(action_id: str) -> None:
         else "waiting_retry"
     )
     if contact.status not in {expected, "waiting_retry", "waiting_callback"}:
+        LOG.warning(
+            "tmp-prod harness skip execute action=%s contact=%s status=%s expected=%s",
+            action_id,
+            contact.contact_id,
+            contact.status,
+            expected,
+        )
         store.mark(
             action_id,
             status=STATUS_SKIPPED,
@@ -53,6 +60,13 @@ async def execute_action(action_id: str) -> None:
         )
         return
 
+    LOG.info(
+        "tmp-prod harness dial action=%s type=%s batch=%s contact=%s",
+        action_id,
+        action.type,
+        action.batch_id,
+        action.contact_id,
+    )
     opts = dict(action.dial_options or {})
     callback_context = dict(action.callback_context or {})
     call_kind = ""

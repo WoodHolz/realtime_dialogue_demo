@@ -38,20 +38,38 @@ class ActionStore:
         self.path = self.root / "actions.json"
         self._lock = threading.Lock()
         self._actions: dict[str, NextAction] = {}
+        self._mtime_ns: int = -1
         self._load()
+
+    def _file_mtime_ns(self) -> int:
+        try:
+            return self.path.stat().st_mtime_ns
+        except OSError:
+            return -1
 
     def _load(self) -> None:
         if not self.path.is_file():
+            self._actions = {}
+            self._mtime_ns = -1
             return
         try:
             raw = json.loads(self.path.read_text(encoding="utf-8"))
             items = raw if isinstance(raw, list) else (raw.get("actions") or [])
+            loaded: dict[str, NextAction] = {}
             for item in items:
                 action = action_from_dict(item if isinstance(item, dict) else None)
                 if action:
-                    self._actions[action.action_id] = action
+                    loaded[action.action_id] = action
+            self._actions = loaded
+            self._mtime_ns = self._file_mtime_ns()
         except Exception:
             LOG.exception("tmp-prod harness action store load failed path=%s", self.path)
+
+    def _reload_if_stale_unlocked(self) -> None:
+        """Re-read disk so scheduler sees actions written by another request/worker."""
+        mtime = self._file_mtime_ns()
+        if mtime != self._mtime_ns:
+            self._load()
 
     def _save_unlocked(self) -> None:
         self.root.mkdir(parents=True, exist_ok=True)
@@ -60,16 +78,20 @@ class ActionStore:
             json.dumps(payload, ensure_ascii=False, indent=2),
             encoding="utf-8",
         )
+        self._mtime_ns = self._file_mtime_ns()
 
     def save(self, action: NextAction) -> NextAction:
         action.updated_at = _utcnow()
         with self._lock:
+            self._reload_if_stale_unlocked()
             self._actions[action.action_id] = action
             self._save_unlocked()
         return action
 
     def get(self, action_id: str) -> NextAction | None:
-        return self._actions.get(action_id)
+        with self._lock:
+            self._reload_if_stale_unlocked()
+            return self._actions.get(action_id)
 
     def list_actions(
         self,
@@ -78,16 +100,18 @@ class ActionStore:
         contact_id: str | None = None,
         status: str | None = None,
     ) -> list[NextAction]:
-        out: list[NextAction] = []
-        for a in self._actions.values():
-            if batch_id and a.batch_id != batch_id:
-                continue
-            if contact_id and a.contact_id != contact_id:
-                continue
-            if status and a.status != status:
-                continue
-            out.append(a)
-        return sorted(out, key=lambda x: x.due_at)
+        with self._lock:
+            self._reload_if_stale_unlocked()
+            out: list[NextAction] = []
+            for a in self._actions.values():
+                if batch_id and a.batch_id != batch_id:
+                    continue
+                if contact_id and a.contact_id != contact_id:
+                    continue
+                if status and a.status != status:
+                    continue
+                out.append(a)
+            return sorted(out, key=lambda x: x.due_at)
 
     def create(
         self,
@@ -121,6 +145,7 @@ class ActionStore:
         now = now or datetime.now(timezone.utc)
         claimed: list[NextAction] = []
         with self._lock:
+            self._reload_if_stale_unlocked()
             for action in list(self._actions.values()):
                 if action.status != STATUS_PENDING:
                     continue
@@ -143,6 +168,7 @@ class ActionStore:
         error: str = "",
     ) -> NextAction | None:
         with self._lock:
+            self._reload_if_stale_unlocked()
             action = self._actions.get(action_id)
             if not action:
                 return None
@@ -157,6 +183,7 @@ class ActionStore:
         """Cancel pending actions when contact is terminal or re-scheduled."""
         n = 0
         with self._lock:
+            self._reload_if_stale_unlocked()
             for action in self._actions.values():
                 if (
                     action.batch_id == batch_id
@@ -174,6 +201,7 @@ class ActionStore:
         """On process start: reclaim interrupted running actions."""
         n = 0
         with self._lock:
+            self._reload_if_stale_unlocked()
             for action in self._actions.values():
                 if action.status == STATUS_RUNNING:
                     action.status = STATUS_PENDING

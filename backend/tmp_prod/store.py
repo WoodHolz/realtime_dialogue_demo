@@ -123,7 +123,26 @@ class BatchStore:
             )
 
     def get(self, batch_id: str) -> Batch | None:
-        return self._batches.get(batch_id)
+        """Return batch; always re-read from disk so harness scheduler sees latest status."""
+        path = self._path(batch_id)
+        if not path.is_file():
+            return self._batches.get(batch_id)
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+            contacts = [contact_from_dict(c) for c in data.get("contacts") or []]
+            b = Batch(
+                batch_id=data["batch_id"],
+                source_name=data.get("source_name") or "",
+                status=data.get("status") or "created",
+                contacts=contacts,
+                created_at=data.get("created_at") or _utcnow(),
+                updated_at=data.get("updated_at") or _utcnow(),
+            )
+            with self._lock:
+                self._batches[b.batch_id] = b
+            return b
+        except Exception:
+            return self._batches.get(batch_id)
 
     def list_batches(self) -> list[Batch]:
         return sorted(self._batches.values(), key=lambda b: b.created_at, reverse=True)

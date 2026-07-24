@@ -77,6 +77,7 @@ OUTBOUND_DRY_RUN=false           # 真实外呼时关闭
 - `POST /tmp-prod/batches/{id}/start`
 - `GET  /tmp-prod/batches/{id}`（含 `harness_actions` 队列）
 - `GET  /tmp-prod/batches/{id}/export.xlsx`
-- `POST /tmp-prod/single/calls`（单人测试，走 harness）
+- `POST /tmp-prod/single/calls`（单人测试，走 harness；浏览器 GET 会返回用法说明）
 - `GET  /tmp-prod/single/batches/{batch_id}`（单人轮询：contact + call + harness）
+- `GET  /tmp-prod/harness/actions`（调试：查看改约/重试队列）
 - `GET  /tmp-prod/calls/{call_id}/export.xlsx`
