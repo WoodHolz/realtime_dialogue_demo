@@ -97,6 +97,7 @@ async def dial_one_contact(
     client_name: str = "比赛日科技",
     our_brand_name: str = "芝麻背调",
     channel_brand_name: str = "",
+    voice: str = "",
 ) -> ContactJob:
     """Place one outbound attempt; schedule retry on no-answer if attempts remain."""
     ensure_tmp_prod_env()
@@ -128,6 +129,7 @@ async def dial_one_contact(
         scenario=SCENARIO,
         external_id=f"{batch_id}:{contact.contact_id}:{attempt}",
         payload=payload,
+        voice=voice,
     )
     call_ids = list(contact.call_ids) + [task.call_id]
     store.update_contact(
@@ -192,6 +194,7 @@ async def dial_one_contact(
                     client_name=client_name,
                     our_brand_name=our_brand_name,
                     channel_brand_name=channel_brand_name,
+                    voice=voice,
                 ),
                 name=f"tmp-prod-retry-{contact.contact_id}-{attempt}",
             )
@@ -356,6 +359,7 @@ async def _retry_later(
     client_name: str = "比赛日科技",
     our_brand_name: str = "芝麻背调",
     channel_brand_name: str = "",
+    voice: str = "",
 ) -> None:
     try:
         await asyncio.sleep(delay_sec)
@@ -374,6 +378,7 @@ async def _retry_later(
             client_name=client_name,
             our_brand_name=our_brand_name,
             channel_brand_name=channel_brand_name,
+            voice=voice,
         )
         _maybe_mark_batch_done(batch_id, store)
     except Exception:
@@ -400,6 +405,7 @@ async def run_batch(
     channel_brand_name: str = "",
     stagger_sec: float = 0.5,
     max_concurrent: int | None = None,
+    voice: str = "",
 ) -> Batch:
     """Dial batch contacts concurrently (capped); SIP traffic gate still applies."""
     ensure_tmp_prod_env()
@@ -413,10 +419,11 @@ async def run_batch(
     limit = max(1, int(max_concurrent if max_concurrent is not None else batch_max_concurrent()))
     sem = asyncio.Semaphore(limit)
     LOG.info(
-        "tmp-prod batch start batch_id=%s contacts=%s max_concurrent=%s",
+        "tmp-prod batch start batch_id=%s contacts=%s max_concurrent=%s voice=%s",
         batch_id,
         len(batch.contacts),
         limit,
+        voice or "(default)",
     )
 
     async def _one(contact_id: str) -> None:
@@ -436,6 +443,7 @@ async def run_batch(
                     client_name=client_name,
                     our_brand_name=our_brand_name,
                     channel_brand_name=channel_brand_name,
+                    voice=voice,
                 )
             except Exception as exc:
                 LOG.exception("tmp-prod dial error contact=%s", contact_id)

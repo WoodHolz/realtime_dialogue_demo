@@ -141,11 +141,12 @@
   <main>
     <nav class="nav">
       <a id="linkBatch" href="./">← 批量演示</a>
+      <a id="linkVoices" href="./voices">豆包音色选型</a>
       <a id="linkSip" href="../sip-call">催授权 SIP 联调</a>
     </nav>
     <h1>tmp-prod · 单人测试</h1>
     <p class="lead">
-      用 tmp-prod 剧本（芝麻背调）打一通 SIP 外呼。通话结束后可回放双声道录音，并查看 ASR / AI 转写。
+      用 tmp-prod 剧本（芝麻背调）打一通 SIP 外呼。可先在音色页选型，通话结束后可回放双声道录音并查看 ASR / AI 转写。
     </p>
 
     <div class="layout">
@@ -155,6 +156,10 @@
           <label for="phone">被测手机号</label>
           <input id="phone" type="tel" inputmode="numeric" placeholder="例如 18324133080" required autocomplete="tel" />
           <p class="hint">被叫自动加 <code id="prefixHint">a1</code>；外显号由服务端号池分配。</p>
+
+          <label for="voice">豆包音色 voice_type</label>
+          <select id="voice"></select>
+          <p class="hint" id="voiceHint">默认 vivi；完整目录见 <a id="voiceLabInline" href="./voices" style="color:var(--accent)">音色选型页</a>。</p>
 
           <div class="row">
             <div>
@@ -253,8 +258,11 @@
       var TMP_PROD_API = pathPrefix + "/tmp-prod";
       var SCENARIO = "tmp_prod_auth_demo";
 
+      var STORAGE_KEY = "tmp_prod_voice_type";
       document.getElementById("linkBatch").href = pathPrefix + "/tmp-prod";
+      document.getElementById("linkVoices").href = pathPrefix + "/tmp-prod/voices";
       document.getElementById("linkSip").href = pathPrefix + "/sip-call";
+      document.getElementById("voiceLabInline").href = pathPrefix + "/tmp-prod/voices";
 
       var boot = {};
       try {
@@ -272,6 +280,8 @@
 
       var el = {
         phone: document.getElementById("phone"),
+        voice: document.getElementById("voice"),
+        voiceHint: document.getElementById("voiceHint"),
         candidate: document.getElementById("candidate"),
         gender: document.getElementById("gender"),
         employer: document.getElementById("employer"),
@@ -302,6 +312,56 @@
         rFollowup: document.getElementById("rFollowup"),
         rCallId: document.getElementById("rCallId"),
       };
+
+      function populateVoices() {
+        var scenes = boot.voices || [];
+        var defaultVoice = boot.default_voice || "zh_female_vv_jupiter_bigtts";
+        var fromQuery = (new URLSearchParams(location.search).get("voice") || "").trim();
+        var fromStore = (localStorage.getItem(STORAGE_KEY) || "").trim();
+        var preferred = fromQuery || fromStore || defaultVoice;
+        el.voice.innerHTML = "";
+        var known = {};
+        scenes.forEach(function (g) {
+          var optgroup = document.createElement("optgroup");
+          optgroup.label = g.scene || g.scene_id || "音色";
+          (g.voices || []).forEach(function (v) {
+            known[v.voice_type] = true;
+            var opt = document.createElement("option");
+            opt.value = v.voice_type;
+            opt.textContent = v.name + " · " + (v.lang || "") + " (" + v.voice_type + ")";
+            optgroup.appendChild(opt);
+          });
+          el.voice.appendChild(optgroup);
+        });
+        if (!el.voice.options.length) {
+          var fallback = document.createElement("option");
+          fallback.value = defaultVoice;
+          fallback.textContent = "vivi (默认)";
+          el.voice.appendChild(fallback);
+        }
+        if (known[preferred] || preferred === defaultVoice) {
+          el.voice.value = preferred;
+        } else if (fromQuery) {
+          var extra = document.createElement("option");
+          extra.value = fromQuery;
+          extra.textContent = "自定义 · " + fromQuery;
+          el.voice.appendChild(extra);
+          el.voice.value = fromQuery;
+        } else {
+          el.voice.value = defaultVoice;
+        }
+        localStorage.setItem(STORAGE_KEY, el.voice.value);
+        el.voiceHint.innerHTML =
+          "当前 <code>" + el.voice.value + "</code>。完整目录见 " +
+          "<a href='" + pathPrefix + "/tmp-prod/voices' style='color:var(--accent)'>音色选型页</a>。";
+      }
+      populateVoices();
+      el.voice.addEventListener("change", function () {
+        localStorage.setItem(STORAGE_KEY, el.voice.value);
+        el.voiceHint.innerHTML =
+          "当前 <code>" + el.voice.value + "</code>。完整目录见 " +
+          "<a href='" + pathPrefix + "/tmp-prod/voices' style='color:var(--accent)'>音色选型页</a>。";
+      });
 
       function headers(json) {
         var h = {};
@@ -351,6 +411,7 @@
           client_name: (el.client.value || "").trim() || "比赛日科技",
           identity_mode: el.identityMode.value,
           our_brand_name: brandSelf ? ((el.ourBrand.value || "").trim() || "芝麻背调") : "",
+          voice: (el.voice.value || "").trim(),
         };
         return body;
       }
@@ -614,6 +675,7 @@
             "已创建 call_id=" + data.call_id +
             "\nstatus=" + data.status +
             "\nscenario=" + (data.scenario || SCENARIO) +
+            "\nvoice=" + (data.voice || body.voice || "") +
             "\ncalled=" + (dial.called || withPrefix(phone)) +
             "\ndisplay=" + (dial.display || "(服务端自动分配)") +
             (data.opening_line ? ("\n\n开场白：\n" + data.opening_line) : "") +

@@ -11,6 +11,7 @@ from fastapi import APIRouter, File, Header, HTTPException, UploadFile
 from fastapi.responses import HTMLResponse, Response
 from pydantic import BaseModel, Field
 
+from backend.doubao_voices import list_voice_catalog, resolve_voice
 from backend.outbound.service import verify_partner_api_key
 from backend.outbound.store import get_call_store
 from backend.tmp_prod.excel_io import (
@@ -60,6 +61,10 @@ class StartBody(BaseModel):
         le=200,
         description="本批次同时外呼上限；空则 TMP_PROD_MAX_CONCURRENT / OUTBOUND_MAX_CONCURRENT",
     )
+    voice: str = Field(
+        default="",
+        description="豆包 TTS voice_type；空则外呼默认音色。见 GET /tmp-prod/voice-catalog",
+    )
 
 
 def render_tmp_prod_page() -> HTMLResponse:
@@ -82,12 +87,15 @@ def render_tmp_prod_single_page() -> HTMLResponse:
         from backend.outbound.dial import load_dial_settings
 
         cfg = load_dial_settings()
+        voices = list_voice_catalog()
         boot = {
             "called_prefix": cfg.called_prefix,
             "ani": cfg.ani,
             "default_display": cfg.default_display,
             "display_numbers": list(cfg.display_numbers),
             "scenario": "tmp_prod_auth_demo",
+            "default_voice": voices.get("default_voice"),
+            "voices": voices.get("scenes") or [],
         }
     except Exception as exc:  # noqa: BLE001
         LOG.warning("tmp-prod single boot config failed: %s", exc)
@@ -97,6 +105,8 @@ def render_tmp_prod_single_page() -> HTMLResponse:
             "default_display": "",
             "display_numbers": [],
             "scenario": "tmp_prod_auth_demo",
+            "default_voice": "",
+            "voices": [],
             "error": str(exc),
         }
 
@@ -111,6 +121,29 @@ def render_tmp_prod_single_page() -> HTMLResponse:
     boot_json = json.dumps(boot, ensure_ascii=False).replace("<", "\\u003c")
     raw = raw.replace("<!--__TMP_PROD_SINGLE_BOOT_JSON__-->", boot_json, 1)
     return HTMLResponse(raw, media_type="text/html; charset=utf-8")
+
+
+def render_tmp_prod_voices_page() -> HTMLResponse:
+    """PM 豆包音色选型页。"""
+    import json
+
+    path = Path(__file__).resolve().parents[2] / "frontend" / "tmp_prod_voices.html"
+    if not path.exists():
+        return HTMLResponse("<p>tmp_prod_voices.html not found</p>", status_code=404)
+    raw = path.read_text(encoding="utf-8")
+    catalog = list_voice_catalog()
+    boot_json = json.dumps(catalog, ensure_ascii=False).replace("<", "\\u003c")
+    raw = raw.replace("<!--__TMP_PROD_VOICES_BOOT_JSON__-->", boot_json, 1)
+    return HTMLResponse(raw, media_type="text/html; charset=utf-8")
+
+
+@router.get("/voice-catalog")
+async def list_tmp_prod_voices(
+    x_api_key: str | None = Header(default=None, alias="X-API-Key"),
+) -> dict[str, Any]:
+    """PM：豆包音色目录（与 outbound/v1/voices 相同）。HTML 选型页在 GET /tmp-prod/voices。"""
+    _auth(x_api_key)
+    return list_voice_catalog()
 
 
 @router.post("/batches/upload")
@@ -164,6 +197,10 @@ async def start_batch(
     if not batch:
         raise HTTPException(status_code=404, detail="batch not found")
     body = body or StartBody()
+    try:
+        voice = resolve_voice(body.voice)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     asyncio.create_task(
         run_batch(
             batch_id,
@@ -173,6 +210,7 @@ async def start_batch(
             channel_brand_name=body.channel_brand_name,
             stagger_sec=body.stagger_sec,
             max_concurrent=body.max_concurrent,
+            voice=voice,
         ),
         name=f"tmp-prod-batch-{batch_id}",
     )
@@ -182,6 +220,7 @@ async def start_batch(
         "message": "已开始外呼任务（后台并发执行）",
         "stagger_sec": body.stagger_sec,
         "max_concurrent": body.max_concurrent,
+        "voice": voice,
     }
 
 

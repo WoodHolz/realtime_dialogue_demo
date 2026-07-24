@@ -11,6 +11,7 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
 from backend.outbound.models import RESULT_ALREADY_DONE, STATUS_COMPLETED
+from backend.doubao_voices import list_voice_catalog, resolve_voice
 from backend.outbound.service import (
     SUPPORTED_SCENARIOS,
     build_scenario_prompt,
@@ -74,6 +75,10 @@ class CreateCallRequest(BaseModel):
         default=None,
         description="true=只建任务不下外呼；默认跟随 OUTBOUND_DRY_RUN",
     )
+    voice: str = Field(
+        default="",
+        description="豆包 TTS voice_type；空则用外呼默认音色。见 GET /outbound/v1/voices",
+    )
 
 
 class CompleteCallRequest(BaseModel):
@@ -123,14 +128,23 @@ async def dial_options(x_api_key: str | None = Header(default=None, alias="X-API
         }
     except Exception as exc:  # noqa: BLE001
         traffic = {"error": str(exc)}
+    voices = list_voice_catalog()
     return {
         "called_prefix": cfg.called_prefix,
         "ani": cfg.ani,
         "default_display": cfg.default_display,
         "display_numbers": list(cfg.display_numbers),
         "scenario": "urge_auth",
+        "default_voice": voices.get("default_voice"),
         "traffic": traffic,
     }
+
+
+@router.get("/voices")
+async def list_voices(x_api_key: str | None = Header(default=None, alias="X-API-Key")) -> dict[str, Any]:
+    """PM / 联调：豆包音色目录（S2S-Omni / SC 2.0 / O 2.0）。"""
+    _auth(x_api_key)
+    return list_voice_catalog()
 
 
 @router.post("/preview-opening")
@@ -219,6 +233,7 @@ async def create_call(
     if req.has_fallback_sms is not None:
         payload["has_fallback_sms"] = req.has_fallback_sms
     try:
+        voice = resolve_voice(req.voice)
         task = await create_outbound_call(
             phone=req.phone,
             scenario=req.scenario,
@@ -227,6 +242,7 @@ async def create_call(
             payload=payload,
             dry_run=req.dry_run,
             display=display,
+            voice=voice,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -237,6 +253,7 @@ async def create_call(
         "call_id": task.call_id,
         "status": task.status,
         "scenario": task.scenario,
+        "voice": task.voice or None,
         "external_id": task.external_id or None,
         "dry_run": task.dry_run,
         "opening_line": opening_line or None,

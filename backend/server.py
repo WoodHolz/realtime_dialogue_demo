@@ -658,6 +658,15 @@ async def tmp_prod_single_page():
     return render_tmp_prod_single_page()
 
 
+@app.get("/tmp-prod/voices")
+@app.get("/tmp-prod/voices/")
+async def tmp_prod_voices_page():
+    """tmp-prod PM 豆包音色选型。"""
+    from backend.tmp_prod.routes import render_tmp_prod_voices_page
+
+    return render_tmp_prod_voices_page()
+
+
 @app.get("/voice")
 async def voice_page():
     path = _frontend_dir() / "voice.html"

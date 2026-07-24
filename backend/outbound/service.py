@@ -10,6 +10,7 @@ from typing import Any
 
 import httpx
 
+from backend.doubao_voices import resolve_voice
 from backend.outbound.dial import build_dial_plan, load_dial_settings
 from backend.outbound.models import (
     RESULT_FAILED,
@@ -91,6 +92,7 @@ async def create_outbound_call(
     payload: dict[str, Any] | None = None,
     dry_run: bool | None = None,
     display: str = "",
+    voice: str = "",
     store: CallStore | None = None,
 ) -> CallTask:
     phone = (phone or "").strip()
@@ -103,6 +105,12 @@ async def create_outbound_call(
     body = dict(payload or {})
     if display:
         body["display"] = display.strip()
+    # payload.voice 可作为后备；显式 voice= 优先
+    resolved_voice = resolve_voice(
+        voice or str(body.get("voice") or body.get("voice_type") or "")
+    )
+    body["voice"] = resolved_voice
+    body["voice_type"] = resolved_voice
     if is_tmp_prod_scenario(scenario):
         from config.tmp_prod_prompt import stamp_trigger_beijing
 
@@ -124,6 +132,7 @@ async def create_outbound_call(
         speaking_style=speaking_style,
         opening_line=opening_line,
         opening_parts=opening_parts,
+        voice=resolved_voice,
         dry_run=use_dry,
     )
     store.put(task)
@@ -139,7 +148,10 @@ async def create_outbound_call(
             display_pool=dial_cfg.display_numbers,
             caller_mode=dial_cfg.caller_mode,
         )
-        store.update(task.call_id, telephony={"dial": dial.as_dict()})
+        store.update(
+            task.call_id,
+            telephony={"dial": dial.as_dict(), "voice": resolved_voice},
+        )
         task = store.get(task.call_id) or task
     except Exception:
         LOG.exception("failed to build dial plan for call_id=%s", task.call_id)

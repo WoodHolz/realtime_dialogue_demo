@@ -192,6 +192,11 @@ async def _run_sip_bridged_call(
         dial_attempts: list[dict[str, Any]] = []
         outcome = None
         for attempt in range(1, max_attempts + 1):
+            voice = (
+                (getattr(task, "voice", None) or "").strip()
+                or str((task.payload or {}).get("voice") or "")
+                or str((task.payload or {}).get("voice_type") or "")
+            )
             bridge = SipAgentBridge(
                 cfg,
                 system_role=system_role,
@@ -201,6 +206,7 @@ async def _run_sip_bridged_call(
                 opening_line=opening,
                 opening_parts=parts,
                 on_status=on_status,
+                voice=voice,
             )
             try:
                 outcome = await bridge.run(phone)

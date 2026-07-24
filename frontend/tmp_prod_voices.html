@@ -1,0 +1,292 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>tmp-prod · 豆包音色选型</title>
+  <style>
+    :root {
+      --bg: #f2f4f3;
+      --ink: #1a1f1c;
+      --muted: #5c675f;
+      --line: #d5ddd7;
+      --accent: #0d5c45;
+      --accent-soft: #e7f2ed;
+      --card: #ffffff;
+      --selected: #0d5c45;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: "IBM Plex Sans", "Noto Sans SC", system-ui, sans-serif;
+      color: var(--ink);
+      background:
+        radial-gradient(ellipse 70% 45% at 0% 0%, #dceee6 0%, transparent 55%),
+        var(--bg);
+      min-height: 100vh;
+    }
+    main { width: min(1100px, calc(100% - 2rem)); margin: 2rem auto 3rem; }
+    h1 { margin: 0 0 0.35rem; font-size: 1.6rem; }
+    .lead { color: var(--muted); margin: 0 0 1.25rem; line-height: 1.5; }
+    .nav {
+      display: flex; flex-wrap: wrap; gap: 0.75rem 1.1rem;
+      margin-bottom: 1rem; font-size: 0.9rem;
+    }
+    .nav a { color: var(--accent); text-decoration: none; }
+    .nav a:hover { text-decoration: underline; }
+    .sticky {
+      position: sticky; top: 0; z-index: 5;
+      background: rgba(242, 244, 243, 0.92);
+      backdrop-filter: blur(8px);
+      border-bottom: 1px solid var(--line);
+      margin: 0 -1rem 1.25rem;
+      padding: 0.85rem 1rem;
+    }
+    .selected-bar {
+      display: flex; flex-wrap: wrap; gap: 0.75rem 1.25rem;
+      align-items: center; justify-content: space-between;
+    }
+    .selected-meta { font-size: 0.9rem; line-height: 1.45; }
+    .selected-meta strong { color: var(--accent); }
+    .selected-meta code {
+      font-size: 0.85em; background: var(--accent-soft);
+      padding: 0.1rem 0.35rem; border-radius: 4px;
+    }
+    .actions { display: flex; flex-wrap: wrap; gap: 0.5rem; }
+    button, .btn {
+      font: inherit; border: 0; border-radius: 8px; padding: 0.55rem 0.9rem;
+      background: var(--accent); color: #fff; font-weight: 600; cursor: pointer;
+      text-decoration: none; display: inline-flex; align-items: center;
+    }
+    button.secondary, .btn.secondary { background: #2f3d36; }
+    button:disabled { opacity: 0.55; cursor: not-allowed; }
+    .filters {
+      display: flex; flex-wrap: wrap; gap: 0.5rem; margin-bottom: 1rem;
+    }
+    .filters button {
+      background: #fff; color: var(--ink); border: 1px solid var(--line);
+      font-weight: 500; padding: 0.4rem 0.75rem; font-size: 0.85rem;
+    }
+    .filters button.active {
+      background: var(--accent-soft); border-color: var(--accent); color: var(--accent);
+      font-weight: 700;
+    }
+    .scene {
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      padding: 1rem 1.1rem 1.15rem;
+      margin-bottom: 1rem;
+    }
+    .scene h2 {
+      margin: 0 0 0.75rem;
+      font-size: 1.05rem;
+    }
+    .scene .count {
+      color: var(--muted); font-weight: 500; font-size: 0.85rem;
+    }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+      gap: 0.65rem;
+    }
+    .voice {
+      display: block;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      padding: 0.7rem 0.8rem;
+      cursor: pointer;
+      background: #fafcfb;
+      transition: border-color 0.15s, background 0.15s, box-shadow 0.15s;
+    }
+    .voice:hover { border-color: #9bb8ab; }
+    .voice.picked {
+      border-color: var(--selected);
+      background: var(--accent-soft);
+      box-shadow: inset 0 0 0 1px var(--selected);
+    }
+    .voice input { position: absolute; opacity: 0; pointer-events: none; }
+    .voice .name { font-weight: 700; font-size: 0.95rem; margin-bottom: 0.25rem; }
+    .voice .vt {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 0.72rem; color: var(--muted); word-break: break-all; line-height: 1.35;
+    }
+    .voice .lang {
+      display: inline-block; margin-top: 0.4rem;
+      font-size: 0.72rem; color: var(--accent);
+      background: #fff; border: 1px solid #b8d9ce;
+      border-radius: 999px; padding: 0.05rem 0.45rem;
+    }
+    .hint { font-size: 0.8rem; color: var(--muted); margin-top: 0.75rem; line-height: 1.45; }
+  </style>
+</head>
+<body>
+  <main>
+    <nav class="nav">
+      <a id="linkBatch" href="./">← 批量演示</a>
+      <a id="linkSingle" href="./single">单人测试</a>
+    </nav>
+    <h1>tmp-prod · 豆包音色选型</h1>
+    <p class="lead">
+      给 PM 挑选 tmp-prod 外呼用的豆包音色（S2S-Omni / SC 2.0 / O 2.0）。选中后可跳到单人测试页直接外呼试听。
+    </p>
+
+    <div class="sticky">
+      <div class="selected-bar">
+        <div class="selected-meta" id="selectedMeta">加载中…</div>
+        <div class="actions">
+          <button type="button" class="secondary" id="copyBtn">复制 voice_type</button>
+          <a class="btn" id="goSingle" href="./single">用此音色去单人测试 →</a>
+        </div>
+      </div>
+    </div>
+
+    <div class="filters" id="filters"></div>
+    <div id="catalog"></div>
+    <p class="hint">
+      默认外呼音色为 vivi（<code>zh_female_vv_jupiter_bigtts</code>）。选择会写入本机 localStorage，单人测试 / 批量页会自动带上。
+    </p>
+  </main>
+
+  <script type="application/json" id="voices-boot"><!--__TMP_PROD_VOICES_BOOT_JSON__--></script>
+  <script>
+    (function () {
+      var pathPrefix = location.pathname.indexOf("/s2s/") === 0 || location.pathname === "/s2s"
+        ? "/s2s" : "";
+      var STORAGE_KEY = "tmp_prod_voice_type";
+
+      document.getElementById("linkBatch").href = pathPrefix + "/tmp-prod";
+      document.getElementById("linkSingle").href = pathPrefix + "/tmp-prod/single";
+
+      var boot = {};
+      try {
+        boot = JSON.parse((document.getElementById("voices-boot").textContent) || "{}");
+      } catch (e) {
+        boot = {};
+      }
+
+      var scenes = boot.scenes || [];
+      var defaultVoice = boot.default_voice || "zh_female_vv_jupiter_bigtts";
+      var selected =
+        (new URLSearchParams(location.search).get("voice") || "").trim() ||
+        (localStorage.getItem(STORAGE_KEY) || "").trim() ||
+        defaultVoice;
+
+      var el = {
+        catalog: document.getElementById("catalog"),
+        filters: document.getElementById("filters"),
+        selectedMeta: document.getElementById("selectedMeta"),
+        goSingle: document.getElementById("goSingle"),
+        copyBtn: document.getElementById("copyBtn"),
+      };
+
+      var activeScene = "all";
+      var voiceIndex = {};
+      scenes.forEach(function (g) {
+        (g.voices || []).forEach(function (v) {
+          voiceIndex[v.voice_type] = Object.assign({}, v, {
+            scene: g.scene,
+            scene_id: g.scene_id,
+          });
+        });
+      });
+      if (!voiceIndex[selected]) selected = defaultVoice;
+
+      function updateSelectedBar() {
+        var meta = voiceIndex[selected] || { name: selected, voice_type: selected, lang: "", scene: "" };
+        el.selectedMeta.innerHTML =
+          "当前选择：<strong>" + escapeHtml(meta.name) + "</strong>" +
+          (meta.scene ? (" · " + escapeHtml(meta.scene)) : "") +
+          (meta.lang ? (" · " + escapeHtml(meta.lang)) : "") +
+          "<br/><code>" + escapeHtml(meta.voice_type) + "</code>";
+        el.goSingle.href =
+          pathPrefix + "/tmp-prod/single?voice=" + encodeURIComponent(selected);
+        localStorage.setItem(STORAGE_KEY, selected);
+        document.querySelectorAll(".voice").forEach(function (node) {
+          node.classList.toggle("picked", node.getAttribute("data-vt") === selected);
+          var input = node.querySelector("input");
+          if (input) input.checked = node.getAttribute("data-vt") === selected;
+        });
+      }
+
+      function escapeHtml(s) {
+        return String(s)
+          .replace(/&/g, "&amp;")
+          .replace(/</g, "&lt;")
+          .replace(/>/g, "&gt;")
+          .replace(/"/g, "&quot;");
+      }
+
+      function renderFilters() {
+        el.filters.innerHTML = "";
+        var tabs = [{ id: "all", label: "全部" }].concat(
+          scenes.map(function (g) {
+            return { id: g.scene_id, label: g.scene + " (" + (g.voices || []).length + ")" };
+          })
+        );
+        tabs.forEach(function (t) {
+          var btn = document.createElement("button");
+          btn.type = "button";
+          btn.textContent = t.label;
+          btn.className = t.id === activeScene ? "active" : "";
+          btn.addEventListener("click", function () {
+            activeScene = t.id;
+            renderFilters();
+            renderCatalog();
+            updateSelectedBar();
+          });
+          el.filters.appendChild(btn);
+        });
+      }
+
+      function renderCatalog() {
+        el.catalog.innerHTML = "";
+        scenes.forEach(function (g) {
+          if (activeScene !== "all" && g.scene_id !== activeScene) return;
+          var section = document.createElement("section");
+          section.className = "scene";
+          section.innerHTML =
+            "<h2>" + escapeHtml(g.scene) +
+            " <span class='count'>· " + (g.voices || []).length + " 个音色</span></h2>";
+          var grid = document.createElement("div");
+          grid.className = "grid";
+          (g.voices || []).forEach(function (v) {
+            var label = document.createElement("label");
+            label.className = "voice" + (v.voice_type === selected ? " picked" : "");
+            label.setAttribute("data-vt", v.voice_type);
+            label.innerHTML =
+              "<input type='radio' name='voice' value='" + escapeHtml(v.voice_type) + "'" +
+              (v.voice_type === selected ? " checked" : "") + " />" +
+              "<div class='name'>" + escapeHtml(v.name) + "</div>" +
+              "<div class='vt'>" + escapeHtml(v.voice_type) + "</div>" +
+              "<span class='lang'>" + escapeHtml(v.lang || "") + "</span>";
+            label.addEventListener("click", function (e) {
+              e.preventDefault();
+              selected = v.voice_type;
+              updateSelectedBar();
+            });
+            grid.appendChild(label);
+          });
+          section.appendChild(grid);
+          el.catalog.appendChild(section);
+        });
+      }
+
+      el.copyBtn.addEventListener("click", function () {
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          navigator.clipboard.writeText(selected).then(function () {
+            el.copyBtn.textContent = "已复制";
+            setTimeout(function () { el.copyBtn.textContent = "复制 voice_type"; }, 1200);
+          });
+        } else {
+          prompt("voice_type", selected);
+        }
+      });
+
+      renderFilters();
+      renderCatalog();
+      updateSelectedBar();
+    })();
+  </script>
+</body>
+</html>

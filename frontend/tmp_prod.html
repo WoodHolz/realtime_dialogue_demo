@@ -62,13 +62,20 @@
 </head>
 <body>
   <main>
+    <nav style="display:flex;flex-wrap:wrap;gap:0.75rem 1.1rem;margin-bottom:1rem;font-size:0.9rem;">
+      <a id="linkSingle" href="./single" style="color:var(--accent);text-decoration:none;">单人测试</a>
+      <a id="linkVoices" href="./voices" style="color:var(--accent);text-decoration:none;">豆包音色选型</a>
+    </nav>
     <h1>tmp-prod · 芝麻背调催授权演示</h1>
-    <p class="lead">上传 Excel（用人单位 / 姓名 / 性别 / 手机号）→ <b>并发</b>批量外呼 → 查看结果并下载 xlsx。未接通 30 分钟后自动重试一次；2 次失败记为「未接通」。单通最长 15 分钟。需要单通联调请用 <a id="linkSingle" href="./single" style="color:var(--accent)">单人测试页</a></p>
+    <p class="lead">上传 Excel（用人单位 / 姓名 / 性别 / 手机号）→ <b>并发</b>批量外呼 → 查看结果并下载 xlsx。未接通 30 分钟后自动重试一次；2 次失败记为「未接通」。单通最长 15 分钟。需要单通联调请用 <a id="linkSingleLead" href="./single" style="color:var(--accent)">单人测试页</a></p>
 
     <section class="panel">
       <h2 style="margin:0 0 0.5rem;font-size:1rem;">1. 上传并外呼</h2>
       <label for="file">Excel 文件</label>
       <input id="file" type="file" accept=".xlsx,.xlsm" />
+      <label for="voice">豆包音色 voice_type</label>
+      <select id="voice"></select>
+      <p class="hint">本批次统一音色；目录见 <a id="voiceLabInline" href="./voices" style="color:var(--accent)">音色选型页</a>。</p>
       <div class="row">
         <div>
           <label for="identityMode">身份模式</label>
@@ -130,10 +137,18 @@
         ? "/s2s" : "";
       // page: /tmp-prod or /s2s/tmp-prod（勿依赖尾斜杠重定向）
       var API = pathPrefix + "/tmp-prod";
+      var STORAGE_KEY = "tmp_prod_voice_type";
       var singleLink = document.getElementById("linkSingle");
       if (singleLink) singleLink.href = pathPrefix + "/tmp-prod/single";
+      var singleLead = document.getElementById("linkSingleLead");
+      if (singleLead) singleLead.href = pathPrefix + "/tmp-prod/single";
+      var voicesLink = document.getElementById("linkVoices");
+      if (voicesLink) voicesLink.href = pathPrefix + "/tmp-prod/voices";
+      var voiceLabInline = document.getElementById("voiceLabInline");
+      if (voiceLabInline) voiceLabInline.href = pathPrefix + "/tmp-prod/voices";
       var el = {
         file: document.getElementById("file"),
+        voice: document.getElementById("voice"),
         apiKey: document.getElementById("apiKey"),
         identityMode: document.getElementById("identityMode"),
         client: document.getElementById("client"),
@@ -148,6 +163,49 @@
         tbody: document.getElementById("tbody"),
       };
       var pollTimer = null;
+
+      async function loadVoices() {
+        try {
+          var resp = await fetch(API + "/voice-catalog", { headers: headers(false) });
+          var data = await resp.json();
+          if (!resp.ok) throw new Error(data.detail || resp.statusText);
+          var preferred =
+            (localStorage.getItem(STORAGE_KEY) || "").trim() ||
+            data.default_voice ||
+            "zh_female_vv_jupiter_bigtts";
+          el.voice.innerHTML = "";
+          (data.scenes || []).forEach(function (g) {
+            var og = document.createElement("optgroup");
+            og.label = g.scene || g.scene_id || "音色";
+            (g.voices || []).forEach(function (v) {
+              var opt = document.createElement("option");
+              opt.value = v.voice_type;
+              opt.textContent = v.name + " · " + (v.lang || "");
+              og.appendChild(opt);
+            });
+            el.voice.appendChild(og);
+          });
+          if (!el.voice.options.length) {
+            var fb = document.createElement("option");
+            fb.value = preferred;
+            fb.textContent = preferred;
+            el.voice.appendChild(fb);
+          }
+          el.voice.value = preferred;
+          if (el.voice.value !== preferred && el.voice.options.length) {
+            el.voice.selectedIndex = 0;
+          }
+          localStorage.setItem(STORAGE_KEY, el.voice.value);
+        } catch (e) {
+          var fb2 = document.createElement("option");
+          fb2.value = "zh_female_vv_jupiter_bigtts";
+          fb2.textContent = "vivi（默认）";
+          el.voice.appendChild(fb2);
+        }
+      }
+      el.voice.addEventListener("change", function () {
+        localStorage.setItem(STORAGE_KEY, el.voice.value);
+      });
 
       function syncIdentityFields() {
         var brandSelf = el.identityMode.value === "BRAND_SELF";
@@ -248,6 +306,7 @@
             identity_mode: el.identityMode.value,
             client_name: (el.client.value || "").trim() || "比赛日科技",
             our_brand_name: brandSelf ? ((el.ourBrand.value || "").trim() || "芝麻背调") : "",
+            voice: (el.voice.value || "").trim(),
           };
           var resp = await fetch(API + "/batches/" + id + "/start", {
             method: "POST",
@@ -256,7 +315,7 @@
           });
           var data = await resp.json();
           if (!resp.ok) throw new Error(data.detail || resp.statusText);
-          setStatus(data.message || "已开始");
+          setStatus((data.message || "已开始") + (data.voice ? ("\nvoice=" + data.voice) : ""));
           startPoll();
           await refresh();
         } catch (e) {
@@ -271,6 +330,7 @@
 
       el.identityMode.addEventListener("change", syncIdentityFields);
       syncIdentityFields();
+      loadVoices();
 
       el.exportBtn.addEventListener("click", async function () {
         var id = (el.batchId.value || "").trim();
