@@ -26,7 +26,7 @@ class ContactJob:
     name: str
     gender: str
     phone: str
-    status: str = "pending"  # pending|dialing|in_call|waiting_retry|completed|failed
+    status: str = "pending"  # pending|dialing|in_call|waiting_retry|waiting_callback|completed|failed
     result: str = ""
     result_summary: str = ""
     fail_reason: str = ""
@@ -40,7 +40,9 @@ class ContactJob:
     stereo_path: str = ""  # L=user R=AI dual-channel WAV (aligned under batch)
     promised_time: str = ""
     email: str = ""
-    next_retry_at: str = ""
+    next_retry_at: str = ""  # ISO UTC due_at for waiting_retry / waiting_callback
+    pending_action_id: str = ""
+    callback_context: dict[str, Any] = field(default_factory=dict)
     updated_at: str = field(default_factory=_utcnow)
     created_at: str = field(default_factory=_utcnow)
 

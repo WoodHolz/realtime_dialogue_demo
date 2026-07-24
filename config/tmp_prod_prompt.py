@@ -110,6 +110,15 @@ def build_day_anchors(trigger: datetime) -> dict[str, str]:
     }
 
 
+def _is_reschedule_callback(call_kind: str, callback_context: dict[str, Any] | None) -> bool:
+    kind = (call_kind or "").strip().lower()
+    if kind in {"reschedule_callback", "callback_reschedule", "reschedule"}:
+        return True
+    ctx = callback_context if isinstance(callback_context, dict) else {}
+    ctx_kind = str(ctx.get("call_kind") or "").strip().lower()
+    return ctx_kind in {"reschedule_callback", "callback_reschedule", "reschedule"}
+
+
 def build_tmp_prod_opening_parts(
     *,
     candidate_name: str,
@@ -117,11 +126,14 @@ def build_tmp_prod_opening_parts(
     client_name: str = "",
     our_brand_name: str = "",
     identity_mode: str = DEFAULT_IDENTITY_MODE,
+    call_kind: str = "",
+    callback_context: dict[str, Any] | None = None,
     **_ignored: Any,
 ) -> list[str]:
     """系统预播：一整段开场（单段 SayHello）。
 
     电话侧叠音由 agent_bridge TX 队列排空处理，剧本侧不再拆段。
+    改约回电使用短开场，不重念完整首次催办事由。
     """
     name = (candidate_name or "候选人").strip()
     emp = _slot(employer, fallback="用人单位")
@@ -129,6 +141,22 @@ def build_tmp_prod_opening_parts(
     our_brand = _slot(our_brand_name)
     mode = _norm_identity(identity_mode)
     white = mode in _WHITE_LABEL
+    ctx = callback_context if isinstance(callback_context, dict) else {}
+
+    if white:
+        who = f"{brand_or_client}的 AI 语音助手"
+    elif our_brand:
+        who = f"{our_brand}的 AI 语音助手"
+    else:
+        who = "AI 语音助手"
+
+    if _is_reschedule_callback(call_kind, ctx):
+        promised = _slot(ctx.get("promised_time") or _ignored.get("prior_promised_time"))
+        when_bit = f"按您上次说的时间（{promised}）" if promised else "按您上次约定的时间"
+        return [
+            f"您好，{name}，我是{who}，{when_bit}再联系您，"
+            f"大约占用您两分钟，现在方便吗？"
+        ]
 
     if white:
         identity = (
@@ -205,6 +233,8 @@ def build_tmp_prod_system_role(
     phone: str = "",
     trigger_beijing_at: str = "",
     opening_preplayed: bool = False,
+    call_kind: str = "",
+    callback_context: dict[str, Any] | None = None,
     **_ignored: Any,
 ) -> str:
     name = (candidate_name or "候选人").strip()
@@ -215,6 +245,8 @@ def build_tmp_prod_system_role(
     white = mode in _WHITE_LABEL
     sex = (gender or "").strip()
     phone_s = (phone or "").strip()
+    ctx = callback_context if isinstance(callback_context, dict) else {}
+    reschedule = _is_reschedule_callback(call_kind, ctx)
     # 必须使用「本通外呼触发时刻」的北京时间，禁止通话中再取 wall clock。
     trigger = parse_trigger_beijing(trigger_beijing_at)
     anchors = build_day_anchors(trigger)
@@ -225,6 +257,8 @@ def build_tmp_prod_system_role(
         client_name=_slot(client_name),
         our_brand_name=our_brand,
         identity_mode=mode,
+        call_kind=call_kind,
+        callback_context=ctx,
     )
 
     if white:
@@ -268,9 +302,21 @@ def build_tmp_prod_system_role(
         brand_slot_label = "我方品牌"
 
     delivery_ask = "好的，请问您收到这个背调授权短信了吗？"
+    from backend.tmp_prod.harness.context import summarize_context_for_prompt
+
+    cross_call_block = summarize_context_for_prompt(ctx) if reschedule else ""
 
     if opening_preplayed:
-        preplayed_note = f"""【开场已由系统先播】
+        if reschedule:
+            preplayed_note = f"""【开场已由系统先播｜改约回电】
+系统已播改约短开场：「{full_opening}」
+- 人名已确认，禁止再问是否本人，禁止重念首次完整催办开场。
+- **只等对方是否方便**。
+- 对方方便后：按【跨通话上下文】进度继续（通常仍需【送达确认】：「{delivery_ask}」）。
+- 对方仍不方便：再快速锁定一个具体到小时的改约时间后收线。
+- 对方主动说不是本人 / 打错了：礼貌结束。"""
+        else:
+            preplayed_note = f"""【开场已由系统先播】
 系统已播完整开场：「{full_opening}」
 - 人名已确认，禁止再问「是不是本人 / 请问是{name}本人吗」。
 - 禁止再念问候或合规开场（AI 身份 + 来电事由 + 现在方便吗），整段只说一次。
@@ -279,15 +325,24 @@ def build_tmp_prod_system_role(
 - 对方已直接说收到/没收到短信：可跳过「现在方便吗」与送达确认追问，按对应分支推进。
 - 对方主动说不是本人 / 打错了：礼貌结束，勿继续背调细节。"""
     else:
-        preplayed_note = f"""【开场】
+        if reschedule:
+            preplayed_note = f"""【开场｜改约回电】
+直接说改约短开场（只说一次）：
+「{full_opening}」
+然后只等对方是否方便。"""
+        else:
+            preplayed_note = f"""【开场】
 人名已确认，无需再问是否本人。直接说完整开场（只说一次）：
 「{full_opening}」
 然后只等对方是否方便。"""
 
+    cross_call_section = f"\n{cross_call_block}\n" if cross_call_block else ""
+
     return f"""【角色设定】
 {role_line}
 严格按下列分支话术推进。identity_mode={identity_mode_label}。
-
+{"本通为改约回电：优先使用短开场与跨通话上下文，勿假装拥有上一通完整对话记忆。" if reschedule else ""}
+{cross_call_section}
 【外呼触发日（北京时间，天级锚点）⚠ 唯一日历源】
 - 本通触发时刻：{trigger_str}（Asia/Shanghai）——仅用于定「今天/明天」，通话中禁止再取系统当前时间
 - 「今天」= {anchors['today_ymd']}（{anchors['today_md']}）
@@ -315,6 +370,7 @@ def build_tmp_prod_system_role(
 - {client_slot_label}：{brand_or_client_anchor}
 - {brand_slot_label}：{our_brand_anchor}
 - 身份模式：{identity_mode_label}
+- 本通类型：{"改约回电" if reschedule else "首次/常规催办"}
 
 {preplayed_note}
 
@@ -332,12 +388,13 @@ def build_tmp_prod_system_role(
 7. 合规开场（AI 身份 + 来电事由 + 现在方便吗）整段只说一次，禁止开场复读。
 8. 口播复述承诺时间只用「今天/明天 + 几点」（如「明天中午12点前」）；禁止再叠读月日（不要「明天12点前，7月24日12点前」）。月日仅在对方追问「今天/明天是几号」或内心回写时使用。
 9. 翻找等待：对方说「我看看 / 我翻一下 / 稍等」时，允许静默等对方；约 15 秒仍无实质回复，再轻声追问「您找到了吗？有没有看到授权短信？」；禁止对方刚说要找就立刻连问或改分支；翻找中禁止提前要邮箱。
+10. 改约只负责口播锁定「具体到小时」的时间并礼貌收线；系统是否再呼由编排层处理。可以说「到时再联系您」，不要承诺「系统会准时自动打来」等调度细节。内心必须回写 result=not_convenient 与 promised_time（绝对月日时分，用上面注入的日历）。
 
 【主流程】
 
 ■ 开场后（人名已确认，不再核身）
 - 开场只问方便；若对方主动说不是本人 / 打错了：礼貌结束，不要向第三方透露背调细节。
-- 不方便：快速约定晚点再联系并收线（本演示不做复杂改约调度）。
+- 不方便：快速约定一个**具体到小时**的稍晚时间（如「今天下午4点 / 明天上午10点」），口播确认后收线；内心 result=not_convenient + promised_time=… + time_precision=hour。不要只说「晚点打」却不锁定钟点。
 - 方便：进入【送达确认】（此时才问是否收到短信）。
 
 ■ 送达确认（方便之后必问，单独一句；进分支前的硬闸门）
@@ -423,6 +480,10 @@ def tmp_prod_slots_from_payload(payload: dict[str, Any]) -> dict[str, Any]:
 
     employer = _slot(p.get("employer")) or client
 
+    raw_ctx = p.get("callback_context")
+    callback_context = dict(raw_ctx) if isinstance(raw_ctx, dict) else {}
+    call_kind = str(p.get("call_kind") or callback_context.get("call_kind") or "").strip()
+
     return {
         "candidate_name": str(p.get("candidate_name") or p.get("name") or ""),
         "employer": employer,
@@ -432,4 +493,9 @@ def tmp_prod_slots_from_payload(payload: dict[str, Any]) -> dict[str, Any]:
         "gender": str(p.get("gender") or ""),
         "phone": str(p.get("phone") or ""),
         "trigger_beijing_at": trigger,
+        "call_kind": call_kind,
+        "callback_context": callback_context,
+        "prior_promised_time": str(
+            p.get("prior_promised_time") or callback_context.get("promised_time") or ""
+        ),
     }

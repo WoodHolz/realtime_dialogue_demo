@@ -351,11 +351,20 @@ def extract_tmp_prod_outcome(
     if any(h in user_text for h in _NOT_CONVENIENT_HINTS) and "方便吗" in ai_text:
         # 仅在开场问方便后对方明确不方便时标记；避免误伤「邮箱不方便给」
         if not asked_email:
+            writeback_nc = _parse_writeback(ai_text)
+            promised_nc = (
+                writeback_nc.get("promised_time")
+                or _extract_spoken_promised(ai_text)
+            )
+            display_nc = normalize_promised_time_display(
+                promised_nc, trigger_beijing_at=trigger_beijing_at
+            )
             return {
                 "result": "not_convenient",
-                "result_summary": RESULT_LABELS_CN["not_convenient"],
+                "result_summary": RESULT_LABELS_CN["not_convenient"]
+                + (f"：{display_nc}" if display_nc else ""),
                 "email": "",
-                "promised_time": "",
+                "promised_time": display_nc,
             }
 
     writeback = _parse_writeback(ai_text)

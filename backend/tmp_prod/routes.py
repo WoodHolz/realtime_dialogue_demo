@@ -253,7 +253,13 @@ async def get_batch(
     batch = get_batch_store().get(batch_id)
     if not batch:
         raise HTTPException(status_code=404, detail="batch not found")
-    return batch.to_dict()
+    from backend.tmp_prod.harness.store import get_action_store
+
+    data = batch.to_dict()
+    data["harness_actions"] = [
+        a.to_dict() for a in get_action_store().list_actions(batch_id=batch_id)
+    ]
+    return data
 
 
 @router.get("/batches/{batch_id}/export.xlsx")

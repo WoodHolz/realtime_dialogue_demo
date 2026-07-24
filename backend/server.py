@@ -92,7 +92,11 @@ async def lifespan(app: FastAPI):
         init_duplug_local_manager(duplug_local_config_path())
     init_hush_manager()
     _startup_t2sbg_monitor_notice()
+    from backend.tmp_prod.harness import start_harness_scheduler, stop_harness_scheduler
+
+    start_harness_scheduler()
     yield
+    await stop_harness_scheduler()
     shutdown_hush_manager()
     shutdown_duplug_local_manager()
 

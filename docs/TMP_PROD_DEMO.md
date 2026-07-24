@@ -27,13 +27,18 @@
 - 注入**本通外呼触发日**（北京时间）作为「今天/明天」唯一日历源；默认催办「今天 18:00」
 - 对方推到明天：模型按阶梯主动敲定 **明天 12:00 → 14:00 → 对方给确切时刻**；拿不到小时级则按**天级**回写交付顾问
 - 单通媒体上限 **15 分钟**；收尾请对方挂机
-- 未接通：**30 分钟后重呼一次**（重呼算新触发，重新打时间戳）；2 次仍未通 → `fail_reason=未接通`
+- **Harness 编排**（通话外，不长 sleep）：
+  - 未接通：写入 `NextAction(retry_no_answer)`，**到期再启新外呼**（默认 30 分钟后，最多 2 次）
+  - 不方便且锁到小时级 `promised_time`：写入 `callback_reschedule`，到点新拨并注入 `callback_context`（改约短开场）
+  - 动作队列：`data/tmp_prod/harness/actions.json`；进程重启可恢复 pending
+  - 完成承诺（`received_will_complete`）MVP **不**自动催办再呼
 
 ## 产物
 
 按**单个联系人**对齐：
 
-- `data/tmp_prod/{batch_id}/batch.json` — 含每人 `stereo_path` / `recording_dir`
+- `data/tmp_prod/{batch_id}/batch.json` — 含每人 `stereo_path` / `recording_dir` / `pending_action_id` / `next_retry_at`
+- `data/tmp_prod/harness/actions.json` — 未接通重试 / 改约回电队列
 - `data/tmp_prod/{batch_id}/contacts/{contact_id}/{call_id}/stereo.wav` — 双声道（L=用户，R=AI）
 - `data/tmp_prod/{batch_id}/artifacts/{contact_id}/*_transcript.json`
 - 原始 SIP 落盘：`data/tmp_prod/recordings/{call_id}/`（会再拷贝到上面 contacts 目录）
@@ -56,6 +61,7 @@ rm -rf /home/ubuntu/realtime_dialogue_demo/data/tmp_prod/recordings/<call_id>
 
 ```bash
 TMP_PROD_RETRY_SEC=1800          # 未接通重试间隔，默认 30 分钟
+TMP_PROD_HARNESS_POLL_SEC=5      # harness 扫描 due_at 间隔（秒）
 TMP_PROD_MAX_CONCURRENT=60       # 批次内同时外呼人数（默认跟随 OUTBOUND_MAX_CONCURRENT）
 TMP_PROD_ROOT=data/tmp_prod
 SIP_RECORD_DIR=data/tmp_prod/recordings
@@ -69,5 +75,5 @@ OUTBOUND_DRY_RUN=false           # 真实外呼时关闭
 
 - `POST /tmp-prod/batches/upload`
 - `POST /tmp-prod/batches/{id}/start`
-- `GET  /tmp-prod/batches/{id}`
+- `GET  /tmp-prod/batches/{id}`（含 `harness_actions` 队列）
 - `GET  /tmp-prod/batches/{id}/export.xlsx`

@@ -1,21 +1,22 @@
 # -*- coding: utf-8 -*-
-"""tmp-prod batch dialer: Guotou demo + 30min no-answer retry (max 2)."""
+"""tmp-prod batch dialer + harness enqueue (no long sleep for retry/reschedule)."""
 from __future__ import annotations
 
 import asyncio
 import logging
 import os
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from backend.tmp_prod.harness.models import CALL_KIND_INITIAL, CALL_KIND_RESCHEDULE
+from backend.tmp_prod.harness.policy import MAX_ATTEMPTS, RETRY_DELAY_SEC, plan_next_action
+from backend.tmp_prod.harness.store import get_action_store
 from backend.tmp_prod.store import Batch, BatchStore, ContactJob, get_batch_store
 
 LOG = logging.getLogger(__name__)
 
 SCENARIO = "tmp_prod_auth_demo"
-RETRY_DELAY_SEC = int(os.environ.get("TMP_PROD_RETRY_SEC", "1800"))  # 30 min
-MAX_ATTEMPTS = 2
 CALL_MAX_SEC = 900  # 15 min
 POLL_SEC = 2.0
 
@@ -88,6 +89,64 @@ def _is_no_answer(task: Any) -> bool:
     return False
 
 
+def _dial_options_payload(
+    *,
+    identity_mode: str,
+    client_name: str,
+    our_brand_name: str,
+    channel_brand_name: str,
+    voice: str,
+) -> dict[str, str]:
+    return {
+        "identity_mode": (identity_mode or "BRAND_SELF").strip() or "BRAND_SELF",
+        "client_name": (client_name or "比赛日科技").strip() or "比赛日科技",
+        "our_brand_name": (our_brand_name or "芝麻背调").strip() or "芝麻背调",
+        "channel_brand_name": (channel_brand_name or "").strip(),
+        "voice": (voice or "").strip(),
+    }
+
+
+def _enqueue_planned(
+    *,
+    batch_id: str,
+    contact_id: str,
+    planned: Any,
+    source_call_id: str,
+    dial_options: dict[str, str],
+    store: BatchStore,
+    extra_contact_fields: dict[str, Any] | None = None,
+) -> None:
+    """Persist NextAction and park contact until due_at (scheduler starts a new dial)."""
+    action_store = get_action_store()
+    action_store.cancel_pending_for_contact(batch_id, contact_id)
+    action = action_store.create(
+        batch_id=batch_id,
+        contact_id=contact_id,
+        type=planned.type,
+        due_at=planned.due_at.astimezone(timezone.utc).isoformat(),
+        reason=planned.reason,
+        source_call_id=source_call_id,
+        dial_options=dial_options,
+        callback_context=dict(planned.callback_context or {}),
+    )
+    fields = {
+        "status": planned.contact_status,
+        "next_retry_at": action.due_at,
+        "pending_action_id": action.action_id,
+        "callback_context": dict(planned.callback_context or {}),
+        "fail_reason": "",
+        **(extra_contact_fields or {}),
+    }
+    store.update_contact(batch_id, contact_id, **fields)
+    LOG.info(
+        "tmp-prod harness enqueued type=%s action=%s due_at=%s contact=%s",
+        planned.type,
+        action.action_id,
+        action.due_at,
+        contact_id,
+    )
+
+
 async def dial_one_contact(
     batch_id: str,
     contact: ContactJob,
@@ -98,11 +157,25 @@ async def dial_one_contact(
     our_brand_name: str = "芝麻背调",
     channel_brand_name: str = "",
     voice: str = "",
+    call_kind: str = "",
+    callback_context: dict[str, Any] | None = None,
 ) -> ContactJob:
-    """Place one outbound attempt; schedule retry on no-answer if attempts remain."""
+    """Place one outbound attempt; enqueue harness actions on no-answer / reschedule."""
     ensure_tmp_prod_env()
     store = store or get_batch_store()
     attempt = contact.attempt + 1
+    dial_opts = _dial_options_payload(
+        identity_mode=identity_mode,
+        client_name=client_name,
+        our_brand_name=our_brand_name,
+        channel_brand_name=channel_brand_name,
+        voice=voice,
+    )
+    kind = (call_kind or "").strip() or CALL_KIND_INITIAL
+    ctx = dict(callback_context or contact.callback_context or {})
+    if kind == CALL_KIND_RESCHEDULE and not ctx.get("call_kind"):
+        ctx["call_kind"] = CALL_KIND_RESCHEDULE
+
     store.update_contact(
         batch_id,
         contact.contact_id,
@@ -110,20 +183,30 @@ async def dial_one_contact(
         attempt=attempt,
         fail_reason="",
         next_retry_at="",
+        pending_action_id="",
     )
 
     from backend.outbound.service import create_outbound_call
 
-    payload = {
+    payload: dict[str, Any] = {
         "candidate_name": contact.name,
         "employer": contact.employer or "比赛日科技",
         "gender": contact.gender,
         "phone": contact.phone,
-        "client_name": (client_name or contact.employer or "比赛日科技").strip(),
-        "identity_mode": (identity_mode or "BRAND_SELF").strip() or "BRAND_SELF",
-        "our_brand_name": (our_brand_name or "芝麻背调").strip() or "芝麻背调",
-        "channel_brand_name": (channel_brand_name or "").strip(),
+        "client_name": dial_opts["client_name"] or contact.employer or "比赛日科技",
+        "identity_mode": dial_opts["identity_mode"],
+        "our_brand_name": dial_opts["our_brand_name"],
+        "channel_brand_name": dial_opts["channel_brand_name"],
+        "call_kind": kind,
     }
+    if ctx:
+        payload["callback_context"] = ctx
+        # Flatten a few fields for prompt builders / debugging
+        if ctx.get("email") and not contact.email:
+            payload["known_email"] = ctx.get("email")
+        if ctx.get("promised_time"):
+            payload["prior_promised_time"] = ctx.get("promised_time")
+
     task = await create_outbound_call(
         phone=contact.phone,
         scenario=SCENARIO,
@@ -138,6 +221,7 @@ async def dial_one_contact(
         last_call_id=task.call_id,
         call_ids=call_ids,
         status="in_call" if not task.dry_run else "dialing",
+        callback_context=ctx,
     )
 
     if task.dry_run:
@@ -161,42 +245,40 @@ async def dial_one_contact(
         batch_id, contact, finished.call_id if finished else task.call_id, recordings
     )
 
-    # Persist transcript sidecar
     if finished:
         _persist_artifacts(batch_id, contact.contact_id, finished.call_id, transcript, recordings)
 
-    rec_fields = {
+    rec_fields: dict[str, Any] = {
         "transcript": transcript,
         "recordings": recordings,
         "recording_dir": recording_dir,
         "stereo_path": stereo_path,
     }
+    source_call_id = finished.call_id if finished else task.call_id
 
     if _is_no_answer(finished):
-        if attempt < MAX_ATTEMPTS:
-            retry_at = datetime.now(timezone.utc) + timedelta(seconds=RETRY_DELAY_SEC)
-            store.update_contact(
-                batch_id,
-                contact.contact_id,
-                status="waiting_retry",
-                result="no_answer",
-                result_summary=getattr(finished, "result_summary", "") or "未接通，将重试",
-                fail_reason="",
-                next_retry_at=retry_at.isoformat(),
-                **rec_fields,
-            )
-            asyncio.create_task(
-                _retry_later(
-                    batch_id,
-                    contact.contact_id,
-                    RETRY_DELAY_SEC,
-                    identity_mode=identity_mode,
-                    client_name=client_name,
-                    our_brand_name=our_brand_name,
-                    channel_brand_name=channel_brand_name,
-                    voice=voice,
-                ),
-                name=f"tmp-prod-retry-{contact.contact_id}-{attempt}",
+        planned = plan_next_action(
+            outcome={"result": "no_answer"},
+            attempt=attempt,
+            max_attempts=MAX_ATTEMPTS,
+            is_no_answer=True,
+            source_call_id=source_call_id,
+            retry_delay_sec=RETRY_DELAY_SEC,
+        )
+        if planned:
+            _enqueue_planned(
+                batch_id=batch_id,
+                contact_id=contact.contact_id,
+                planned=planned,
+                source_call_id=source_call_id,
+                dial_options=dial_opts,
+                store=store,
+                extra_contact_fields={
+                    **rec_fields,
+                    "result": "no_answer",
+                    "result_summary": getattr(finished, "result_summary", "")
+                    or planned.reason,
+                },
             )
         else:
             store.update_contact(
@@ -207,6 +289,7 @@ async def dial_one_contact(
                 result_summary="2次尝试仍未接通",
                 fail_reason="未接通",
                 next_retry_at="",
+                pending_action_id="",
                 **rec_fields,
             )
     else:
@@ -214,29 +297,63 @@ async def dial_one_contact(
 
         fallback_result = getattr(finished, "result", None) or "completed"
         fallback_summary = getattr(finished, "result_summary", "") or ""
-        payload = getattr(finished, "payload", None) or {}
-        if not isinstance(payload, dict):
-            payload = {}
+        call_payload = getattr(finished, "payload", None) or {}
+        if not isinstance(call_payload, dict):
+            call_payload = {}
         outcome = extract_tmp_prod_outcome(
             transcript,
             fallback_result=fallback_result,
             fallback_summary=fallback_summary,
-            trigger_beijing_at=payload.get("trigger_beijing_at") or "",
+            trigger_beijing_at=call_payload.get("trigger_beijing_at") or "",
         )
         err = getattr(finished, "error", "") or ""
-        status = "failed" if getattr(finished, "status", "") == "failed" else "completed"
-        store.update_contact(
-            batch_id,
-            contact.contact_id,
-            status=status,
-            result=outcome.get("result") or fallback_result,
-            result_summary=outcome.get("result_summary") or fallback_summary,
-            email=outcome.get("email") or "",
-            promised_time=outcome.get("promised_time") or "",
-            fail_reason=err if status == "failed" else "",
-            next_retry_at="",
-            **rec_fields,
-        )
+        terminal_failed = getattr(finished, "status", "") == "failed"
+        email = outcome.get("email") or contact.email or ""
+        promised_time = outcome.get("promised_time") or ""
+
+        planned = None
+        if not terminal_failed:
+            planned = plan_next_action(
+                outcome=outcome,
+                attempt=attempt,
+                max_attempts=MAX_ATTEMPTS,
+                is_no_answer=False,
+                source_call_id=source_call_id,
+                contact_email=email,
+            )
+
+        if planned:
+            _enqueue_planned(
+                batch_id=batch_id,
+                contact_id=contact.contact_id,
+                planned=planned,
+                source_call_id=source_call_id,
+                dial_options=dial_opts,
+                store=store,
+                extra_contact_fields={
+                    **rec_fields,
+                    "result": outcome.get("result") or fallback_result,
+                    "result_summary": outcome.get("result_summary") or fallback_summary,
+                    "email": email,
+                    "promised_time": promised_time,
+                },
+            )
+        else:
+            status = "failed" if terminal_failed else "completed"
+            store.update_contact(
+                batch_id,
+                contact.contact_id,
+                status=status,
+                result=outcome.get("result") or fallback_result,
+                result_summary=outcome.get("result_summary") or fallback_summary,
+                email=email,
+                promised_time=promised_time,
+                fail_reason=err if status == "failed" else "",
+                next_retry_at="",
+                pending_action_id="",
+                callback_context={},
+                **rec_fields,
+            )
 
     batch = store.get(batch_id)
     assert batch
@@ -254,7 +371,6 @@ def _resolve_stereo_path(recordings: dict[str, str], recording_dir: str = "") ->
         candidate = Path(recording_dir) / "stereo.wav"
         if candidate.is_file():
             return str(candidate)
-    # Fallback: any path's sibling stereo.wav
     for p in (recordings or {}).values():
         sib = Path(p).with_name("stereo.wav")
         if sib.is_file():
@@ -272,8 +388,6 @@ def _align_contact_recording(
     Align one contact's dual-channel recording under the batch tree:
 
       data/tmp_prod/{batch_id}/contacts/{contact_id}/{call_id}/stereo.wav
-
-    Copies stereo (+ mono if present) so each contact has a stable path.
     """
     import shutil
 
@@ -297,7 +411,6 @@ def _align_contact_recording(
             LOG.exception("copy stereo failed call_id=%s", call_id)
             stereo_dest = Path(stereo_src)
     elif recording_dir:
-        # Best-effort: copy whatever exists in SIP record dir
         for name in ("stereo.wav", "user.wav", "ai.wav", "mixed.wav"):
             src = Path(recording_dir) / name
             if src.is_file():
@@ -350,46 +463,11 @@ def _persist_artifacts(
         )
 
 
-async def _retry_later(
-    batch_id: str,
-    contact_id: str,
-    delay_sec: int,
-    *,
-    identity_mode: str = "BRAND_SELF",
-    client_name: str = "比赛日科技",
-    our_brand_name: str = "芝麻背调",
-    channel_brand_name: str = "",
-    voice: str = "",
-) -> None:
-    try:
-        await asyncio.sleep(delay_sec)
-        store = get_batch_store()
-        batch = store.get(batch_id)
-        if not batch:
-            return
-        contact = next((c for c in batch.contacts if c.contact_id == contact_id), None)
-        if not contact or contact.status != "waiting_retry":
-            return
-        await dial_one_contact(
-            batch_id,
-            contact,
-            store=store,
-            identity_mode=identity_mode,
-            client_name=client_name,
-            our_brand_name=our_brand_name,
-            channel_brand_name=channel_brand_name,
-            voice=voice,
-        )
-        _maybe_mark_batch_done(batch_id, store)
-    except Exception:
-        LOG.exception("tmp-prod retry failed batch=%s contact=%s", batch_id, contact_id)
-
-
 def _maybe_mark_batch_done(batch_id: str, store: BatchStore) -> None:
     batch = store.get(batch_id)
     if not batch:
         return
-    open_statuses = {"pending", "dialing", "in_call", "waiting_retry"}
+    open_statuses = {"pending", "dialing", "in_call", "waiting_retry", "waiting_callback"}
     if any(c.status in open_statuses for c in batch.contacts):
         return
     batch.status = "done"
@@ -432,7 +510,12 @@ async def run_batch(
             if not batch_now:
                 return
             contact = next((c for c in batch_now.contacts if c.contact_id == contact_id), None)
-            if not contact or contact.status in {"completed", "failed", "waiting_retry"}:
+            if not contact or contact.status in {
+                "completed",
+                "failed",
+                "waiting_retry",
+                "waiting_callback",
+            }:
                 return
             try:
                 await dial_one_contact(
@@ -458,10 +541,9 @@ async def run_batch(
 
     tasks: list[asyncio.Task] = []
     for i, contact in enumerate(list(batch.contacts)):
-        if contact.status in {"completed", "failed", "waiting_retry"}:
+        if contact.status in {"completed", "failed", "waiting_retry", "waiting_callback"}:
             continue
         tasks.append(asyncio.create_task(_one(contact.contact_id), name=f"tmp-prod-{contact.contact_id}"))
-        # Small launch stagger only (not wait-for-hangup); keeps SIP INVITE from thundering herd.
         if stagger_sec > 0 and i + 1 < len(batch.contacts):
             await asyncio.sleep(stagger_sec)
 
