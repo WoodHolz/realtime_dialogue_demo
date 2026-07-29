@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>tmp-prod 单人测试</title>
+  <title>prod 单人测试</title>
   <style>
     :root {
       --bg: #f2f4f3;
@@ -144,16 +144,16 @@
       <a id="linkVoices" href="./voices">豆包音色选型</a>
       <a id="linkSip" href="../sip-call">催授权 SIP 联调</a>
     </nav>
-    <h1>tmp-prod · 单人测试</h1>
+    <h1>prod · 单人测试</h1>
     <p class="lead">
-      用 tmp-prod 剧本（芝麻背调）打一通 SIP 外呼，并走与批量相同的 harness：未接通重试、改约到点再拨。
+      用 prod 剧本（芝麻背调）打一通 SIP 外呼，并走与批量相同的 harness：未接通重试、改约到点再拨。
       可先在音色页选型；通话结束后可回放双声道录音并查看 ASR / AI 转写。
     </p>
 
     <div class="layout">
       <section>
         <form class="panel" id="form">
-          <h2>拨号 · tmp_prod_auth_demo</h2>
+          <h2>拨号 · prod_auth_demo</h2>
           <label for="phone">被测手机号</label>
           <input id="phone" type="tel" inputmode="numeric" placeholder="例如 18324133080" required autocomplete="tel" />
           <p class="hint">被叫自动加 <code id="prefixHint">a1</code>；外显号由服务端号池分配。</p>
@@ -249,21 +249,24 @@
     </div>
   </main>
 
-  <script type="application/json" id="single-boot"><!--__TMP_PROD_SINGLE_BOOT_JSON__--></script>
+  <script type="application/json" id="single-boot"><!--__PROD_SINGLE_BOOT_JSON__--></script>
   <script>
     (function () {
       var pathPrefix = location.pathname.indexOf("/s2s/") === 0 || location.pathname === "/s2s"
         ? "/s2s"
         : "";
       var API_BASE = pathPrefix + "/outbound/v1";
-      var TMP_PROD_API = pathPrefix + "/tmp-prod";
-      var SCENARIO = "tmp_prod_auth_demo";
+      var pagePath = location.pathname.replace(/\/+$/, "").replace(/\/(single|voices)$/, "");
+      var PROD_API = pagePath.indexOf("/tmp-prod") >= 0
+        ? pathPrefix + "/tmp-prod"
+        : (pagePath.indexOf("/prod") >= 0 ? pagePath : pathPrefix + "/prod");
+      var SCENARIO = "prod_auth_demo";
 
-      var STORAGE_KEY = "tmp_prod_voice_type";
-      document.getElementById("linkBatch").href = pathPrefix + "/tmp-prod";
-      document.getElementById("linkVoices").href = pathPrefix + "/tmp-prod/voices";
+      var STORAGE_KEY = "prod_voice_type";
+      document.getElementById("linkBatch").href = PROD_API;
+      document.getElementById("linkVoices").href = PROD_API + "/voices";
       document.getElementById("linkSip").href = pathPrefix + "/sip-call";
-      document.getElementById("voiceLabInline").href = pathPrefix + "/tmp-prod/voices";
+      document.getElementById("voiceLabInline").href = PROD_API + "/voices";
 
       var boot = {};
       try {
@@ -356,14 +359,14 @@
         localStorage.setItem(STORAGE_KEY, el.voice.value);
         el.voiceHint.innerHTML =
           "当前 <code>" + el.voice.value + "</code>。完整目录见 " +
-          "<a href='" + pathPrefix + "/tmp-prod/voices' style='color:var(--accent)'>音色选型页</a>。";
+          "<a href='" + PROD_API + "/voices' style='color:var(--accent)'>音色选型页</a>。";
       }
       populateVoices();
       el.voice.addEventListener("change", function () {
         localStorage.setItem(STORAGE_KEY, el.voice.value);
         el.voiceHint.innerHTML =
           "当前 <code>" + el.voice.value + "</code>。完整目录见 " +
-          "<a href='" + pathPrefix + "/tmp-prod/voices' style='color:var(--accent)'>音色选型页</a>。";
+          "<a href='" + PROD_API + "/voices' style='color:var(--accent)'>音色选型页</a>。";
       });
 
       function headers(json) {
@@ -450,8 +453,8 @@
         if (!looksForeign) return "";
         return (
           "\n\n当前页: " + window.location.href +
-          "\n请求: " + TMP_PROD_API +
-          "\n请用 https://dev.gameday.tech/s2s/tmp-prod/single"
+          "\n请求: " + PROD_API +
+          "\n请用 https://dev.gameday.tech/s2s/prod/single"
         );
       }
 
@@ -618,7 +621,7 @@
         pollTimer = setInterval(async function () {
           try {
             var q = contactId ? ("?contact_id=" + encodeURIComponent(contactId)) : "";
-            var resp = await fetch(TMP_PROD_API + "/single/batches/" + batchId + q, {
+            var resp = await fetch(PROD_API + "/single/batches/" + batchId + q, {
               headers: headers(false),
             });
             if (!resp.ok) return;
@@ -660,7 +663,7 @@
         el.exportBtn.disabled = true;
         try {
           var resp = await fetch(
-            TMP_PROD_API + "/calls/" + activeCallId + "/export.xlsx",
+            PROD_API + "/calls/" + activeCallId + "/export.xlsx",
             { headers: headers(false) }
           );
           if (!resp.ok) {
@@ -670,10 +673,10 @@
           var blob = await resp.blob();
           var a = document.createElement("a");
           a.href = URL.createObjectURL(blob);
-          a.download = "tmp_prod_result_" + activeCallId + ".xlsx";
+          a.download = "prod_result_" + activeCallId + ".xlsx";
           a.click();
           URL.revokeObjectURL(a.href);
-          el.resultHint.textContent = "已下载 tmp_prod_result_" + activeCallId + ".xlsx";
+          el.resultHint.textContent = "已下载 prod_result_" + activeCallId + ".xlsx";
         } catch (err) {
           el.resultHint.textContent = String(err.message || err);
           setStatus(String(err.message || err), true);
@@ -698,9 +701,9 @@
         activeContactId = null;
         var body = payloadFromForm();
         body.phone = phone;
-        setStatus("正在发起外呼（harness）…\n实际被叫 " + withPrefix(phone) + "\nPOST " + TMP_PROD_API + "/single/calls");
+        setStatus("正在发起外呼（harness）…\n实际被叫 " + withPrefix(phone) + "\nPOST " + PROD_API + "/single/calls");
         try {
-          var resp = await fetch(TMP_PROD_API + "/single/calls", {
+          var resp = await fetch(PROD_API + "/single/calls", {
             method: "POST",
             headers: headers(),
             body: JSON.stringify(body),

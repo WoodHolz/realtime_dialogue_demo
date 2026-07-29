@@ -1,9 +1,9 @@
 # -*- coding: utf-8 -*-
-"""Unit tests for tmp-prod outcome extraction."""
+"""Unit tests for prod outcome extraction."""
 from __future__ import annotations
 
-from backend.tmp_prod.outcome import (
-    extract_tmp_prod_outcome,
+from backend.prod.outcome import (
+    extract_prod_outcome,
     normalize_promised_time_display,
 )
 
@@ -58,7 +58,7 @@ def test_reschedule_to_tomorrow_noon_uses_absolute_ymd():
             "（内心回写：received_will_complete；promised_time=2026年7月24日 12:00；time_precision=hour）",
         ),
     )
-    out = extract_tmp_prod_outcome(transcript, trigger_beijing_at=_TRIGGER)
+    out = extract_prod_outcome(transcript, trigger_beijing_at=_TRIGGER)
     assert out["result"] == "received_will_complete"
     assert out["promised_time"] == "2026年7月24日 12:00"
     assert out["result_summary"] == "已收到短信并承诺完成时间：2026年7月24日 12:00"
@@ -84,7 +84,7 @@ def test_spoken_confirmation_normalizes_without_writeback():
         ),
         ("user", "收到了"),
     )
-    out = extract_tmp_prod_outcome(transcript, trigger_beijing_at=_TRIGGER)
+    out = extract_prod_outcome(transcript, trigger_beijing_at=_TRIGGER)
     assert out["result"] == "received_will_complete"
     assert out["promised_time"] == "2026年7月24日 12:00"
     assert "完成信息填写" not in out["promised_time"]
@@ -103,6 +103,6 @@ def test_today_18_still_works_when_accepted():
             "（内心回写：received_will_complete；promised_time=7月23日 18:00；time_precision=hour）",
         ),
     )
-    out = extract_tmp_prod_outcome(transcript, trigger_beijing_at=_TRIGGER)
+    out = extract_prod_outcome(transcript, trigger_beijing_at=_TRIGGER)
     assert out["result"] == "received_will_complete"
     assert out["promised_time"] == "2026年7月23日 18:00"

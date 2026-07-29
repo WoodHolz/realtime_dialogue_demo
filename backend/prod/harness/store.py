@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""JSON-backed NextAction store for tmp-prod harness."""
+"""JSON-backed NextAction store for prod harness."""
 from __future__ import annotations
 
 import json
@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from backend.tmp_prod.harness.models import (
+from backend.prod.harness.models import (
     STATUS_PENDING,
     STATUS_RUNNING,
     NextAction,
@@ -26,11 +26,13 @@ def _utcnow() -> str:
 
 
 def default_root() -> Path:
-    return Path(os.environ.get("TMP_PROD_ROOT", "data/tmp_prod"))
+    from backend.prod.paths import prod_root
+
+    return prod_root()
 
 
 class ActionStore:
-    """Single-file action queue under data/tmp_prod/harness/actions.json."""
+    """Single-file action queue under {prod_root}/harness/actions.json."""
 
     def __init__(self, root: Path | None = None) -> None:
         self.root = (root or default_root()) / "harness"
@@ -63,7 +65,7 @@ class ActionStore:
             self._actions = loaded
             self._mtime_ns = self._file_mtime_ns()
         except Exception:
-            LOG.exception("tmp-prod harness action store load failed path=%s", self.path)
+            LOG.exception("prod harness action store load failed path=%s", self.path)
 
     def _reload_if_stale_unlocked(self) -> None:
         """Re-read disk so scheduler sees actions written by another request/worker."""

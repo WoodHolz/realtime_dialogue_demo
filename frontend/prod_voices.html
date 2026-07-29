@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>tmp-prod · 豆包音色试听</title>
+  <title>prod · 豆包音色试听</title>
   <style>
     :root {
       --bg: #f2f4f3;
@@ -177,7 +177,7 @@
       <a id="linkBatch" href="./">← 批量演示</a>
       <a id="linkSingle" href="./single">单人外呼</a>
     </nav>
-    <h1>tmp-prod · 豆包音色试听</h1>
+    <h1>prod · 豆包音色试听</h1>
     <p class="lead">
       选音色后在本页直接开麦对话（豆包 duplex），不必外呼。适合 PM 快速对比 S2S-Omni / SC 2.0 / O 2.0。
     </p>
@@ -212,12 +212,16 @@
     </div>
   </main>
 
-  <script type="application/json" id="voices-boot"><!--__TMP_PROD_VOICES_BOOT_JSON__--></script>
+  <script type="application/json" id="voices-boot"><!--__PROD_VOICES_BOOT_JSON__--></script>
   <script>
     (function () {
       var pathPrefix = location.pathname.indexOf("/s2s/") === 0 || location.pathname === "/s2s"
         ? "/s2s" : "";
-      var STORAGE_KEY = "tmp_prod_voice_type";
+      var pagePath = location.pathname.replace(/\/+$/, "").replace(/\/(single|voices)$/, "");
+      var PROD_BASE = pagePath.indexOf("/tmp-prod") >= 0
+        ? pathPrefix + "/tmp-prod"
+        : (pagePath.indexOf("/prod") >= 0 ? pagePath : pathPrefix + "/prod");
+      var STORAGE_KEY = "prod_voice_type";
       var VOICE_LAB_SYSTEM_ROLE =
         "你是芝麻背调催授权场景的外呼语音助手（音色试听模式）。" +
         "说话自然、简洁，像真人电话沟通。每次回答控制在一两句以内，方便用户对比音色。" +
@@ -225,8 +229,8 @@
       var VOICE_LAB_STYLE = "口语化、礼貌、语速适中，句子短。";
       var GREET_QUERY = "请用一两句自然口语打个招呼，方便我试听你的音色。不要长篇大论。";
 
-      document.getElementById("linkBatch").href = pathPrefix + "/tmp-prod";
-      document.getElementById("linkSingle").href = pathPrefix + "/tmp-prod/single";
+      document.getElementById("linkBatch").href = PROD_BASE;
+      document.getElementById("linkSingle").href = PROD_BASE + "/single";
 
       var boot = {};
       try {

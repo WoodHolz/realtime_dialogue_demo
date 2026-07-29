@@ -81,7 +81,7 @@ from backend.demo_asr_broadcast import (
     unregister_demo_asr_viewer,
 )
 from backend.outbound.routes import router as partner_outbound_router
-from backend.tmp_prod.routes import router as tmp_prod_router
+from backend.prod.routes import router as prod_router
 
 LOG = logging.getLogger(__name__)
 
@@ -92,7 +92,7 @@ async def lifespan(app: FastAPI):
         init_duplug_local_manager(duplug_local_config_path())
     init_hush_manager()
     _startup_t2sbg_monitor_notice()
-    from backend.tmp_prod.harness import start_harness_scheduler, stop_harness_scheduler
+    from backend.prod.harness import start_harness_scheduler, stop_harness_scheduler
 
     start_harness_scheduler()
     yield
@@ -103,7 +103,9 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="AI Interviewer Realtime Voice Demo", lifespan=lifespan)
 app.include_router(partner_outbound_router)
-app.include_router(tmp_prod_router)
+app.include_router(prod_router, prefix="/prod")
+# tmp-prod deploy / bookmarks keep working; same handlers as /prod.
+app.include_router(prod_router, prefix="/tmp-prod")
 
 VAD_ASR_TARGET_SAMPLE_RATE = 16000
 
@@ -644,31 +646,37 @@ async def sip_call_page():
     return HTMLResponse(raw, media_type="text/html; charset=utf-8")
 
 
+@app.get("/prod")
+@app.get("/prod/")
 @app.get("/tmp-prod")
 @app.get("/tmp-prod/")
-async def tmp_prod_page():
-    """tmp-prod 临时演示页。同时挂 /tmp-prod 与 /tmp-prod/，避免反代下 307 Location 丢 /s2s 前缀。"""
-    from backend.tmp_prod.routes import render_tmp_prod_page
+async def prod_page():
+    """prod 演示页（/tmp-prod 为向前兼容别名）。同时挂有无无尾斜杠，避免反代下 307 丢 /s2s 前缀。"""
+    from backend.prod.routes import render_prod_page
 
-    return render_tmp_prod_page()
+    return render_prod_page()
 
 
+@app.get("/prod/single")
+@app.get("/prod/single/")
 @app.get("/tmp-prod/single")
 @app.get("/tmp-prod/single/")
-async def tmp_prod_single_page():
-    """tmp-prod 单人外呼联调 + TTFS 延迟可视化。"""
-    from backend.tmp_prod.routes import render_tmp_prod_single_page
+async def prod_single_page():
+    """prod 单人外呼联调 + TTFS 延迟可视化（/tmp-prod 兼容）。"""
+    from backend.prod.routes import render_prod_single_page
 
-    return render_tmp_prod_single_page()
+    return render_prod_single_page()
 
 
+@app.get("/prod/voices")
+@app.get("/prod/voices/")
 @app.get("/tmp-prod/voices")
 @app.get("/tmp-prod/voices/")
-async def tmp_prod_voices_page():
-    """tmp-prod PM 豆包音色选型。"""
-    from backend.tmp_prod.routes import render_tmp_prod_voices_page
+async def prod_voices_page():
+    """prod PM 豆包音色选型（/tmp-prod 兼容）。"""
+    from backend.prod.routes import render_prod_voices_page
 
-    return render_tmp_prod_voices_page()
+    return render_prod_voices_page()
 
 
 @app.get("/voice")

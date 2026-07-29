@@ -4,27 +4,27 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import os
 
-from backend.tmp_prod.harness.models import (
+from backend.prod.harness.models import (
     ACTION_CALLBACK_RESCHEDULE,
     CALL_KIND_RESCHEDULE,
     STATUS_DONE,
     STATUS_SKIPPED,
 )
-from backend.tmp_prod.harness.store import get_action_store
+from backend.prod.harness.store import get_action_store
+from backend.prod.paths import env_first
 
 LOG = logging.getLogger(__name__)
 
-POLL_SEC = float(os.environ.get("TMP_PROD_HARNESS_POLL_SEC", "5"))
+POLL_SEC = float(env_first("PROD_HARNESS_POLL_SEC", "TMP_PROD_HARNESS_POLL_SEC", default="5"))
 
 _scheduler_task: asyncio.Task | None = None
 
 
 async def execute_action(action_id: str) -> None:
     """Run one claimed action: new outbound dial (short-lived task)."""
-    from backend.tmp_prod.service import dial_one_contact, _maybe_mark_batch_done
-    from backend.tmp_prod.store import get_batch_store
+    from backend.prod.service import dial_one_contact, _maybe_mark_batch_done
+    from backend.prod.store import get_batch_store
 
     store = get_action_store()
     action = store.get(action_id)
@@ -47,7 +47,7 @@ async def execute_action(action_id: str) -> None:
     )
     if contact.status not in {expected, "waiting_retry", "waiting_callback"}:
         LOG.warning(
-            "tmp-prod harness skip execute action=%s contact=%s status=%s expected=%s",
+            "prod harness skip execute action=%s contact=%s status=%s expected=%s",
             action_id,
             contact.contact_id,
             contact.status,
@@ -61,7 +61,7 @@ async def execute_action(action_id: str) -> None:
         return
 
     LOG.info(
-        "tmp-prod harness dial action=%s type=%s batch=%s contact=%s",
+        "prod harness dial action=%s type=%s batch=%s contact=%s",
         action_id,
         action.type,
         action.batch_id,
@@ -92,7 +92,7 @@ async def execute_action(action_id: str) -> None:
         _maybe_mark_batch_done(action.batch_id, batch_store)
     except Exception as exc:
         LOG.exception(
-            "tmp-prod harness execute failed action=%s batch=%s contact=%s",
+            "prod harness execute failed action=%s batch=%s contact=%s",
             action_id,
             action.batch_id,
             action.contact_id,
@@ -107,23 +107,23 @@ async def tick() -> int:
     for action in claimed:
         asyncio.create_task(
             execute_action(action.action_id),
-            name=f"tmp-prod-harness-{action.action_id}",
+            name=f"prod-harness-{action.action_id}",
         )
     return len(claimed)
 
 
 async def run_scheduler_loop(*, poll_sec: float | None = None) -> None:
     interval = POLL_SEC if poll_sec is None else float(poll_sec)
-    LOG.info("tmp-prod harness scheduler started poll_sec=%s", interval)
+    LOG.info("prod harness scheduler started poll_sec=%s", interval)
     while True:
         try:
             n = await tick()
             if n:
-                LOG.info("tmp-prod harness claimed %s due action(s)", n)
+                LOG.info("prod harness claimed %s due action(s)", n)
         except asyncio.CancelledError:
             raise
         except Exception:
-            LOG.exception("tmp-prod harness scheduler tick failed")
+            LOG.exception("prod harness scheduler tick failed")
         await asyncio.sleep(interval)
 
 
@@ -134,10 +134,10 @@ def start_harness_scheduler() -> asyncio.Task | None:
         return _scheduler_task
     n = get_action_store().reset_running_to_pending()
     if n:
-        LOG.info("tmp-prod harness reclaimed %s running action(s) → pending", n)
+        LOG.info("prod harness reclaimed %s running action(s) → pending", n)
     _scheduler_task = asyncio.create_task(
         run_scheduler_loop(),
-        name="tmp-prod-harness-scheduler",
+        name="prod-harness-scheduler",
     )
     return _scheduler_task
 
@@ -153,4 +153,4 @@ async def stop_harness_scheduler() -> None:
         await task
     except asyncio.CancelledError:
         pass
-    LOG.info("tmp-prod harness scheduler stopped")
+    LOG.info("prod harness scheduler stopped")

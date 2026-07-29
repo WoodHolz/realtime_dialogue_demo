@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from backend.tmp_prod.harness.models import CALL_KIND_RESCHEDULE
+from backend.prod.harness.models import CALL_KIND_RESCHEDULE
 
 
 def build_callback_context(

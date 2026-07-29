@@ -1,5 +1,3 @@
 # -*- coding: utf-8 -*-
-"""tmp-prod temporary Guotou outbound demo package."""
+"""Backward-compatible package alias for backend.prod (tmp-prod deploy / old imports)."""
 from __future__ import annotations
-
-__all__ = ["excel_io", "service", "store"]

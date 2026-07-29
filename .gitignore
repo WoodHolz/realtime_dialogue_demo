@@ -11,6 +11,7 @@ models/
 .mypy_cache/
 tmp/
 data/tmp_prod/
+data/prod/
 docs/bg_check_voice_docs/
 docs/.~tmp.xlsx
 docs/tmp.xlsx

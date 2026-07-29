@@ -116,7 +116,7 @@ async def _run_sip_bridged_call(
     peer_host: str,
     peer_port: int,
 ) -> None:
-    from backend.outbound.service import complete_call, is_tmp_prod_scenario, notify_partner_callback
+    from backend.outbound.service import complete_call, is_prod_scenario, notify_partner_callback
     from backend.sip.agent_bridge import SipAgentBridge
     from backend.sip.config import load_sip_config
     from backend.sip.traffic import get_traffic_gate
@@ -128,11 +128,15 @@ async def _run_sip_bridged_call(
             return
 
         cfg = load_sip_config().with_peer(peer_host, peer_port)
-        if is_tmp_prod_scenario(task.scenario):
+        if is_prod_scenario(task.scenario):
             from dataclasses import replace
             from pathlib import Path
 
-            rec = Path(os.environ.get("SIP_RECORD_DIR") or "data/tmp_prod/recordings")
+            rec = Path(os.environ.get("SIP_RECORD_DIR") or "")
+            if not str(rec):
+                from backend.prod.paths import prod_root
+
+                rec = prod_root() / "recordings"
             rec.mkdir(parents=True, exist_ok=True)
             cfg = replace(cfg, max_call_sec=900.0, record_dir=str(rec))
         dial = (task.telephony or {}).get("dial") or {}
@@ -179,14 +183,14 @@ async def _run_sip_bridged_call(
 
             slots = urge_auth_slots_from_payload(task.payload)
             system_role = build_urge_auth_system_role(**slots, opening_preplayed=True)
-        elif cfg.ai_speak_first and opening and is_tmp_prod_scenario(task.scenario):
-            from config.tmp_prod_prompt import (
-                build_tmp_prod_system_role,
-                tmp_prod_slots_from_payload,
+        elif cfg.ai_speak_first and opening and is_prod_scenario(task.scenario):
+            from config.prod_prompt import (
+                build_prod_system_role,
+                prod_slots_from_payload,
             )
 
-            slots = tmp_prod_slots_from_payload(task.payload)
-            system_role = build_tmp_prod_system_role(**slots, opening_preplayed=True)
+            slots = prod_slots_from_payload(task.payload)
+            system_role = build_prod_system_role(**slots, opening_preplayed=True)
 
         max_attempts = 1 + SIP_CLEARING_404_RETRIES
         dial_attempts: list[dict[str, Any]] = []
@@ -311,11 +315,11 @@ async def _run_sip_bridged_call(
         if outcome.transcript:
             summary = f"通话结束，共 {len(outcome.transcript)} 条转写"
         result_code = "completed"
-        if is_tmp_prod_scenario(task.scenario):
-            from backend.tmp_prod.outcome import extract_tmp_prod_outcome
+        if is_prod_scenario(task.scenario):
+            from backend.prod.outcome import extract_prod_outcome
 
             payload = task.payload if isinstance(task.payload, dict) else {}
-            extracted = extract_tmp_prod_outcome(
+            extracted = extract_prod_outcome(
                 outcome.transcript,
                 fallback_result="completed",
                 fallback_summary=summary,

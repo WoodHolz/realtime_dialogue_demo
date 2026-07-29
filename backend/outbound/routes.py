@@ -33,11 +33,11 @@ class CreateCallRequest(BaseModel):
     external_id: str = Field(default="", description="合作方侧业务单号，原样回传")
     callback_url: str = Field(default="", description="通话结束后 POST 结果到此地址")
     candidate_name: str = Field(default="", description="候选人称呼，如 张先生")
-    employer: str = Field(default="", description="用人单位（tmp_prod 场景）；空则回退 client_name")
-    gender: str = Field(default="", description="性别（tmp_prod 场景可选）")
+    employer: str = Field(default="", description="用人单位（prod 场景）；空则回退 client_name")
+    gender: str = Field(default="", description="性别（prod 场景可选）")
     client_name: str = Field(
         default="",
-        description="白标=对外自称品牌（客户B）；BRAND_SELF=委托方；tmp_prod 亦可作用人单位回退",
+        description="白标=对外自称品牌（客户B）；BRAND_SELF=委托方；prod 亦可作用人单位回退",
     )
     identity_mode: str = Field(
         default="CLIENT_IDENTITY",
@@ -105,9 +105,9 @@ async def list_scenarios(x_api_key: str | None = Header(default=None, alias="X-A
                 "description": "催授权外呼：情景话术约束见 config/urge_auth_prompt.py（剧本 v2.3 冒烟口径）",
             },
             {
-                "id": "tmp_prod_auth_demo",
-                "name": "tmp-prod 催授权演示",
-                "description": "临时演示剧本：config/tmp_prod_prompt.py（芝麻背调自称）",
+                "id": "prod_auth_demo",
+                "name": "prod 催授权",
+                "description": "正式 prod 剧本：config/prod_prompt.py（芝麻背调自称）；旧 id tmp_prod_auth_demo 仍可用",
             },
         ]
     }

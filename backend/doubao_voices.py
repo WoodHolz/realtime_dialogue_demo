@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""豆包（Doubao）外呼音色目录：tmp-prod / PM 选型用。"""
+"""豆包（Doubao）外呼音色目录：prod / PM 选型用。"""
 from __future__ import annotations
 
 from typing import Any
@@ -223,7 +223,7 @@ def resolve_voice(voice: str | None, *, default: str = "") -> str:
     if raw not in ALLOWED_VOICE_TYPES:
         raise ValueError(
             f"Unsupported voice_type: {raw}. "
-            f"Use GET /tmp-prod/voice-catalog 或 /outbound/v1/voices 查看可用音色。"
+            f"Use GET /prod/voice-catalog 或 /outbound/v1/voices 查看可用音色。"
         )
     return raw
 

@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""tmp-prod Excel helpers (openpyxl)."""
+"""prod Excel helpers (openpyxl)."""
 from __future__ import annotations
 
 import re
@@ -91,7 +91,7 @@ def read_contacts_from_xlsx(data: bytes | Path) -> list[dict[str, str]]:
 
 
 def call_task_to_result_row(task: Any) -> dict[str, Any]:
-    """Map outbound CallTask → write_results_xlsx row (tmp-prod single / batch shape)."""
+    """Map outbound CallTask → write_results_xlsx row (prod single / batch shape)."""
     payload = getattr(task, "payload", None) or {}
     if not isinstance(payload, dict):
         payload = {}

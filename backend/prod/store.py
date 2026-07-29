@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Persistent JSON store for tmp-prod demo batches."""
+"""Persistent JSON store for prod demo batches."""
 from __future__ import annotations
 
 import json
@@ -16,7 +16,9 @@ def _utcnow() -> str:
 
 
 def default_root() -> Path:
-    return Path("data/tmp_prod")
+    from backend.prod.paths import prod_root
+
+    return prod_root()
 
 
 @dataclass

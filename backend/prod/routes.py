@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""tmp-prod demo API + results page backing endpoints."""
+"""prod demo API + results page backing endpoints."""
 from __future__ import annotations
 
 import asyncio
@@ -14,22 +14,24 @@ from pydantic import BaseModel, Field
 from backend.doubao_voices import list_voice_catalog, resolve_voice
 from backend.outbound.service import verify_partner_api_key
 from backend.outbound.store import get_call_store
-from backend.tmp_prod.excel_io import (
+from backend.prod.excel_io import (
     call_task_to_result_row,
     read_contacts_from_xlsx,
     write_results_xlsx,
 )
-from backend.tmp_prod.service import (
-    ensure_tmp_prod_env,
+from backend.prod.service import (
+    ensure_prod_env,
     run_batch,
     single_contact_snapshot,
     start_single_dial,
 )
-from backend.tmp_prod.store import get_batch_store
+from backend.prod.store import get_batch_store
+from backend.prod.paths import prod_root
 
 LOG = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/tmp-prod", tags=["tmp-prod-demo"])
+# Prefix mounted in server.py as both /prod and /tmp-prod (compat).
+router = APIRouter(tags=["prod-demo"])
 
 
 def _auth(x_api_key: str | None) -> None:
@@ -64,11 +66,11 @@ class StartBody(BaseModel):
         default=None,
         ge=1,
         le=200,
-        description="本批次同时外呼上限；空则 TMP_PROD_MAX_CONCURRENT / OUTBOUND_MAX_CONCURRENT",
+        description="本批次同时外呼上限；空则 PROD_MAX_CONCURRENT / OUTBOUND_MAX_CONCURRENT",
     )
     voice: str = Field(
         default="",
-        description="豆包 TTS voice_type；空则外呼默认音色。见 GET /tmp-prod/voice-catalog",
+        description="豆包 TTS voice_type；空则外呼默认音色。见 GET /prod/voice-catalog",
     )
 
 
@@ -82,7 +84,7 @@ class SingleCallBody(BaseModel):
     our_brand_name: str = Field(default="芝麻背调")
     channel_brand_name: str = Field(default="")
     voice: str = Field(default="", description="豆包 TTS voice_type")
-    scenario: str = Field(default="tmp_prod_auth_demo", description="固定 tmp_prod；忽略其他值")
+    scenario: str = Field(default="prod_auth_demo", description="固定 prod；忽略其他值")
 
 
 @router.get("/single/calls")
@@ -90,10 +92,10 @@ async def single_calls_usage() -> dict[str, Any]:
     """Browser GET hits this; real dial is POST. Avoid confusing 404 under reverse proxies."""
     return {
         "ok": True,
-        "message": "单人外呼请用 POST /tmp-prod/single/calls（不要用浏览器直接打开此 URL）",
-        "page": "/tmp-prod/single",
-        "poll": "GET /tmp-prod/single/batches/{batch_id}",
-        "harness": "GET /tmp-prod/harness/actions",
+        "message": "单人外呼请用 POST /prod/single/calls（不要用浏览器直接打开此 URL）",
+        "page": "/prod/single",
+        "poll": "GET /prod/single/batches/{batch_id}",
+        "harness": "GET /prod/harness/actions",
     }
 
 
@@ -105,7 +107,7 @@ async def list_harness_actions(
 ) -> dict[str, Any]:
     """Debug: inspect durable NextAction queue (reschedule / retry)."""
     _auth(x_api_key)
-    from backend.tmp_prod.harness.store import get_action_store
+    from backend.prod.harness.store import get_action_store
 
     actions = get_action_store().list_actions(batch_id=batch_id, status=status)
     return {
@@ -157,21 +159,21 @@ async def get_single_batch(
     return snap
 
 
-def render_tmp_prod_page() -> HTMLResponse:
-    """HTML page (also mounted at /tmp-prod without trailing-slash redirect)."""
-    path = Path(__file__).resolve().parents[2] / "frontend" / "tmp_prod.html"
+def render_prod_page() -> HTMLResponse:
+    """HTML page (also mounted at /prod without trailing-slash redirect)."""
+    path = Path(__file__).resolve().parents[2] / "frontend" / "prod.html"
     if not path.exists():
-        return HTMLResponse("<p>tmp_prod.html not found</p>", status_code=404)
+        return HTMLResponse("<p>prod.html not found</p>", status_code=404)
     return HTMLResponse(path.read_text(encoding="utf-8"), media_type="text/html; charset=utf-8")
 
 
-def render_tmp_prod_single_page() -> HTMLResponse:
-    """单人外呼联调页：tmp-prod 剧本 + TTFS 延迟可视化。"""
+def render_prod_single_page() -> HTMLResponse:
+    """单人外呼联调页：prod 剧本 + TTFS 延迟可视化。"""
     import json
 
-    path = Path(__file__).resolve().parents[2] / "frontend" / "tmp_prod_single.html"
+    path = Path(__file__).resolve().parents[2] / "frontend" / "prod_single.html"
     if not path.exists():
-        return HTMLResponse("<p>tmp_prod_single.html not found</p>", status_code=404)
+        return HTMLResponse("<p>prod_single.html not found</p>", status_code=404)
     raw = path.read_text(encoding="utf-8")
     try:
         from backend.outbound.dial import load_dial_settings
@@ -183,18 +185,18 @@ def render_tmp_prod_single_page() -> HTMLResponse:
             "ani": cfg.ani,
             "default_display": cfg.default_display,
             "display_numbers": list(cfg.display_numbers),
-            "scenario": "tmp_prod_auth_demo",
+            "scenario": "prod_auth_demo",
             "default_voice": voices.get("default_voice"),
             "voices": voices.get("scenes") or [],
         }
     except Exception as exc:  # noqa: BLE001
-        LOG.warning("tmp-prod single boot config failed: %s", exc)
+        LOG.warning("prod single boot config failed: %s", exc)
         boot = {
             "called_prefix": "a1",
             "ani": "",
             "default_display": "",
             "display_numbers": [],
-            "scenario": "tmp_prod_auth_demo",
+            "scenario": "prod_auth_demo",
             "default_voice": "",
             "voices": [],
             "error": str(exc),
@@ -209,29 +211,29 @@ def render_tmp_prod_single_page() -> HTMLResponse:
     )
     raw = raw.replace("<!--__STATUS_BOOT__-->", status, 1)
     boot_json = json.dumps(boot, ensure_ascii=False).replace("<", "\\u003c")
-    raw = raw.replace("<!--__TMP_PROD_SINGLE_BOOT_JSON__-->", boot_json, 1)
+    raw = raw.replace("<!--__PROD_SINGLE_BOOT_JSON__-->", boot_json, 1)
     return HTMLResponse(raw, media_type="text/html; charset=utf-8")
 
 
-def render_tmp_prod_voices_page() -> HTMLResponse:
+def render_prod_voices_page() -> HTMLResponse:
     """PM 豆包音色选型页。"""
     import json
 
-    path = Path(__file__).resolve().parents[2] / "frontend" / "tmp_prod_voices.html"
+    path = Path(__file__).resolve().parents[2] / "frontend" / "prod_voices.html"
     if not path.exists():
-        return HTMLResponse("<p>tmp_prod_voices.html not found</p>", status_code=404)
+        return HTMLResponse("<p>prod_voices.html not found</p>", status_code=404)
     raw = path.read_text(encoding="utf-8")
     catalog = list_voice_catalog()
     boot_json = json.dumps(catalog, ensure_ascii=False).replace("<", "\\u003c")
-    raw = raw.replace("<!--__TMP_PROD_VOICES_BOOT_JSON__-->", boot_json, 1)
+    raw = raw.replace("<!--__PROD_VOICES_BOOT_JSON__-->", boot_json, 1)
     return HTMLResponse(raw, media_type="text/html; charset=utf-8")
 
 
 @router.get("/voice-catalog")
-async def list_tmp_prod_voices(
+async def list_prod_voices(
     x_api_key: str | None = Header(default=None, alias="X-API-Key"),
 ) -> dict[str, Any]:
-    """PM：豆包音色目录（与 outbound/v1/voices 相同）。HTML 选型页在 GET /tmp-prod/voices。"""
+    """PM：豆包音色目录（与 outbound/v1/voices 相同）。HTML 选型页在 GET /prod/voices。"""
     _auth(x_api_key)
     return list_voice_catalog()
 
@@ -242,7 +244,7 @@ async def upload_batch(
     x_api_key: str | None = Header(default=None, alias="X-API-Key"),
 ) -> dict[str, Any]:
     _auth(x_api_key)
-    ensure_tmp_prod_env()
+    ensure_prod_env()
     raw = await file.read()
     if not raw:
         raise HTTPException(status_code=400, detail="empty file")
@@ -255,7 +257,7 @@ async def upload_batch(
     store = get_batch_store()
     batch = store.create_batch(contacts, source_name=file.filename or "upload.xlsx")
     # save original
-    dest = Path("data/tmp_prod") / batch.batch_id / (file.filename or "upload.xlsx")
+    dest = prod_root() / batch.batch_id / (file.filename or "upload.xlsx")
     dest.parent.mkdir(parents=True, exist_ok=True)
     dest.write_bytes(raw)
     return {
@@ -302,7 +304,7 @@ async def start_batch(
             max_concurrent=body.max_concurrent,
             voice=voice,
         ),
-        name=f"tmp-prod-batch-{batch_id}",
+        name=f"prod-batch-{batch_id}",
     )
     return {
         "batch_id": batch_id,
@@ -343,7 +345,7 @@ async def get_batch(
     batch = get_batch_store().get(batch_id)
     if not batch:
         raise HTTPException(status_code=404, detail="batch not found")
-    from backend.tmp_prod.harness.store import get_action_store
+    from backend.prod.harness.store import get_action_store
 
     data = batch.to_dict()
     data["harness_actions"] = [
@@ -362,7 +364,7 @@ async def export_batch_xlsx(
     if not batch:
         raise HTTPException(status_code=404, detail="batch not found")
     data = write_results_xlsx([c.to_dict() for c in batch.contacts])
-    filename = f"tmp_prod_results_{batch_id}.xlsx"
+    filename = f"prod_results_{batch_id}.xlsx"
     return Response(
         content=data,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -381,7 +383,7 @@ async def export_single_call_xlsx(
     if not task:
         raise HTTPException(status_code=404, detail="call_id not found")
     data = write_results_xlsx([call_task_to_result_row(task)])
-    filename = f"tmp_prod_result_{call_id}.xlsx"
+    filename = f"prod_result_{call_id}.xlsx"
     return Response(
         content=data,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",

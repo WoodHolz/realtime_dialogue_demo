@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""tmp-prod harness NextAction model (out-of-call orchestration)."""
+"""prod harness NextAction model (out-of-call orchestration)."""
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field, fields

@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>tmp-prod 芝麻背调催授权演示</title>
+  <title>prod 芝麻背调催授权演示</title>
   <style>
     :root {
       --bg: #f2f4f3;
@@ -66,7 +66,7 @@
       <a id="linkSingle" href="./single" style="color:var(--accent);text-decoration:none;">单人测试</a>
       <a id="linkVoices" href="./voices" style="color:var(--accent);text-decoration:none;">豆包音色选型</a>
     </nav>
-    <h1>tmp-prod · 芝麻背调催授权演示</h1>
+    <h1>prod · 芝麻背调催授权演示</h1>
     <p class="lead">上传 Excel（用人单位 / 姓名 / 性别 / 手机号）→ <b>并发</b>批量外呼 → 查看结果并下载 xlsx。未接通 30 分钟后自动重试一次；2 次失败记为「未接通」。单通最长 15 分钟。需要单通联调请用 <a id="linkSingleLead" href="./single" style="color:var(--accent)">单人测试页</a></p>
 
     <section class="panel">
@@ -135,17 +135,20 @@
     (function () {
       var pathPrefix = location.pathname.indexOf("/s2s/") === 0 || location.pathname === "/s2s"
         ? "/s2s" : "";
-      // page: /tmp-prod or /s2s/tmp-prod（勿依赖尾斜杠重定向）
-      var API = pathPrefix + "/tmp-prod";
-      var STORAGE_KEY = "tmp_prod_voice_type";
+      // /prod or /tmp-prod (compat) — derive API base from current page path
+      var pagePath = location.pathname.replace(/\/+$/, "").replace(/\/(single|voices)$/, "");
+      var API = pagePath.indexOf("/tmp-prod") >= 0
+        ? pathPrefix + "/tmp-prod"
+        : (pagePath.indexOf("/prod") >= 0 ? pagePath : pathPrefix + "/prod");
+      var STORAGE_KEY = "prod_voice_type";
       var singleLink = document.getElementById("linkSingle");
-      if (singleLink) singleLink.href = pathPrefix + "/tmp-prod/single";
+      if (singleLink) singleLink.href = API + "/single";
       var singleLead = document.getElementById("linkSingleLead");
-      if (singleLead) singleLead.href = pathPrefix + "/tmp-prod/single";
+      if (singleLead) singleLead.href = API + "/single";
       var voicesLink = document.getElementById("linkVoices");
-      if (voicesLink) voicesLink.href = pathPrefix + "/tmp-prod/voices";
+      if (voicesLink) voicesLink.href = API + "/voices";
       var voiceLabInline = document.getElementById("voiceLabInline");
-      if (voiceLabInline) voiceLabInline.href = pathPrefix + "/tmp-prod/voices";
+      if (voiceLabInline) voiceLabInline.href = API + "/voices";
       var el = {
         file: document.getElementById("file"),
         voice: document.getElementById("voice"),
@@ -344,7 +347,7 @@
           var blob = await resp.blob();
           var a = document.createElement("a");
           a.href = URL.createObjectURL(blob);
-          a.download = "tmp_prod_results_" + id + ".xlsx";
+          a.download = "prod_results_" + id + ".xlsx";
           a.click();
           URL.revokeObjectURL(a.href);
         } catch (e) {

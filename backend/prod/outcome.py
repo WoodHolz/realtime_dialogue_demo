@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""tmp-prod 通话结束后从转写抽取业务结果，供批次 / xlsx 回写。"""
+"""prod 通话结束后从转写抽取业务结果，供批次 / xlsx 回写。"""
 from __future__ import annotations
 
 import re
@@ -224,7 +224,7 @@ def absolute_from_relative_minutes(
     anchor: datetime | None = None,
 ) -> str:
     """Convert N minutes from now (Beijing) to display ``YYYY年M月D日 HH:MM``."""
-    from config.tmp_prod_prompt import beijing_now, format_ymd_cn
+    from config.prod_prompt import beijing_now, format_ymd_cn
 
     base = anchor or beijing_now()
     due = base + timedelta(minutes=max(1, int(minutes)))
@@ -312,7 +312,7 @@ def normalize_promised_time_display(
     if not text:
         return ""
 
-    from config.tmp_prod_prompt import format_ymd_cn, parse_trigger_beijing
+    from config.prod_prompt import format_ymd_cn, parse_trigger_beijing
 
     # Relative phrases first (5分钟后 / 半小时后)
     rel = _extract_relative_minutes(text)
@@ -380,14 +380,14 @@ def _pack_promise_outcome(
     }
 
 
-def extract_tmp_prod_outcome(
+def extract_prod_outcome(
     transcript: list[dict[str, Any]] | None,
     *,
     fallback_result: str = "completed",
     fallback_summary: str = "",
     trigger_beijing_at: str | datetime | None = None,
 ) -> dict[str, str]:
-    """Heuristic extract of tmp-prod business fields from call transcript.
+    """Heuristic extract of prod business fields from call transcript.
 
     Returns keys aligned with ContactJob / xlsx:
       result, result_summary, email, promised_time

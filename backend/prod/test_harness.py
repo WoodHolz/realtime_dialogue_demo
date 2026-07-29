@@ -1,21 +1,21 @@
 # -*- coding: utf-8 -*-
-"""Unit tests for tmp-prod harness policy / due-at parsing / prompt inject."""
+"""Unit tests for prod harness policy / due-at parsing / prompt inject."""
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
-from backend.tmp_prod.harness.models import (
+from backend.prod.harness.models import (
     ACTION_CALLBACK_RESCHEDULE,
     ACTION_RETRY_NO_ANSWER,
     CALL_KIND_RESCHEDULE,
 )
-from backend.tmp_prod.harness.policy import plan_next_action, promised_display_to_due_utc
-from backend.tmp_prod.outcome import extract_tmp_prod_outcome
-from config.tmp_prod_prompt import (
-    build_tmp_prod_opening,
-    build_tmp_prod_system_role,
-    tmp_prod_slots_from_payload,
+from backend.prod.harness.policy import plan_next_action, promised_display_to_due_utc
+from backend.prod.outcome import extract_prod_outcome
+from config.prod_prompt import (
+    build_prod_opening,
+    build_prod_system_role,
+    prod_slots_from_payload,
 )
 
 BJ = ZoneInfo("Asia/Shanghai")
@@ -114,7 +114,7 @@ def test_plan_completed_promise_not_scheduled():
 
 
 def test_outcome_not_convenient_keeps_promised_time():
-    out = extract_tmp_prod_outcome(
+    out = extract_prod_outcome(
         [
             {"role": "assistant", "text": "大约占用您两分钟，现在方便吗？"},
             {"role": "user", "text": "现在不方便，在开会"},
@@ -135,7 +135,7 @@ def test_outcome_not_convenient_keeps_promised_time():
 
 def test_outcome_callback_one_minute_not_marked_completed():
     """「1分钟后再打」必须是 not_convenient，不能落成 completed + promised_time。"""
-    out = extract_tmp_prod_outcome(
+    out = extract_prod_outcome(
         [
             {
                 "role": "assistant",
@@ -163,7 +163,7 @@ def test_outcome_callback_one_minute_not_marked_completed():
     assert planned is not None
     assert planned.type == ACTION_CALLBACK_RESCHEDULE
 
-    out = extract_tmp_prod_outcome(
+    out = extract_prod_outcome(
         [
             {"role": "assistant", "text": "大约占用您两分钟，现在方便吗？"},
             {"role": "user", "text": "不方便，5分钟后再打"},
@@ -183,7 +183,7 @@ def test_outcome_callback_one_minute_not_marked_completed():
 
 
 def test_normalize_relative_minutes_phrase():
-    from backend.tmp_prod.outcome import absolute_from_relative_minutes, normalize_promised_time_display
+    from backend.prod.outcome import absolute_from_relative_minutes, normalize_promised_time_display
 
     abs_disp = absolute_from_relative_minutes(5, anchor=datetime(2026, 7, 24, 15, 0, tzinfo=BJ))
     assert abs_disp == "2026年7月24日 15:05"
@@ -194,7 +194,7 @@ def test_normalize_relative_minutes_phrase():
 
 
 def test_reschedule_prompt_inject():
-    slots = tmp_prod_slots_from_payload(
+    slots = prod_slots_from_payload(
         {
             "candidate_name": "张三",
             "employer": "比赛日科技",
@@ -214,8 +214,8 @@ def test_reschedule_prompt_inject():
             "trigger_beijing_at": "2026-07-24T16:00:00+08:00",
         }
     )
-    opening = build_tmp_prod_opening(**slots)
-    role = build_tmp_prod_system_role(**slots)
+    opening = build_prod_opening(**slots)
+    role = build_prod_system_role(**slots)
     assert "按您上次说的时间" in opening
     assert "2026年7月24日 16:00" in opening
     assert "跨通话上下文" in role

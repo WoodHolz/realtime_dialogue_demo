@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""tmp-prod batch dialer + harness enqueue (no long sleep for retry/reschedule)."""
+"""prod batch dialer + harness enqueue (no long sleep for retry/reschedule)."""
 from __future__ import annotations
 
 import asyncio
@@ -9,21 +9,22 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from backend.tmp_prod.harness.models import CALL_KIND_INITIAL, CALL_KIND_RESCHEDULE
-from backend.tmp_prod.harness.policy import MAX_ATTEMPTS, RETRY_DELAY_SEC, plan_next_action
-from backend.tmp_prod.harness.store import get_action_store
-from backend.tmp_prod.store import Batch, BatchStore, ContactJob, get_batch_store
+from backend.prod.harness.models import CALL_KIND_INITIAL, CALL_KIND_RESCHEDULE
+from backend.prod.harness.policy import MAX_ATTEMPTS, RETRY_DELAY_SEC, plan_next_action
+from backend.prod.harness.store import get_action_store
+from backend.prod.paths import env_first, prod_root
+from backend.prod.store import Batch, BatchStore, ContactJob, get_batch_store
 
 LOG = logging.getLogger(__name__)
 
-SCENARIO = "tmp_prod_auth_demo"
+SCENARIO = "prod_auth_demo"
 CALL_MAX_SEC = 900  # 15 min
 POLL_SEC = 2.0
 
 
 def batch_max_concurrent() -> int:
-    """How many contacts to dial at once in a tmp-prod batch."""
-    raw = (os.environ.get("TMP_PROD_MAX_CONCURRENT") or "").strip()
+    """How many contacts to dial at once in a prod batch."""
+    raw = env_first("PROD_MAX_CONCURRENT", "TMP_PROD_MAX_CONCURRENT")
     if raw:
         try:
             return max(1, int(raw))
@@ -38,7 +39,7 @@ def batch_concurrency_limit(override: int | None = None) -> int:
     """How many contacts to dial in parallel within one batch."""
     if override is not None and override > 0:
         return override
-    raw = (os.environ.get("TMP_PROD_BATCH_CONCURRENT") or "").strip()
+    raw = env_first("PROD_BATCH_CONCURRENT", "TMP_PROD_BATCH_CONCURRENT")
     if raw:
         try:
             return max(1, int(raw))
@@ -53,9 +54,9 @@ def batch_concurrency_limit(override: int | None = None) -> int:
         return 60
 
 
-def ensure_tmp_prod_env() -> Path:
-    """Ensure recordings land under data/tmp_prod/recordings."""
-    root = Path(os.environ.get("TMP_PROD_ROOT", "data/tmp_prod"))
+def ensure_prod_env() -> Path:
+    """Ensure recordings land under prod data root (legacy TMP_PROD_* / data/tmp_prod ok)."""
+    root = prod_root()
     rec = root / "recordings"
     rec.mkdir(parents=True, exist_ok=True)
     os.environ.setdefault("SIP_RECORD_DIR", str(rec))
@@ -139,7 +140,7 @@ def _enqueue_planned(
     }
     store.update_contact(batch_id, contact_id, **fields)
     LOG.info(
-        "tmp-prod harness enqueued type=%s action=%s due_at=%s contact=%s",
+        "prod harness enqueued type=%s action=%s due_at=%s contact=%s",
         planned.type,
         action.action_id,
         action.due_at,
@@ -161,7 +162,7 @@ async def dial_one_contact(
     callback_context: dict[str, Any] | None = None,
 ) -> ContactJob:
     """Place one outbound attempt; enqueue harness actions on no-answer / reschedule."""
-    ensure_tmp_prod_env()
+    ensure_prod_env()
     store = store or get_batch_store()
     attempt = contact.attempt + 1
     dial_opts = _dial_options_payload(
@@ -293,14 +294,14 @@ async def dial_one_contact(
                 **rec_fields,
             )
     else:
-        from backend.tmp_prod.outcome import extract_tmp_prod_outcome
+        from backend.prod.outcome import extract_prod_outcome
 
         fallback_result = getattr(finished, "result", None) or "completed"
         fallback_summary = getattr(finished, "result_summary", "") or ""
         call_payload = getattr(finished, "payload", None) or {}
         if not isinstance(call_payload, dict):
             call_payload = {}
-        outcome = extract_tmp_prod_outcome(
+        outcome = extract_prod_outcome(
             transcript,
             fallback_result=fallback_result,
             fallback_summary=fallback_summary,
@@ -323,7 +324,7 @@ async def dial_one_contact(
         )
         if planned is None:
             LOG.info(
-                "tmp-prod harness skip enqueue contact=%s result=%s promised=%r "
+                "prod harness skip enqueue contact=%s result=%s promised=%r "
                 "terminal_failed=%s transcript_turns=%s",
                 contact.contact_id,
                 outcome.get("result"),
@@ -397,11 +398,11 @@ def _align_contact_recording(
     """
     Align one contact's dual-channel recording under the batch tree:
 
-      data/tmp_prod/{batch_id}/contacts/{contact_id}/{call_id}/stereo.wav
+      data/prod/{batch_id}/contacts/{contact_id}/{call_id}/stereo.wav
     """
     import shutil
 
-    root = Path(os.environ.get("TMP_PROD_ROOT", "data/tmp_prod"))
+    root = prod_root()
     dest_dir = root / batch_id / "contacts" / contact.contact_id / call_id
     dest_dir.mkdir(parents=True, exist_ok=True)
 
@@ -458,7 +459,7 @@ def _persist_artifacts(
     transcript: list[dict[str, str]],
     recordings: dict[str, str],
 ) -> None:
-    root = Path(os.environ.get("TMP_PROD_ROOT", "data/tmp_prod")) / batch_id / "artifacts" / contact_id
+    root = prod_root() / batch_id / "artifacts" / contact_id
     root.mkdir(parents=True, exist_ok=True)
     import json
 
@@ -496,7 +497,7 @@ async def run_batch(
     voice: str = "",
 ) -> Batch:
     """Dial batch contacts concurrently (capped); SIP traffic gate still applies."""
-    ensure_tmp_prod_env()
+    ensure_prod_env()
     store = get_batch_store()
     batch = store.get(batch_id)
     if not batch:
@@ -507,7 +508,7 @@ async def run_batch(
     limit = max(1, int(max_concurrent if max_concurrent is not None else batch_max_concurrent()))
     sem = asyncio.Semaphore(limit)
     LOG.info(
-        "tmp-prod batch start batch_id=%s contacts=%s max_concurrent=%s voice=%s",
+        "prod batch start batch_id=%s contacts=%s max_concurrent=%s voice=%s",
         batch_id,
         len(batch.contacts),
         limit,
@@ -539,7 +540,7 @@ async def run_batch(
                     voice=voice,
                 )
             except Exception as exc:
-                LOG.exception("tmp-prod dial error contact=%s", contact_id)
+                LOG.exception("prod dial error contact=%s", contact_id)
                 store.update_contact(
                     batch_id,
                     contact_id,
@@ -553,7 +554,7 @@ async def run_batch(
     for i, contact in enumerate(list(batch.contacts)):
         if contact.status in {"completed", "failed", "waiting_retry", "waiting_callback"}:
             continue
-        tasks.append(asyncio.create_task(_one(contact.contact_id), name=f"tmp-prod-{contact.contact_id}"))
+        tasks.append(asyncio.create_task(_one(contact.contact_id), name=f"prod-{contact.contact_id}"))
         if stagger_sec > 0 and i + 1 < len(batch.contacts):
             await asyncio.sleep(stagger_sec)
 
@@ -579,7 +580,7 @@ async def start_single_dial(
     voice: str = "",
 ) -> dict[str, Any]:
     """Create a 1-contact batch and dial via harness-aware dial_one_contact."""
-    ensure_tmp_prod_env()
+    ensure_prod_env()
     phone = (phone or "").strip()
     if not phone:
         raise ValueError("phone is required")
@@ -612,7 +613,7 @@ async def start_single_dial(
                 voice=voice,
             )
         except Exception as exc:
-            LOG.exception("tmp-prod single dial failed batch=%s", batch.batch_id)
+            LOG.exception("prod single dial failed batch=%s", batch.batch_id)
             store.update_contact(
                 batch.batch_id,
                 contact.contact_id,
@@ -624,7 +625,7 @@ async def start_single_dial(
         finally:
             _maybe_mark_batch_done(batch.batch_id, store)
 
-    asyncio.create_task(_run(), name=f"tmp-prod-single-{batch.batch_id}")
+    asyncio.create_task(_run(), name=f"prod-single-{batch.batch_id}")
     return {
         "batch_id": batch.batch_id,
         "contact_id": contact.contact_id,
@@ -651,7 +652,7 @@ def single_contact_snapshot(batch_id: str, contact_id: str | None = None) -> dic
         return None
 
     from backend.outbound.store import get_call_store
-    from backend.tmp_prod.harness.store import get_action_store
+    from backend.prod.harness.store import get_action_store
 
     call_payload: dict[str, Any] = {}
     call_id = (contact.last_call_id or "").strip()

@@ -3,23 +3,23 @@
 from __future__ import annotations
 
 import logging
-import os
 import re
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any
 from zoneinfo import ZoneInfo
 
-from backend.tmp_prod.harness.context import build_callback_context
-from backend.tmp_prod.harness.models import (
+from backend.prod.harness.context import build_callback_context
+from backend.prod.harness.models import (
     ACTION_CALLBACK_RESCHEDULE,
     ACTION_RETRY_NO_ANSWER,
 )
+from backend.prod.paths import env_first
 
 LOG = logging.getLogger(__name__)
 BJ = ZoneInfo("Asia/Shanghai")
 
-RETRY_DELAY_SEC = int(os.environ.get("TMP_PROD_RETRY_SEC", "1800"))
+RETRY_DELAY_SEC = int(env_first("PROD_RETRY_SEC", "TMP_PROD_RETRY_SEC", default="1800"))
 MAX_ATTEMPTS = 2
 
 # MVP: only not_convenient (+ locked hour-level time) schedules a callback.
@@ -92,7 +92,7 @@ def plan_next_action(
         due = promised_display_to_due_utc(promised)
         if due is None:
             LOG.info(
-                "tmp-prod harness skip reschedule: no hour-level promised_time result=%s promised=%r",
+                "prod harness skip reschedule: no hour-level promised_time result=%s promised=%r",
                 result,
                 promised,
             )

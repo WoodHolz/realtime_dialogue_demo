@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""统计 tmp-prod 已有通话的平均时长（基于落盘 WAV）。
+"""统计 prod 已有通话的平均时长（基于落盘 WAV）。
 
 优先读::
 
@@ -13,9 +13,9 @@
 
 Usage::
 
-    python scripts/tmp_prod_call_duration_stats.py
-    python scripts/tmp_prod_call_duration_stats.py --root /home/ubuntu/realtime_dialogue_demo/data/tmp_prod
-    python scripts/tmp_prod_call_duration_stats.py --root data/tmp_prod --list --min-sec 5
+    python scripts/prod_call_duration_stats.py
+    python scripts/prod_call_duration_stats.py --root /home/ubuntu/realtime_dialogue_demo/data/prod
+    python scripts/prod_call_duration_stats.py --root data/prod --list --min-sec 5
 """
 from __future__ import annotations
 
@@ -219,13 +219,13 @@ def print_report(calls: list[CallDuration], *, list_calls: bool) -> None:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        description="统计 tmp-prod 每通通话平均时长（基于 WAV / transcript）",
+        description="统计 prod 每通通话平均时长（基于 WAV / transcript）",
     )
     parser.add_argument(
         "--root",
         type=Path,
         default=None,
-        help="tmp-prod 数据根目录（默认: $TMP_PROD_ROOT 或 data/tmp_prod）",
+        help="prod 数据根目录（默认: $PROD_ROOT 或 data/prod）",
     )
     parser.add_argument(
         "--min-sec",
@@ -255,7 +255,9 @@ def main(argv: list[str] | None = None) -> int:
 
     root = args.root
     if root is None:
-        root = Path(os.environ.get("TMP_PROD_ROOT", "data/tmp_prod"))
+        from backend.prod.paths import prod_root
+
+        root = prod_root()
     root = root.expanduser().resolve()
 
     if not root.is_dir():
