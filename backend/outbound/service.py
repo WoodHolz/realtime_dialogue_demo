@@ -97,6 +97,7 @@ async def create_outbound_call(
     dry_run: bool | None = None,
     display: str = "",
     voice: str = "",
+    call_id: str = "",
     store: CallStore | None = None,
 ) -> CallTask:
     phone = (phone or "").strip()
@@ -125,7 +126,7 @@ async def create_outbound_call(
 
     use_dry = _force_dry_run() if dry_run is None else bool(dry_run)
     task = CallTask(
-        call_id=uuid.uuid4().hex,
+        call_id=(call_id or "").strip() or uuid.uuid4().hex,
         scenario=scenario,
         phone=phone,
         status=STATUS_QUEUED,
@@ -224,6 +225,12 @@ async def complete_call(
     updated = store.update(call_id, **fields)
     if updated:
         await notify_partner_callback(updated)
+        try:
+            from backend.ia.reporter import report_ia_call_finished
+
+            await report_ia_call_finished(updated)
+        except Exception:
+            LOG.exception("IA reporter failed call_id=%s", call_id)
     return updated
 
 

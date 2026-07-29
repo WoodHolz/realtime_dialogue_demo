@@ -82,6 +82,7 @@ from backend.demo_asr_broadcast import (
 )
 from backend.outbound.routes import router as partner_outbound_router
 from backend.prod.routes import router as prod_router
+from backend.ia.routes import router as ia_algo_router
 
 LOG = logging.getLogger(__name__)
 
@@ -106,6 +107,7 @@ app.include_router(partner_outbound_router)
 app.include_router(prod_router, prefix="/prod")
 # tmp-prod deploy / bookmarks keep working; same handlers as /prod.
 app.include_router(prod_router, prefix="/tmp-prod")
+app.include_router(ia_algo_router)
 
 VAD_ASR_TARGET_SAMPLE_RATE = 16000
 
