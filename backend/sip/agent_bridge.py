@@ -13,6 +13,7 @@ import asyncio
 import logging
 import os
 import queue
+import re
 import threading
 import time
 from collections.abc import Callable
@@ -39,6 +40,24 @@ LOG = logging.getLogger(__name__)
 _DOWNLINK_CLEAR = object()
 _DOWNLINK_STOP = object()
 _DOWNLINK_FLUSH = object()
+
+_IDLE_FAREWELL = "您好，好像您暂时不方便继续，那我先挂了，有需要我们再联系，再见。"
+
+# Explicit hold / “wait for me” — AI standby; idle hangup clock still runs.
+_HOLD_ON_RE = re.compile(
+    r"(?i)("
+    r"hold\s*on|wait\s*(a\s*)?(sec|second|minute|moment)?"
+    r"|稍[等候]|等一下|等一会儿|等一[下会]|等下|等会儿|等我一下|你等一下|您等一下|你等着|您等着"
+    r"|先等[一会下]|先别挂|别挂|不要挂|先挂着|我找找|我看看|我翻一下|我翻翻"
+    r")"
+)
+
+
+def _is_hold_on_utterance(text: str) -> bool:
+    t = (text or "").strip()
+    if not t:
+        return False
+    return bool(_HOLD_ON_RE.search(t))
 
 
 @dataclass
@@ -128,6 +147,10 @@ class SipAgentBridge:
         self._pending_user_end_ms: int | None = None
         self._pending_turn_latency_ms: float | None = None
         self._asr_interim = ""
+        # User-idle hangup: no final ASR for user_idle_hangup_sec → local BYE.
+        self._last_user_activity_mono: float = 0.0
+        self._hold_standby: bool = False
+        self._idle_hangup_armed: bool = False
 
     def _emit(self, status: str, **extra: Any) -> None:
         if self.on_status:
@@ -285,12 +308,15 @@ class SipAgentBridge:
                 )
                 self._opening_active = False
                 self._publish_transcript()
+                self._mark_user_activity(arm_idle=True)
             else:
                 self._accept_uplink = True
                 self._opening_active = False
+                self._mark_user_activity(arm_idle=True)
 
             uplink_task = asyncio.create_task(self._uplink_loop(client))
             keepalive_task = asyncio.create_task(self._silence_keepalive_watchdog(client, session))
+            idle_task = asyncio.create_task(self._user_idle_hangup_watchdog(client, session))
             try:
                 await asyncio.to_thread(session.wait_until_done, self.max_call_sec)
                 if not session.is_done:
@@ -306,10 +332,10 @@ class SipAgentBridge:
                     )
             finally:
                 self._enqueue_uplink(None)
-                for task in (keepalive_task, uplink_task):
+                for task in (idle_task, keepalive_task, uplink_task):
                     if task and not task.done():
                         task.cancel()
-                for task in (keepalive_task, uplink_task):
+                for task in (idle_task, keepalive_task, uplink_task):
                     if not task:
                         continue
                     try:
@@ -553,6 +579,72 @@ class SipAgentBridge:
         except asyncio.CancelledError:
             raise
 
+    def _mark_user_activity(self, *, arm_idle: bool = False) -> None:
+        self._last_user_activity_mono = time.monotonic()
+        if arm_idle:
+            self._idle_hangup_armed = True
+
+    async def _user_idle_hangup_watchdog(
+        self,
+        client: DuplexVoiceClient,
+        session: SipCallSession,
+    ) -> None:
+        """Hang up when the callee has no final ASR for user_idle_hangup_sec."""
+        idle_sec = float(getattr(self.sip_config, "user_idle_hangup_sec", 0.0) or 0.0)
+        if idle_sec <= 0:
+            return
+        try:
+            while not session.is_done:
+                await asyncio.sleep(2.0)
+                if session.is_done or not self._idle_hangup_armed:
+                    continue
+                last = self._last_user_activity_mono
+                if last <= 0:
+                    continue
+                elapsed = time.monotonic() - last
+                if elapsed < idle_sec:
+                    continue
+                LOG.info(
+                    "user idle hangup call_id=%s idle=%.1fs threshold=%.1fs hold=%s",
+                    self.call_id,
+                    elapsed,
+                    idle_sec,
+                    self._hold_standby,
+                )
+                self._emit(
+                    "user_idle_hangup",
+                    idle_sec=round(elapsed, 1),
+                    threshold_sec=idle_sec,
+                    hold_standby=self._hold_standby,
+                )
+                try:
+                    await client.say_hello(_IDLE_FAREWELL)
+                    self._transcript.append(
+                        {
+                            "role": "assistant",
+                            "text": _IDLE_FAREWELL,
+                            "kind": "idle_hangup",
+                            "source": "say_hello",
+                            "t_ms": self._rel_ms(),
+                        }
+                    )
+                    self._publish_transcript()
+                    # Brief window for farewell TTS to reach RTP.
+                    await asyncio.sleep(2.5)
+                    if session:
+                        await asyncio.to_thread(
+                            session.wait_downlink_idle,
+                            timeout_sec=4.0,
+                            quiet_frames=2,
+                        )
+                except Exception:
+                    LOG.debug("idle farewell TTS failed", exc_info=True)
+                if not session.is_done:
+                    session.hangup(reason="user_idle_timeout")
+                return
+        except asyncio.CancelledError:
+            raise
+
     def _on_asr(self, text: str, is_interim: bool) -> None:
         text = (text or "").strip()
         if not text:
@@ -570,6 +662,15 @@ class SipAgentBridge:
         self._latency.user_speech_end()
         self._pending_user_end_ms = self._rel_ms()
         self._asr_interim = ""
+        self._mark_user_activity(arm_idle=True)
+        hold = _is_hold_on_utterance(text)
+        if hold:
+            self._hold_standby = True
+            self._emit("hold_standby", text=text, active=True)
+            LOG.info("hold-on standby call_id=%s text=%r", self.call_id, text[:80])
+        elif self._hold_standby:
+            self._hold_standby = False
+            self._emit("hold_standby", text=text, active=False)
         self._transcript.append(
             {
                 "role": "user",
@@ -577,6 +678,7 @@ class SipAgentBridge:
                 "kind": "user",
                 "source": "asr",
                 "t_ms": self._pending_user_end_ms,
+                **({"hold_on": True} if hold else {}),
             }
         )
         self._publish_transcript()

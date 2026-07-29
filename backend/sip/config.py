@@ -223,6 +223,8 @@ class SipConfig:
     ring_timeout_sec: float = 45.0
     # Max media hold after answer when agent does not hang up earlier.
     max_call_sec: float = 600.0
+    # No final user ASR for this long → local hangup (0 = disabled).
+    user_idle_hangup_sec: float = 300.0
     # SIP TCP double-CRLF keepalive interval (avoid NAT/LB idle drop ~10-30s).
     sip_keepalive_sec: float = 10.0
     # Optional recording directory; empty = disabled.
@@ -288,6 +290,7 @@ def load_sip_config() -> SipConfig:
         called_prefix=prefix,
         ring_timeout_sec=_env_float("SIP_RING_TIMEOUT", 45.0),
         max_call_sec=_env_float("SIP_MAX_CALL_SEC", 600.0),
+        user_idle_hangup_sec=_env_float("SIP_USER_IDLE_HANGUP_SEC", 300.0),
         sip_keepalive_sec=_env_float("SIP_KEEPALIVE_SEC", 10.0),
         record_dir=_env("SIP_RECORD_DIR", ""),
         ai_speak_first=ai_speak_first,
