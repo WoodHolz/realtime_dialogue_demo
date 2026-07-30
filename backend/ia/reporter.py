@@ -20,13 +20,10 @@ def _ia_meta(task: CallTask) -> dict[str, Any] | None:
 
 
 def _call_id_int(task: CallTask, ia: dict[str, Any]) -> int:
+    """Prefer platform long callId from IA payload; never use internal uuid hex."""
     if ia.get("callId") is not None:
         return int(ia["callId"])
-    try:
-        return int(task.call_id)
-    except ValueError:
-        # Non-numeric legacy ids should not reach IA reporter.
-        raise ValueError(f"IA callId not numeric: {task.call_id!r}") from None
+    raise ValueError(f"IA payload missing numeric callId for task.call_id={task.call_id!r}")
 
 
 def _map_call_outcome(task: CallTask) -> tuple[str, bool]:

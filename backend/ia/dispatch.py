@@ -124,23 +124,29 @@ def _rollback_dispatch(dispatch_id: str, task_id: int, dispatch_type: str) -> No
 
 async def _start_first_call(req: TaskDispatchRequest, row: AcceptedDispatch) -> None:
     payload = dispatch_to_outbound_payload(req)
+    # Platform-facing long callId (IA-03A/03B/05). Keep SIP/Doubao on UUID like /prod.
     numeric_call_id = _new_numeric_call_id()
     payload["ia"]["callId"] = numeric_call_id
-    # Prefer not to auto-retry follow-up types via prod harness.
     payload["ia"]["allowAutoRetry"] = req.dispatchType == "INITIAL"
+
+    from backend.prod.service import ensure_prod_env
+
+    ensure_prod_env()
 
     task = await create_outbound_call(
         phone=req.recipient.mobile,
         scenario=INTERNAL_SCENARIO,
         external_id=req.externalOrderId,
         payload=payload,
-        call_id=str(numeric_call_id),
+        # Do NOT pass numeric call_id here — Doubao dialog_id / SIP bridge expect
+        # the same uuid-style ids as the /prod path (hex). Numeric id stays in payload.ia.
     )
     get_dispatch_store().attach_call(req.dispatchId, task.call_id)
     LOG.info(
-        "IA-01 dial started dispatchId=%s taskId=%s callId=%s type=%s",
+        "IA-01 dial started dispatchId=%s taskId=%s callId=%s iaCallId=%s type=%s",
         req.dispatchId,
         req.taskId,
         task.call_id,
+        numeric_call_id,
         req.dispatchType,
     )
