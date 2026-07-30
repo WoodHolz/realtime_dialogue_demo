@@ -156,6 +156,7 @@ class DuplexVoiceClient:
         on_barge_in: Callable[[str], None] | None = None,
         on_session_started: Callable[[str], None] | None = None,
         on_error: Callable[[str], None] | None = None,
+        on_raw_event: Callable[[dict[str, Any]], None] | None = None,
     ):
         api_key = (api_key or "").strip()
         app_id = (app_id or "").strip()
@@ -185,6 +186,7 @@ class DuplexVoiceClient:
         self.on_barge_in = on_barge_in
         self.on_session_started = on_session_started
         self.on_error = on_error
+        self.on_raw_event = on_raw_event
         self._ws: websockets.WebSocketClientProtocol | None = None
         self._session_id: str | None = None
         self._dialog_id: str = ""
@@ -637,6 +639,11 @@ class DuplexVoiceClient:
 
     def _dispatch(self, event: dict[str, Any]) -> None:
         event_type = event.get("type", "")
+        if self.on_raw_event:
+            try:
+                self.on_raw_event(event)
+            except Exception:
+                LOG.debug("on_raw_event failed", exc_info=True)
 
         if event_type == TYPE_SESSION_CREATED:
             session = event.get("session") or {}
@@ -713,6 +720,9 @@ class DuplexVoiceClient:
             if self.on_chat_ended:
                 self.on_chat_ended(self._current_item_id, response_id)
             self._chat_text_buffer = ""
+        elif event_type == TYPE_RESPONSE_DONE:
+            # Usage (if any) is captured via on_raw_event → analytics adapter.
+            LOG.debug("Duplex response.done response_id=%s", event.get("response_id", ""))
         elif event_type == TYPE_ERROR:
             err = event.get("error")
             code = event.get("status_code") or event.get("code") or ""

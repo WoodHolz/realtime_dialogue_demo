@@ -12,6 +12,7 @@ models/
 tmp/
 data/tmp_prod/
 data/prod/
+data/analytics/
 docs/bg_check_voice_docs/
 docs/.~tmp.xlsx
 docs/tmp.xlsx

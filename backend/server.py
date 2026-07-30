@@ -83,6 +83,7 @@ from backend.demo_asr_broadcast import (
 from backend.outbound.routes import router as partner_outbound_router
 from backend.prod.routes import router as prod_router
 from backend.ia.routes import router as ia_algo_router
+from backend.analytics.routes import router as analytics_router
 
 LOG = logging.getLogger(__name__)
 
@@ -96,6 +97,12 @@ async def lifespan(app: FastAPI):
     from backend.prod.harness import start_harness_scheduler, stop_harness_scheduler
 
     start_harness_scheduler()
+    try:
+        from backend.analytics.store import get_analytics_store
+
+        get_analytics_store().maybe_purge_expired(force=True)
+    except Exception:
+        LOG.exception("analytics startup purge failed")
     yield
     await stop_harness_scheduler()
     shutdown_hush_manager()
@@ -108,6 +115,7 @@ app.include_router(prod_router, prefix="/prod")
 # tmp-prod deploy / bookmarks keep working; same handlers as /prod.
 app.include_router(prod_router, prefix="/tmp-prod")
 app.include_router(ia_algo_router)
+app.include_router(analytics_router)
 
 VAD_ASR_TARGET_SAMPLE_RATE = 16000
 

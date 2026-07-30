@@ -211,6 +211,7 @@ async def _run_sip_bridged_call(
                 opening_parts=parts,
                 on_status=on_status,
                 voice=voice,
+                scenario=task.scenario or "",
             )
             try:
                 outcome = await bridge.run(phone)
@@ -309,6 +310,17 @@ async def _run_sip_bridged_call(
                 telephony=tel,
                 error=sip.error or outcome.error,
             )
+            _persist_call_analytics(
+                outcome,
+                call_id=call_id,
+                scenario=task.scenario,
+                business_result=(
+                    RESULT_NO_ANSWER
+                    if "failed: 4" in (sip.error or "") or sip.status in {"404", "480", "486", "487"}
+                    else RESULT_FAILED
+                ),
+                connected=False,
+            )
             return
 
         summary = "通话结束"
@@ -343,5 +355,68 @@ async def _run_sip_bridged_call(
             telephony=tel,
             error="",
         )
+        _persist_call_analytics(
+            outcome,
+            call_id=call_id,
+            scenario=task.scenario,
+            business_result=result_code,
+            connected=True,
+        )
     finally:
         await gate.release(peer_host, peer_port, call_id)
+
+
+def _persist_call_analytics(
+    outcome: Any,
+    *,
+    call_id: str,
+    scenario: str,
+    business_result: str,
+    connected: bool,
+) -> None:
+    """Best-effort analytics write; never raise into dialer."""
+    try:
+        from backend.analytics.meter import CallUsageSession, record_call_analytics
+        from backend.analytics.models import CallAnalyticsRecord
+        from backend.analytics.funnel import hangup_party_from_reason, infer_hangup_stage
+
+        snap = getattr(outcome, "analytics", None)
+        sip = getattr(outcome, "sip", None)
+        hangup_reason = ""
+        if sip is not None:
+            hangup_reason = getattr(sip, "hangup_reason", "") or ""
+        transcript = list(getattr(outcome, "transcript", None) or [])
+
+        if isinstance(snap, dict) and snap.get("call_id"):
+            rec = CallAnalyticsRecord.from_dict(snap)
+            rec.call_id = call_id or rec.call_id
+            rec.scenario = scenario or rec.scenario
+            rec.business_result = business_result or rec.business_result
+            rec.connected = connected
+            if not connected:
+                rec.duration_sec = 0.0
+            stage, confidence = infer_hangup_stage(
+                scenario=rec.scenario,
+                connected=connected,
+                hangup_reason=hangup_reason or rec.hangup_reason,
+                business_result=rec.business_result,
+                transcript=transcript,
+            )
+            rec.hangup_reason = hangup_reason or rec.hangup_reason
+            rec.hangup_party = hangup_party_from_reason(rec.hangup_reason)
+            rec.hangup_stage = stage
+            rec.hangup_stage_confidence = confidence
+            record_call_analytics(rec)
+            return
+
+        session = CallUsageSession(call_id or "unknown", scenario=scenario)
+        record_call_analytics(
+            session.build_record(
+                connected=connected,
+                hangup_reason=hangup_reason,
+                business_result=business_result,
+                transcript=transcript,
+            )
+        )
+    except Exception:
+        LOG.exception("persist call analytics failed call_id=%s", call_id)

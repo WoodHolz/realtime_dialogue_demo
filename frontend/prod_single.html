@@ -135,6 +135,79 @@
     .result-grid dd.strong { font-weight: 700; color: var(--accent); }
     .result-actions { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-top: 0.75rem; }
     .result-actions button { margin-top: 0; width: auto; min-width: 8rem; }
+
+    .analytics-panel { margin-top: 0.25rem; }
+    .analytics-head {
+      display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between;
+      gap: 0.5rem 1rem; margin-bottom: 0.75rem;
+    }
+    .analytics-head h2 { margin: 0; }
+    .kpi-grid {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 0.65rem;
+      margin-bottom: 1rem;
+    }
+    @media (max-width: 800px) {
+      .kpi-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    }
+    .kpi {
+      background: #f7faf8; border: 1px solid var(--line); border-radius: 10px;
+      padding: 0.7rem 0.8rem;
+    }
+    .kpi .label { font-size: 0.72rem; color: var(--muted); font-weight: 600; letter-spacing: 0.02em; }
+    .kpi .value { font-size: 1.25rem; font-weight: 700; color: var(--accent); margin-top: 0.2rem; }
+    .kpi .sub { font-size: 0.72rem; color: var(--muted); margin-top: 0.15rem; }
+    .charts {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 0.85rem;
+      margin-bottom: 0.85rem;
+    }
+    @media (max-width: 800px) { .charts { grid-template-columns: 1fr; } }
+    .chart-box {
+      border: 1px solid var(--line); border-radius: 10px; padding: 0.75rem 0.85rem;
+      background: #fafcfb;
+    }
+    .chart-box h3 {
+      margin: 0 0 0.55rem; font-size: 0.8rem; color: var(--muted);
+      text-transform: uppercase; letter-spacing: 0.03em;
+    }
+    .bar-row {
+      display: grid; grid-template-columns: 7.5rem 1fr 2.2rem;
+      gap: 0.4rem; align-items: center; margin-bottom: 0.35rem;
+      font-size: 0.78rem;
+    }
+    .bar-row .name { color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .bar-track { height: 0.55rem; background: #e5ebe7; border-radius: 999px; overflow: hidden; }
+    .bar-fill { height: 100%; background: var(--accent); border-radius: 999px; min-width: 0; }
+    .bar-fill.alt { background: #b45309; }
+    .bar-row .n { text-align: right; color: var(--muted); font-variant-numeric: tabular-nums; }
+    .trend {
+      display: grid; grid-auto-flow: column; grid-auto-columns: minmax(1.6rem, 1fr);
+      gap: 0.25rem; align-items: end; height: 7rem;
+      border-bottom: 1px solid var(--line); padding-bottom: 0.2rem;
+    }
+    .trend-col { display: flex; flex-direction: column; align-items: center; height: 100%; justify-content: flex-end; gap: 0.2rem; }
+    .trend-stack { flex: 1; width: 100%; display: flex; align-items: flex-end; justify-content: center; }
+    .trend-bar {
+      width: 70%; max-width: 1.4rem; background: var(--accent); border-radius: 4px 4px 0 0;
+      min-height: 2px;
+    }
+    .trend-day { font-size: 0.62rem; color: var(--muted); writing-mode: horizontal-tb; }
+    .call-table-wrap { overflow: auto; max-height: 260px; border: 1px solid var(--line); border-radius: 8px; }
+    table.calls {
+      width: 100%; border-collapse: collapse; font-size: 0.78rem;
+    }
+    table.calls th, table.calls td {
+      padding: 0.45rem 0.55rem; border-bottom: 1px solid var(--line);
+      text-align: left; white-space: nowrap;
+    }
+    table.calls th { color: var(--muted); font-weight: 600; background: #f7faf8; position: sticky; top: 0; }
+    table.calls tr:last-child td { border-bottom: 0; }
+    .analytics-actions { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-top: 0.65rem; }
+    .analytics-actions button { margin-top: 0; width: auto; min-width: 7rem; }
+    #analyticsMeta { font-size: 0.78rem; color: var(--muted); }
   </style>
 </head>
 <body>
@@ -245,8 +318,80 @@
           <div class="interim" id="asrInterim">实时 ASR interim：—</div>
           <div class="tx" id="txBox"><div class="empty">通话开始后显示转写</div></div>
         </section>
+
+        <section class="panel" id="callUsagePanel">
+          <h2>本通用量</h2>
+          <p class="hint" id="callUsageHint">通话结束后显示本通 local / provider 用量与挂断阶段。</p>
+          <dl class="result-grid" id="callUsageGrid">
+            <dt>时长</dt><dd id="uDuration">—</dd>
+            <dt>挂断阶段</dt><dd id="uStage">—</dd>
+            <dt>挂断原因</dt><dd id="uReason">—</dd>
+            <dt>本地音频</dt><dd id="uAudio">—</dd>
+            <dt>本地字符</dt><dd id="uChars">—</dd>
+            <dt>厂商 session</dt><dd id="uProvider">—</dd>
+          </dl>
+        </section>
       </aside>
     </div>
+
+    <section class="panel analytics-panel" id="analyticsPanel">
+      <div class="analytics-head">
+        <h2>通话统计 · 近 14 天</h2>
+        <span id="analyticsMeta">加载中…</span>
+      </div>
+      <p class="hint" style="margin-top:0;">
+        本地观测 + 厂商 session 用量对照；挂断漏斗按剧本阶段推断。数据落盘保留 14 天，过期自动删除。
+      </p>
+      <div class="kpi-grid" id="kpiGrid">
+        <div class="kpi"><div class="label">通话数</div><div class="value" id="kpiCalls">—</div><div class="sub" id="kpiConnected">接通 —</div></div>
+        <div class="kpi"><div class="label">平均时长</div><div class="value" id="kpiAvg">—</div><div class="sub">仅接通通话</div></div>
+        <div class="kpi"><div class="label">总时长</div><div class="value" id="kpiTotal">—</div><div class="sub">墙钟秒合计</div></div>
+        <div class="kpi"><div class="label">本地音频入/出</div><div class="value" id="kpiAudio" style="font-size:1rem;">—</div><div class="sub" id="kpiTokens">tokens —</div></div>
+      </div>
+      <div class="charts">
+        <div class="chart-box">
+          <h3>挂断阶段漏斗</h3>
+          <div id="stageBars"><div class="empty">暂无数据</div></div>
+        </div>
+        <div class="chart-box">
+          <h3>挂断原因</h3>
+          <div id="reasonBars"><div class="empty">暂无数据</div></div>
+        </div>
+      </div>
+      <div class="charts">
+        <div class="chart-box">
+          <h3>每日通话量</h3>
+          <div class="trend" id="trendCalls"></div>
+        </div>
+        <div class="chart-box">
+          <h3>每日平均时长（秒）</h3>
+          <div class="trend" id="trendAvg"></div>
+        </div>
+      </div>
+      <div class="chart-box" style="margin-bottom:0.85rem;">
+        <h3>最近通话</h3>
+        <div class="call-table-wrap">
+          <table class="calls">
+            <thead>
+              <tr>
+                <th>结束时间</th>
+                <th>时长</th>
+                <th>阶段</th>
+                <th>原因</th>
+                <th>结果</th>
+                <th>call_id</th>
+              </tr>
+            </thead>
+            <tbody id="recentCallsBody">
+              <tr><td colspan="6" class="empty">暂无</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+      <div class="analytics-actions">
+        <button type="button" class="secondary" id="analyticsRefresh">刷新统计</button>
+      </div>
+    </section>
   </main>
 
   <script type="application/json" id="single-boot"><!--__PROD_SINGLE_BOOT_JSON__--></script>
@@ -260,7 +405,25 @@
       var PROD_API = pagePath.indexOf("/tmp-prod") >= 0
         ? pathPrefix + "/tmp-prod"
         : (pagePath.indexOf("/prod") >= 0 ? pagePath : pathPrefix + "/prod");
+      var ANALYTICS_API = pathPrefix + "/analytics/v1";
       var SCENARIO = "prod_auth_demo";
+      var STAGE_LABELS = {
+        not_connected: "未接通",
+        opening: "开场",
+        convenience: "是否方便",
+        delivery_confirm: "送达确认",
+        received_deadline: "已收到·催办",
+        spam_check: "查垃圾短信",
+        alt_sms: "兜底短信",
+        email_collect: "采邮箱",
+        email_collect_done: "已登记邮箱",
+        email_refused: "拒给邮箱",
+        closing: "收线",
+        early_dialogue: "早期对话",
+        mid_dialogue: "中段对话",
+        completed: "完成",
+        unknown: "未知",
+      };
 
       var STORAGE_KEY = "prod_voice_type";
       document.getElementById("linkBatch").href = PROD_API;
@@ -317,7 +480,193 @@
         rEmail: document.getElementById("rEmail"),
         rFollowup: document.getElementById("rFollowup"),
         rCallId: document.getElementById("rCallId"),
+        callUsageHint: document.getElementById("callUsageHint"),
+        uDuration: document.getElementById("uDuration"),
+        uStage: document.getElementById("uStage"),
+        uReason: document.getElementById("uReason"),
+        uAudio: document.getElementById("uAudio"),
+        uChars: document.getElementById("uChars"),
+        uProvider: document.getElementById("uProvider"),
+        analyticsMeta: document.getElementById("analyticsMeta"),
+        kpiCalls: document.getElementById("kpiCalls"),
+        kpiConnected: document.getElementById("kpiConnected"),
+        kpiAvg: document.getElementById("kpiAvg"),
+        kpiTotal: document.getElementById("kpiTotal"),
+        kpiAudio: document.getElementById("kpiAudio"),
+        kpiTokens: document.getElementById("kpiTokens"),
+        stageBars: document.getElementById("stageBars"),
+        reasonBars: document.getElementById("reasonBars"),
+        trendCalls: document.getElementById("trendCalls"),
+        trendAvg: document.getElementById("trendAvg"),
+        recentCallsBody: document.getElementById("recentCallsBody"),
+        analyticsRefresh: document.getElementById("analyticsRefresh"),
       };
+
+      function fmtSec(v) {
+        if (v == null || v === "" || isNaN(Number(v))) return "—";
+        var n = Number(v);
+        if (n < 60) return n.toFixed(1) + "s";
+        var m = Math.floor(n / 60);
+        var s = Math.round(n % 60);
+        return m + "m " + s + "s";
+      }
+      function stageLabel(code) {
+        var c = String(code || "").trim() || "unknown";
+        return (STAGE_LABELS[c] || c);
+      }
+      function renderBars(elBars, hist, alt, labelFn) {
+        hist = hist || {};
+        var entries = Object.keys(hist).map(function (k) { return [k, Number(hist[k]) || 0]; });
+        entries.sort(function (a, b) { return b[1] - a[1]; });
+        if (!entries.length) {
+          elBars.innerHTML = "<div class='empty'>暂无数据</div>";
+          return;
+        }
+        var max = entries[0][1] || 1;
+        var lab = labelFn || function (x) { return x; };
+        elBars.innerHTML = "";
+        entries.slice(0, 10).forEach(function (pair) {
+          var row = document.createElement("div");
+          row.className = "bar-row";
+          var pct = Math.max(4, Math.round((pair[1] / max) * 100));
+          var name = lab(pair[0]);
+          row.innerHTML =
+            "<div class='name' title='" + pair[0] + "'>" + name + "</div>" +
+            "<div class='bar-track'><div class='bar-fill" + (alt ? " alt" : "") + "' style='width:" + pct + "%'></div></div>" +
+            "<div class='n'>" + pair[1] + "</div>";
+          elBars.appendChild(row);
+        });
+      }
+      function renderTrend(elTrend, series, key, colorAlt) {
+        series = series || [];
+        if (!series.length) {
+          elTrend.innerHTML = "<div class='empty'>暂无</div>";
+          return;
+        }
+        var vals = series.map(function (d) {
+          var v = d[key];
+          return v == null ? 0 : Number(v) || 0;
+        });
+        var max = Math.max.apply(null, vals.concat([1]));
+        elTrend.innerHTML = "";
+        series.forEach(function (d, i) {
+          var col = document.createElement("div");
+          col.className = "trend-col";
+          var h = Math.round((vals[i] / max) * 100);
+          var dayShort = String(d.day || "").slice(5);
+          col.innerHTML =
+            "<div class='trend-stack'><div class='trend-bar' style='height:" + h + "%;" +
+            (colorAlt ? "background:#b45309" : "") + "' title='" + (d.day || "") + ": " + vals[i] + "'></div></div>" +
+            "<div class='trend-day'>" + dayShort + "</div>";
+          elTrend.appendChild(col);
+        });
+      }
+      function renderRecent(rows) {
+        rows = rows || [];
+        if (!rows.length) {
+          el.recentCallsBody.innerHTML = "<tr><td colspan='6' class='empty'>暂无</td></tr>";
+          return;
+        }
+        el.recentCallsBody.innerHTML = "";
+        rows.forEach(function (r) {
+          var tr = document.createElement("tr");
+          var ended = (r.ended_at || "").replace("T", " ").slice(0, 19);
+          tr.innerHTML =
+            "<td>" + (ended || "—") + "</td>" +
+            "<td>" + fmtSec(r.duration_sec) + "</td>" +
+            "<td>" + stageLabel(r.hangup_stage) + "</td>" +
+            "<td>" + (r.hangup_reason || "—") + "</td>" +
+            "<td>" + (r.business_result || "—") + "</td>" +
+            "<td><code style='font-size:0.72rem'>" + (r.call_id || "") + "</code></td>";
+          el.recentCallsBody.appendChild(tr);
+        });
+      }
+      function renderSummary(summary) {
+        summary = summary || {};
+        el.analyticsMeta.textContent =
+          (summary.from_day || "?") + " → " + (summary.to_day || "?") +
+          " · 保留 " + (summary.retention_days || 14) + " 天" +
+          (summary.updated_at ? (" · 更新 " + String(summary.updated_at).replace("T", " ").slice(0, 19)) : "");
+        el.kpiCalls.textContent = summary.calls != null ? String(summary.calls) : "0";
+        el.kpiConnected.textContent = "接通 " + (summary.connected_calls != null ? summary.connected_calls : 0);
+        el.kpiAvg.textContent = fmtSec(summary.avg_duration_sec);
+        el.kpiTotal.textContent = fmtSec(summary.total_duration_sec);
+        var local = summary.usage_local_totals || {};
+        var prov = summary.usage_provider_session_totals || {};
+        el.kpiAudio.textContent =
+          (local.audio_in_sec != null ? Number(local.audio_in_sec).toFixed(0) : "0") + " / " +
+          (local.audio_out_sec != null ? Number(local.audio_out_sec).toFixed(0) : "0") + "s";
+        var tokLocal = local.total_tokens != null ? local.total_tokens : 0;
+        var tokProv = prov.total_tokens != null ? prov.total_tokens : 0;
+        el.kpiTokens.textContent = "tokens local " + tokLocal + " · provider " + tokProv;
+        renderBars(el.stageBars, summary.hangup_stage, false, stageLabel);
+        renderBars(el.reasonBars, summary.hangup_reason, true, function (x) { return x || "unknown"; });
+        renderTrend(el.trendCalls, summary.series, "calls", false);
+        renderTrend(el.trendAvg, summary.series, "avg_duration_sec", true);
+        renderRecent(summary.recent_calls);
+      }
+      async function refreshAnalytics() {
+        el.analyticsMeta.textContent = "加载中…";
+        try {
+          var resp = await fetch(ANALYTICS_API + "/summary?days=14", { headers: headers(false) });
+          var data = await resp.json().catch(function () { return {}; });
+          if (!resp.ok) {
+            el.analyticsMeta.textContent = "加载失败 " + resp.status;
+            return;
+          }
+          renderSummary(data.summary || {});
+        } catch (err) {
+          el.analyticsMeta.textContent = String(err.message || err);
+        }
+      }
+      function renderCallUsage(rec) {
+        if (!rec) {
+          el.callUsageHint.textContent = "通话结束后显示本通 local / provider 用量与挂断阶段。";
+          el.uDuration.textContent = "—";
+          el.uStage.textContent = "—";
+          el.uReason.textContent = "—";
+          el.uAudio.textContent = "—";
+          el.uChars.textContent = "—";
+          el.uProvider.textContent = "—";
+          return;
+        }
+        el.callUsageHint.textContent = "call_id=" + (rec.call_id || "") + " · confidence=" + (rec.hangup_stage_confidence || "—");
+        el.uDuration.textContent = fmtSec(rec.duration_sec) + (rec.connected ? "" : "（未接通）");
+        el.uStage.textContent = stageLabel(rec.hangup_stage);
+        el.uReason.textContent = (rec.hangup_reason || "—") + (rec.hangup_party ? (" / " + rec.hangup_party) : "");
+        var local = (rec.usage && rec.usage.local) || {};
+        el.uAudio.textContent =
+          "in " + (local.audio_in_sec != null ? Number(local.audio_in_sec).toFixed(1) : "—") +
+          "s · out " + (local.audio_out_sec != null ? Number(local.audio_out_sec).toFixed(1) : "—") + "s";
+        el.uChars.textContent =
+          "ASR " + (local.asr_chars != null ? local.asr_chars : "—") +
+          " · TTS " + (local.tts_chars != null ? local.tts_chars : "—") +
+          " · 轮次 U/A " + (local.turns_user != null ? local.turns_user : "—") +
+          "/" + (local.turns_assistant != null ? local.turns_assistant : "—");
+        var prov = (rec.usage && rec.usage.provider_session) || {};
+        var parts = [];
+        if (prov.total_tokens != null) parts.push("tokens " + prov.total_tokens);
+        if (prov.input_tokens != null) parts.push("in " + prov.input_tokens);
+        if (prov.output_tokens != null) parts.push("out " + prov.output_tokens);
+        if (prov.audio_in_sec != null) parts.push("audio_in " + prov.audio_in_sec + "s");
+        if (prov.audio_out_sec != null) parts.push("audio_out " + prov.audio_out_sec + "s");
+        el.uProvider.textContent = parts.length ? parts.join(" · ") : "（会话未回报 usage）";
+      }
+      async function refreshCallUsage(callId) {
+        if (!callId) return;
+        try {
+          var resp = await fetch(ANALYTICS_API + "/calls/" + encodeURIComponent(callId), {
+            headers: headers(false),
+          });
+          if (resp.status === 404) {
+            el.callUsageHint.textContent = "本通统计尚未落盘，稍后刷新。";
+            return;
+          }
+          if (!resp.ok) return;
+          var data = await resp.json();
+          renderCallUsage(data.record || null);
+        } catch (e) { /* ignore */ }
+      }
 
       function populateVoices() {
         var scenes = boot.voices || [];
@@ -635,6 +984,14 @@
               if (data.recording_urls && data.recording_urls.stereo) {
                 loadKind("stereo").catch(function () {});
               }
+              if (data.call_id) {
+                setTimeout(function () {
+                  refreshCallUsage(data.call_id);
+                  refreshAnalytics();
+                }, 800);
+              } else {
+                refreshAnalytics();
+              }
             }
           } catch (e) { /* keep polling */ }
         }, 1500);
@@ -657,6 +1014,13 @@
       el.btnStereo.addEventListener("click", function () { loadKind("stereo"); });
       el.btnUser.addEventListener("click", function () { loadKind("user"); });
       el.btnAi.addEventListener("click", function () { loadKind("ai"); });
+      if (el.analyticsRefresh) {
+        el.analyticsRefresh.addEventListener("click", function () {
+          refreshAnalytics();
+          if (activeCallId) refreshCallUsage(activeCallId);
+        });
+      }
+      refreshAnalytics();
 
       el.exportBtn.addEventListener("click", async function () {
         if (!activeCallId) return;

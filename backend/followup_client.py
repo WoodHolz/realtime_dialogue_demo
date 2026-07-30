@@ -186,6 +186,8 @@ class FollowupQuestionClient:
         if api_style not in ("chat_completions", "responses"):
             api_style = "chat_completions"
         self._api_style = api_style
+        self.usage_session_id: str = ""
+        self.last_usage: dict[str, float] = {}
         if self.enabled:
             LOG.info(
                 "Follow-up model provider=%s style=%s base=%s model=%s",
@@ -254,8 +256,11 @@ class FollowupQuestionClient:
         stage: str | None = None,
         dialogue_history: str | None = None,
         output_format: str | None = None,
+        usage_session_id: str | None = None,
     ) -> str:
         """Generate a single short follow-up question based on ASR text and recent dialogue."""
+        if usage_session_id is not None:
+            self.usage_session_id = (usage_session_id or "").strip()
         if not self.enabled:
             raise RuntimeError("FollowupQuestionClient is not properly configured")
 
@@ -407,10 +412,27 @@ class FollowupQuestionClient:
 
     async def _request_model(self, payload: dict[str, Any]) -> str:
         if self._api_style == "responses":
-            return await self._responses(payload)
-        return await self._chat_completion(payload)
+            text, usage = await self._responses(payload)
+        else:
+            text, usage = await self._chat_completion(payload)
+        self.last_usage = dict(usage or {})
+        sid = (self.usage_session_id or "").strip()
+        if sid and self.last_usage:
+            try:
+                from backend.analytics.meter import record_component_usage
 
-    async def _chat_completion(self, payload: dict[str, Any]) -> str:
+                record_component_usage(
+                    sid,
+                    "followup",
+                    self.last_usage,
+                    provider=self._provider,
+                    model=self._model,
+                )
+            except Exception:
+                LOG.debug("followup usage record failed", exc_info=True)
+        return text
+
+    async def _chat_completion(self, payload: dict[str, Any]) -> tuple[str, dict[str, float]]:
         body = {**payload, **self._extra_body}
         headers = {
             "Authorization": f"Bearer {self._api_key}",
@@ -436,9 +458,11 @@ class FollowupQuestionClient:
             text = data["choices"][0]["message"]["content"]
         except Exception as exc:  # noqa: BLE001
             raise RuntimeError(f"Unexpected response format from follow-up model: {data}") from exc
-        return (text or "").strip()
+        from backend.analytics.providers.openai_compat import extract_openai_usage
 
-    async def _responses(self, payload: dict[str, Any]) -> str:
+        return (text or "").strip(), extract_openai_usage(data)
+
+    async def _responses(self, payload: dict[str, Any]) -> tuple[str, dict[str, float]]:
         # OpenAI-compatible Responses API: https://.../compatible-mode/v1/responses
         request_payload: dict[str, Any] = {
             "model": payload.get("model"),
@@ -466,9 +490,12 @@ class FollowupQuestionClient:
         except httpx.HTTPError as exc:
             raise RuntimeError(f"followup responses request failed: {type(exc).__name__}: {exc!r}") from exc
 
+        from backend.analytics.providers.openai_compat import extract_openai_usage
+
+        usage = extract_openai_usage(data)
         output_text = data.get("output_text")
         if isinstance(output_text, str) and output_text.strip():
-            return output_text.strip()
+            return output_text.strip(), usage
 
         for item in data.get("output", []) or []:
             if item.get("type") != "message":
@@ -476,7 +503,7 @@ class FollowupQuestionClient:
             for part in item.get("content", []) or []:
                 text = part.get("text")
                 if isinstance(text, str) and text.strip():
-                    return text.strip()
+                    return text.strip(), usage
         raise RuntimeError(f"Unexpected response format from follow-up model: {data}")
 
     def _parse_plain_followup(self, raw: str, asr_text: str) -> str:

@@ -20,8 +20,9 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
-from backend.duplex_client import OUTBOUND_SPEAKER, DuplexVoiceClient
+from backend.duplex_client import DUPLEX_MODEL, OUTBOUND_SPEAKER, DuplexVoiceClient
 from backend.latency_logger import LatencyLogger
+from backend.analytics.meter import CallUsageSession
 from backend.sip.codec import (
     AGENT_IN_RATE,
     AGENT_TTS_RATE,
@@ -68,6 +69,7 @@ class BridgeOutcome:
     turn_timings: list[dict[str, Any]] = field(default_factory=list)
     error: str = ""
     agent_session_id: str = ""
+    analytics: dict[str, Any] | None = None
 
 
 def _doubao_creds() -> tuple[str, str, str]:
@@ -90,6 +92,7 @@ class SipAgentBridge:
         call_id: str = "",
         bot_name: str = "语音助手",
         voice: str = "",
+        scenario: str = "",
         max_call_sec: float | None = None,
         opening_line: str | None = None,
         opening_parts: list[str] | None = None,
@@ -101,6 +104,7 @@ class SipAgentBridge:
         self.speaking_style = speaking_style
         self.call_id = call_id or "anon"
         self.bot_name = bot_name
+        self.scenario = (scenario or "").strip()
         fallback_voice = (sip_config.voice or OUTBOUND_SPEAKER).strip() or OUTBOUND_SPEAKER
         self.voice = (voice or "").strip() or fallback_voice
         self.max_call_sec = max_call_sec if max_call_sec is not None else sip_config.max_call_sec
@@ -151,6 +155,7 @@ class SipAgentBridge:
         self._last_user_activity_mono: float = 0.0
         self._hold_standby: bool = False
         self._idle_hangup_armed: bool = False
+        self._usage = None  # set in run(); CallUsageSession
 
     def _emit(self, status: str, **extra: Any) -> None:
         if self.on_status:
@@ -202,6 +207,8 @@ class SipAgentBridge:
             # Always record user leg for stereo timeline (even while uplink gated).
             if self._recorder:
                 self._recorder.append_user(pcm16)
+            if self._usage:
+                self._usage.add_input_pcm16(pcm16, sample_rate=AGENT_IN_RATE)
             if not self._accept_uplink:
                 return
             loop = self._loop
@@ -221,6 +228,14 @@ class SipAgentBridge:
             remote_rtp=sip_result.remote_rtp,
         )
         self._t0 = time.perf_counter()
+        self._usage = CallUsageSession(
+            self.call_id,
+            scenario=self.scenario,
+            provider="doubao_dialog",
+            model=DUPLEX_MODEL,
+            input_audio_rate=AGENT_IN_RATE,
+            output_audio_rate=AGENT_TTS_RATE,
+        )
         if self._recorder:
             self._recorder.mark_start()
         self._start_downlink_worker()
@@ -229,6 +244,10 @@ class SipAgentBridge:
 
         def on_session_started(_dialog_id: str) -> None:
             session_ready.set()
+
+        def on_raw_event(event: dict[str, Any]) -> None:
+            if self._usage:
+                self._usage.on_provider_event(event)
 
         client = DuplexVoiceClient(
             api_key=api_key,
@@ -244,6 +263,7 @@ class SipAgentBridge:
             on_barge_in=self._on_barge_in,
             on_session_started=on_session_started,
             on_error=lambda m: LOG.warning("agent error call_id=%s: %s", self.call_id, m),
+            on_raw_event=on_raw_event,
         )
         self._client = client
 
@@ -366,6 +386,17 @@ class SipAgentBridge:
             rx=sip_final.rx_packets,
             tx=sip_final.tx_packets,
         )
+        analytics_dict: dict[str, Any] | None = None
+        if self._usage is not None:
+            try:
+                analytics_dict = self._usage.build_record(
+                    connected=bool(sip_final.ok),
+                    hangup_reason=sip_final.hangup_reason or "",
+                    transcript=list(self._transcript),
+                    duration_sec=self._usage.wall_duration_sec() if sip_final.ok else 0.0,
+                ).to_dict()
+            except Exception:
+                LOG.exception("analytics snapshot failed call_id=%s", self.call_id)
         return BridgeOutcome(
             sip=sip_final,
             transcript=list(self._transcript),
@@ -373,6 +404,7 @@ class SipAgentBridge:
             turn_timings=list(self._turn_timings),
             error=outcome_error or sip_final.error,
             agent_session_id=self.call_id,
+            analytics=analytics_dict,
         )
 
     async def _play_opening_parts(self, client: DuplexVoiceClient) -> None:
@@ -903,6 +935,8 @@ class SipAgentBridge:
     def _on_tts_audio(self, pcm24k: bytes) -> None:
         if not pcm24k or not self._session:
             return
+        if self._usage:
+            self._usage.add_output_pcm16(pcm24k, sample_rate=AGENT_TTS_RATE)
         if self._opening_uplink_pending:
             self._opening_part_pcm24_bytes += len(pcm24k)
             self._opening_received_audio = True
