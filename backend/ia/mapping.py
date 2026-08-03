@@ -80,6 +80,7 @@ def dispatch_to_outbound_payload(req: TaskDispatchRequest) -> dict[str, Any]:
             "scriptVersion": req.scriptVersion,
             "scenario": req.scenario,
             "tenantId": req.tenantId,
+            "subjectKey": req.subjectKey,
             "maxAttempts": req.retryPolicy.maxAttempts,
             "retryIntervalMinutes": req.retryPolicy.retryIntervalMinutes,
             "timezone": req.timezone or "Asia/Shanghai",

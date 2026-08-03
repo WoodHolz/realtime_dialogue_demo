@@ -1,7 +1,8 @@
 # -*- coding: utf-8 -*-
 """IA-01 / reporting Pydantic models (camelCase JSON).
 
-tenantId is optional/reserved until multi-tenant platform lands.
+tenantId: long, optional during smoke (target-state required).
+subjectKey: optional task keyword; AUTHORIZATION_REMINDER omits it.
 """
 from __future__ import annotations
 
@@ -103,8 +104,10 @@ class TaskDispatchRequest(CamelModel):
     requestedAt: str | None = None
     deadline: str | None = None  # smoke: ignore
     retryPolicy: RetryPolicy = Field(default_factory=RetryPolicy)
-    # Reserved — not required for smoke.
-    tenantId: str | None = None
+    # Smoke: optional (omit OK). Target-state: required before 2nd tenant.
+    tenantId: int | None = None
+    # Optional task keyword; AUTHORIZATION_REMINDER typically omits.
+    subjectKey: str | None = None
     contractVersion: str | None = None
 
 
@@ -145,9 +148,9 @@ class CallEventRequest(CamelModel):
     taskStatus: str | None = None
     closeReason: str | None = None
     failureEvidence: dict[str, Any] | None = None
-    # Reserved
+    # Reserved / pass-through
     resultBundleId: str | None = None
-    tenantId: str | None = None
+    tenantId: int | None = None
 
 
 class CallOutcomeRequest(CamelModel):
@@ -164,9 +167,9 @@ class CallOutcomeRequest(CamelModel):
     recipientWithdrawn: bool = False
     feedbackItems: list[dict[str, Any]] = Field(default_factory=list)
     scenarioPayload: dict[str, Any] = Field(default_factory=dict)
-    # Reserved
+    # Reserved / pass-through
     resultBundleId: str | None = None
-    tenantId: str | None = None
+    tenantId: int | None = None
     outcomeId: str | None = None
 
 
@@ -176,6 +179,6 @@ class ArtifactUploadMeta(CamelModel):
     taskId: int
     callId: int
     artifactType: Literal["RECORDING", "TRANSCRIPT"]
-    # Reserved
-    tenantId: str | None = None
+    # Reserved / pass-through
+    tenantId: int | None = None
     uploadRequestId: str | None = None

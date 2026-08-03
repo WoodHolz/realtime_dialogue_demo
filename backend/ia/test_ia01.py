@@ -76,11 +76,14 @@ SAMPLE = {
 @pytest.fixture()
 def client(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("OUTBOUND_DRY_RUN", "true")
+    from fastapi import FastAPI
+
     from backend.ia import store as ia_store
+    from backend.ia.routes import router as ia_router
 
     ia_store._STORE = None  # noqa: SLF001
-    from backend.server import app
-
+    app = FastAPI()
+    app.include_router(ia_router)
     return TestClient(app)
 
 
@@ -109,6 +112,34 @@ def test_task_dispatch_rejects_bad_script(client: TestClient):
     r = client.post("/va-algo/v1/task-dispatch", json=body)
     assert r.status_code == 400
     assert r.json()["errorCode"] == "INVALID_DISPATCH"
+
+
+def test_task_dispatch_accepts_tenant_id_and_subject_key(client: TestClient):
+    body = dict(SAMPLE)
+    body["dispatchId"] = "disp_tenant_001"
+    body["tenantId"] = 10001
+    body["subjectKey"] = "optional-keyword"  # 催授通常不传；有则透传
+    r = client.post("/va-algo/v1/task-dispatch", json=body)
+    assert r.status_code == 200, r.text
+    assert r.json()["accepted"] is True
+
+    from backend.ia.mapping import dispatch_to_outbound_payload
+    from backend.ia.models import TaskDispatchRequest
+
+    req = TaskDispatchRequest.model_validate(body)
+    payload = dispatch_to_outbound_payload(req)
+    assert payload["ia"]["tenantId"] == 10001
+    assert payload["ia"]["subjectKey"] == "optional-keyword"
+
+
+def test_task_dispatch_omits_tenant_and_subject_key_ok(client: TestClient):
+    """Smoke: tenantId / subjectKey still optional."""
+    body = dict(SAMPLE)
+    body["dispatchId"] = "disp_no_tenant"
+    assert "tenantId" not in body
+    assert "subjectKey" not in body
+    r = client.post("/va-algo/v1/task-dispatch", json=body)
+    assert r.status_code == 200, r.text
 
 
 def test_mapping_planned_call_at_never_null():

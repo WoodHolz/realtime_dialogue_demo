@@ -14,6 +14,17 @@ from backend.outbound.models import CallTask
 LOG = logging.getLogger(__name__)
 
 
+def _tenant_id(ia: dict[str, Any]) -> int | None:
+    raw = ia.get("tenantId")
+    if raw is None or raw == "":
+        return None
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        LOG.warning("IA tenantId not int-compatible: %r", raw)
+        return None
+
+
 def _ia_meta(task: CallTask) -> dict[str, Any] | None:
     raw = (task.payload or {}).get("ia")
     return dict(raw) if isinstance(raw, dict) and raw.get("taskId") is not None else None
@@ -93,7 +104,7 @@ def build_call_event(task: CallTask, *, execution_sequence: int = 1) -> CallEven
         scriptVersion=str(ia.get("scriptVersion") or "2.3"),
         taskStatus=task_status,
         closeReason=close_reason,
-        tenantId=ia.get("tenantId"),
+        tenantId=_tenant_id(ia),
     )
 
 
@@ -179,7 +190,7 @@ def build_call_outcome(task: CallTask) -> CallOutcomeRequest:
             "anomalyTags": [],
             "trustChallenge": None,
         },
-        tenantId=ia.get("tenantId"),
+        tenantId=_tenant_id(ia),
     )
 
 
@@ -212,7 +223,7 @@ async def report_ia_call_finished(task: CallTask) -> None:
                 taskId=int(ia["taskId"]),
                 callId=_call_id_int(task, ia),
                 artifactType="RECORDING",
-                tenantId=ia.get("tenantId"),
+                tenantId=_tenant_id(ia),
             )
             await client.upload_recording(meta=meta, file_path=Path(stereo))
     except Exception:
