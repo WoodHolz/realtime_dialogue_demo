@@ -76,12 +76,12 @@ class PlatformClient:
                 with file_path.open("rb") as fh:
                     files = {"file": (file_path.name, fh, "application/octet-stream")}
                     resp = await client.post(url, data=data, files=files, headers=_headers())
-                LOG.info(
+                LOG.error(
                     "IA-05 upload status=%s url=%s meta=%s resp=%s",
                     resp.status_code,
                     url,
                     data.get("meta"),
-                    (resp.text or "")[:800],
+                    (resp.text or "")[:2000],
                 )
                 resp.raise_for_status()
                 if resp.content:
@@ -102,12 +102,12 @@ class PlatformClient:
         try:
             async with httpx.AsyncClient(timeout=20.0) as client:
                 resp = await client.post(url, json=body, headers=_headers())
-            LOG.info(
+            LOG.error(
                 "IA platform POST %s status=%s body=%s resp=%s",
                 path,
                 resp.status_code,
                 body,
-                (resp.text or "")[:800],
+                (resp.text or "")[:2000],
             )
             resp.raise_for_status()
             if resp.content:
