@@ -190,12 +190,15 @@ class CallOutcomeRequest(CamelModel):
 
 
 class ArtifactUploadMeta(CamelModel):
-    """IA-05 (merged) multipart meta for POST /report/voice/recording."""
+    """IA-05 (merged) multipart meta for POST /report/voice/recording.
+
+    Platform Postman: form-data meta (application/json) + file; time field is productAt.
+    """
 
     taskId: int
     callId: int
-    # Platform validation: tenantId 不能为空
     tenantId: int
     artifactType: Literal["RECORDING", "TRANSCRIPT"]
-    createdAt: str
+    # Platform field name (not createdAt).
+    productAt: str
     uploadRequestId: str | None = None

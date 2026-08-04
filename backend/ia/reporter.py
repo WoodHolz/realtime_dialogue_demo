@@ -363,7 +363,7 @@ async def report_ia_call_finished(task: CallTask) -> None:
                 taskId=int(ia["taskId"]),
                 callId=ia_call_id,
                 artifactType="RECORDING",
-                createdAt=_iso_offset(task.finished_at),
+                productAt=_iso_offset(task.finished_at),
                 tenantId=_tenant_id(ia),
             )
             await client.upload_recording(meta=meta, file_path=Path(stereo))

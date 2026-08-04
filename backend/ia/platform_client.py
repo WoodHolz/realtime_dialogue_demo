@@ -65,22 +65,25 @@ class PlatformClient:
             return {"dry_run": True, "ok": True}
 
         url = f"{self.base_url}{path}"
-        data = {
-            "meta": json.dumps(
-                meta.model_dump(mode="json", exclude_none=True),
-                ensure_ascii=False,
-            )
-        }
+        meta_json = json.dumps(
+            meta.model_dump(mode="json", exclude_none=True),
+            ensure_ascii=False,
+        )
+        # Platform: meta part must be application/json; file is binary.
+        # Put both in ``files`` so httpx sets multipart Content-Type per part.
         try:
             async with httpx.AsyncClient(timeout=60.0) as client:
                 with file_path.open("rb") as fh:
-                    files = {"file": (file_path.name, fh, "application/octet-stream")}
-                    resp = await client.post(url, data=data, files=files, headers=_headers())
+                    files = {
+                        "meta": (None, meta_json, "application/json"),
+                        "file": (file_path.name, fh, "application/octet-stream"),
+                    }
+                    resp = await client.post(url, files=files, headers=_headers())
                 LOG.error(
                     "IA-05 upload status=%s url=%s meta=%s resp=%s",
                     resp.status_code,
                     url,
-                    data.get("meta"),
+                    meta_json,
                     (resp.text or "")[:2000],
                 )
                 resp.raise_for_status()

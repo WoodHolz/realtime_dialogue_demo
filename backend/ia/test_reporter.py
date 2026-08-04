@@ -106,15 +106,16 @@ def test_03b_converts_chinese_promised_time_to_iso():
     assert outcome.reschedule["reason"] == "RECIPIENT_CALLBACK_REQUEST"
 
 
-def test_05_meta_includes_created_at_and_tenant():
+def test_05_meta_uses_product_at():
     meta = ArtifactUploadMeta(
         taskId=1,
         callId=2,
         artifactType="RECORDING",
-        createdAt="2026-08-03T17:02:00+08:00",
+        productAt="2026-08-03T17:02:00+08:00",
         tenantId=10001,
     )
     dumped = meta.model_dump(mode="json", exclude_none=True)
     assert dumped["tenantId"] == 10001
-    assert dumped["createdAt"] == "2026-08-03T17:02:00+08:00"
+    assert dumped["productAt"] == "2026-08-03T17:02:00+08:00"
+    assert "createdAt" not in dumped
     assert dumped["taskId"] == 1
