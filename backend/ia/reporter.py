@@ -19,15 +19,15 @@ _TZ_SHANGHAI = ZoneInfo("Asia/Shanghai")
 _CUSTOMER_DECISION_DISPATCH = frozenset({"PROMISE_FOLLOW_UP", "CALLBACK_APPOINTMENT"})
 
 
-def _tenant_id(ia: dict[str, Any]) -> int | None:
+def _tenant_id(ia: dict[str, Any]) -> int:
+    """Platform requires tenantId on 03A/03B/05; raise if missing."""
     raw = ia.get("tenantId")
     if raw is None or raw == "":
-        return None
+        raise ValueError("IA payload missing tenantId (required by platform)")
     try:
         return int(raw)
-    except (TypeError, ValueError):
-        LOG.warning("IA tenantId not int-compatible: %r", raw)
-        return None
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"IA tenantId not int-compatible: {raw!r}") from exc
 
 
 def _ia_meta(task: CallTask) -> dict[str, Any] | None:
@@ -73,6 +73,19 @@ def _attempt_no(ia: dict[str, Any]) -> int | None:
         return None
 
 
+def _execution_sequence(ia: dict[str, Any], *, default: int = 1) -> int:
+    """Platform: executionSequence 不能为空; never omit."""
+    raw = ia.get("executionSequence")
+    if raw is None or raw == "":
+        return default
+    try:
+        seq = int(raw)
+        return seq if seq >= 1 else default
+    except (TypeError, ValueError):
+        LOG.warning("IA executionSequence not int-compatible: %r", raw)
+        return default
+
+
 def _map_call_outcome(task: CallTask) -> tuple[str, bool]:
     """Return (callOutcome enum, attemptCounted)."""
     result = (task.result or "").strip()
@@ -98,7 +111,7 @@ def _map_call_outcome(task: CallTask) -> tuple[str, bool]:
 def build_call_event(
     task: CallTask,
     *,
-    execution_sequence: int = 1,
+    execution_sequence: int | None = None,
     result_bundle_id: str | None = None,
 ) -> CallEventRequest:
     ia = _ia_meta(task) or {}
@@ -117,12 +130,18 @@ def build_call_event(
 
     bundle_id = result_bundle_id or _result_bundle_id(task, ia)
     dispatch_id = ia.get("dispatchId")
+    seq = (
+        int(execution_sequence)
+        if execution_sequence is not None
+        else _execution_sequence(ia)
+    )
     return CallEventRequest(
         taskId=int(ia["taskId"]),
         callId=_call_id_int(task, ia),
+        tenantId=_tenant_id(ia),
         dispatchId=str(dispatch_id) if dispatch_id else None,
         taskRevision=int(ia.get("taskRevision") or 1),
-        executionSequence=execution_sequence,
+        executionSequence=seq,
         resultBundleId=bundle_id,
         eventType="CALL_FINISHED",
         occurredAt=occurred,
@@ -134,7 +153,6 @@ def build_call_event(
         endedAt=ended,
         durationSeconds=duration,
         scriptVersion=str(ia.get("scriptVersion") or "2.3"),
-        tenantId=_tenant_id(ia),
     )
 
 
@@ -214,6 +232,7 @@ def build_call_outcome(
     return CallOutcomeRequest(
         taskId=int(ia["taskId"]),
         callId=_call_id_int(task, ia),
+        tenantId=_tenant_id(ia),
         resultBundleId=bundle_id,
         scenario="AUTHORIZATION_REMINDER",
         scenarioSchemaVersion="1.0",
@@ -237,7 +256,6 @@ def build_call_outcome(
             "anomalyTags": [],
             "trustChallenge": None,
         },
-        tenantId=_tenant_id(ia),
     )
 
 
@@ -247,15 +265,36 @@ async def report_ia_call_finished(task: CallTask) -> None:
     if not ia:
         return
 
+    # Release INITIAL slot so platform can dispatch again without process restart.
+    try:
+        from backend.ia.store import get_dispatch_store
+
+        get_dispatch_store().mark_terminal(int(ia["taskId"]))
+    except Exception:
+        LOG.exception("IA mark_terminal failed taskId=%s", ia.get("taskId"))
+
     client = get_platform_client()
     bundle_id = _result_bundle_id(task, ia)
     produced_at = _iso_offset()
+    ia_call_id = _call_id_int(task, ia)
 
     try:
         event = build_call_event(task, result_bundle_id=bundle_id)
+        LOG.info(
+            "IA-03A posting taskId=%s iaCallId=%s tenantId=%s executionSequence=%s bundle=%s",
+            event.taskId,
+            event.callId,
+            event.tenantId,
+            event.executionSequence,
+            event.resultBundleId,
+        )
         await client.post_call_event(event)
     except Exception:
-        LOG.exception("IA-03A report failed call_id=%s", task.call_id)
+        LOG.exception(
+            "IA-03A report failed call_id=%s iaCallId=%s",
+            task.call_id,
+            ia_call_id,
+        )
 
     try:
         outcome = build_call_outcome(
@@ -263,9 +302,20 @@ async def report_ia_call_finished(task: CallTask) -> None:
             result_bundle_id=bundle_id,
             produced_at=produced_at,
         )
+        LOG.info(
+            "IA-03B posting taskId=%s iaCallId=%s tenantId=%s bundle=%s",
+            outcome.taskId,
+            outcome.callId,
+            outcome.tenantId,
+            outcome.resultBundleId,
+        )
         await client.post_call_outcome(outcome)
     except Exception:
-        LOG.exception("IA-03B report failed call_id=%s", task.call_id)
+        LOG.exception(
+            "IA-03B report failed call_id=%s iaCallId=%s",
+            task.call_id,
+            ia_call_id,
+        )
 
     # IA-05 merged upload (best-effort; must not block 03A/03B success path conceptually)
     try:
@@ -275,11 +325,15 @@ async def report_ia_call_finished(task: CallTask) -> None:
         if stereo and Path(stereo).is_file():
             meta = ArtifactUploadMeta(
                 taskId=int(ia["taskId"]),
-                callId=_call_id_int(task, ia),
+                callId=ia_call_id,
                 artifactType="RECORDING",
                 createdAt=_iso_offset(task.finished_at),
                 tenantId=_tenant_id(ia),
             )
             await client.upload_recording(meta=meta, file_path=Path(stereo))
     except Exception:
-        LOG.exception("IA-05 upload failed call_id=%s", task.call_id)
+        LOG.exception(
+            "IA-05 upload failed call_id=%s iaCallId=%s",
+            task.call_id,
+            ia_call_id,
+        )

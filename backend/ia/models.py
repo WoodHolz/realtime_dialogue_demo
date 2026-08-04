@@ -113,8 +113,8 @@ class TaskDispatchRequest(CamelModel):
     requestedAt: str | None = None
     deadline: str | None = None  # smoke: ignore
     retryPolicy: RetryPolicy = Field(default_factory=RetryPolicy)
-    # Smoke: optional (omit OK). Target-state: required before 2nd tenant.
-    tenantId: int | None = None
+    # Platform receive side (03A/03B/05) currently requires tenantId; require on IA-01.
+    tenantId: int
     # Optional task keyword; AUTHORIZATION_REMINDER typically omits.
     subjectKey: str | None = None
     contractVersion: str | None = None
@@ -145,8 +145,8 @@ class CallEventRequest(CamelModel):
 
     taskId: int
     callId: int
-    # Smoke optional; target-state required. Pass-through from IA-01.
-    tenantId: int | None = None
+    # Platform validation: tenantId 不能为空
+    tenantId: int
     dispatchId: str | None = None
     taskRevision: int
     executionSequence: int
@@ -172,8 +172,8 @@ class CallOutcomeRequest(CamelModel):
 
     taskId: int
     callId: int
-    # Smoke optional; target-state required. Pass-through from IA-01.
-    tenantId: int | None = None
+    # Platform validation: tenantId 不能为空
+    tenantId: int
     # Must match IA-03A CALL_FINISHED resultBundleId.
     resultBundleId: str | None = None
     scenario: Scenario = "AUTHORIZATION_REMINDER"
@@ -194,8 +194,8 @@ class ArtifactUploadMeta(CamelModel):
 
     taskId: int
     callId: int
-    # Smoke optional; target-state required. Pass-through from IA-01.
-    tenantId: int | None = None
+    # Platform validation: tenantId 不能为空
+    tenantId: int
     artifactType: Literal["RECORDING", "TRANSCRIPT"]
     createdAt: str
     uploadRequestId: str | None = None

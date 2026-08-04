@@ -19,6 +19,7 @@ SAMPLE = {
     "attemptNo": 1,
     "dispatchType": "INITIAL",
     "taskId": 1948372615340032001,
+    "tenantId": 10001,
     "externalOrderId": "order123",
     "scenario": "AUTHORIZATION_REMINDER",
     "scriptId": "authReminder",
@@ -135,14 +136,23 @@ def test_task_dispatch_accepts_tenant_id_and_subject_key(client: TestClient):
     assert payload["ia"]["subjectKey"] == "optional-keyword"
 
 
-def test_task_dispatch_omits_tenant_and_subject_key_ok(client: TestClient):
-    """Smoke: tenantId / subjectKey still optional."""
+def test_task_dispatch_requires_tenant_id(client: TestClient):
     body = dict(SAMPLE)
     body["dispatchId"] = "disp_no_tenant"
-    assert "tenantId" not in body
-    assert "subjectKey" not in body
+    del body["tenantId"]
     r = client.post("/va-algo/v1/task-dispatch", json=body)
-    assert r.status_code == 200, r.text
+    assert r.status_code == 422
+
+
+def test_task_dispatch_duplicate_skips_second_dial(client: TestClient):
+    body = dict(SAMPLE)
+    body["dispatchId"] = "disp_dup_dial"
+    r1 = client.post("/va-algo/v1/task-dispatch", json=body)
+    assert r1.status_code == 200
+    assert r1.json()["duplicate"] is False
+    r2 = client.post("/va-algo/v1/task-dispatch", json=body)
+    assert r2.status_code == 200
+    assert r2.json()["duplicate"] is True
 
 
 def test_task_dispatch_requires_attempt_no(client: TestClient):

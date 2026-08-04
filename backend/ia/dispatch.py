@@ -3,9 +3,8 @@
 from __future__ import annotations
 
 import logging
-import random
-import time
 
+from backend.ia.ids import new_call_id
 from backend.ia.mapping import (
     INTERNAL_SCENARIO,
     dispatch_to_outbound_payload,
@@ -26,13 +25,15 @@ class DispatchError(Exception):
 
 
 def _new_numeric_call_id() -> int:
-    """Algorithm-generated callId (long) for IA-03A/03B/05."""
-    return int(time.time() * 1000) * 1000 + random.randint(0, 999)
+    """Algorithm-generated snowflake callId (long); must not resemble taskId."""
+    return new_call_id()
 
 
 def _validate(req: TaskDispatchRequest) -> None:
     if not (req.dispatchId or "").strip():
         raise DispatchError("INVALID_DISPATCH", "dispatchId is required")
+    if req.tenantId is None:
+        raise DispatchError("INVALID_DISPATCH", "tenantId is required")
     if req.attemptNo is None or int(req.attemptNo) < 1:
         raise DispatchError("INVALID_DISPATCH", "attemptNo must be >= 1")
     if not (req.recipient.mobile or "").strip():
@@ -65,11 +66,28 @@ async def accept_task_dispatch(req: TaskDispatchRequest) -> TaskDispatchResponse
 
     existing = store.get(req.dispatchId)
     if existing:
-        return TaskDispatchResponse(
-            accepted=True,
-            duplicate=True,
-            taskRevision=existing.task_revision,
-        )
+        # Same dispatchId after prior call finished → allow re-dial (smoke retest /
+        # platform reuse). In-flight duplicate still short-circuits without dial.
+        if existing.terminal:
+            LOG.info(
+                "IA-01 re-accept terminal dispatchId=%s taskId=%s (will dial again)",
+                req.dispatchId,
+                req.taskId,
+            )
+            store.remove(req.dispatchId)
+        else:
+            LOG.warning(
+                "IA-01 duplicate skip dial dispatchId=%s taskId=%s callIds=%s "
+                "(restart clears store; prefer new dispatchId after terminal)",
+                req.dispatchId,
+                req.taskId,
+                existing.call_ids,
+            )
+            return TaskDispatchResponse(
+                accepted=True,
+                duplicate=True,
+                taskRevision=existing.task_revision,
+            )
 
     if req.dispatchType == "INITIAL":
         active = store.get_active_initial(req.taskId)

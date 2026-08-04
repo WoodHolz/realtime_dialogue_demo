@@ -2,6 +2,8 @@
 """IA reporter: 03A/03B/05 field alignment with 2026-07-30 docs."""
 from __future__ import annotations
 
+import pytest
+
 from backend.ia.reporter import build_call_event, build_call_outcome, _tenant_id
 from backend.ia.models import ArtifactUploadMeta
 from backend.outbound.models import CallTask
@@ -13,6 +15,7 @@ def _task_with_ia(**ia_extra) -> CallTask:
         "callId": 10001,
         "taskRevision": 1,
         "attemptNo": 2,
+        "tenantId": 10001,
         "dispatchId": "disp_test_001",
         "dispatchType": "INITIAL",
         "scriptVersion": "2.3",
@@ -34,11 +37,13 @@ def _task_with_ia(**ia_extra) -> CallTask:
 def test_tenant_id_coercion():
     assert _tenant_id({"tenantId": 10001}) == 10001
     assert _tenant_id({"tenantId": "10001"}) == 10001
-    assert _tenant_id({}) is None
-    assert _tenant_id({"tenantId": None}) is None
+    with pytest.raises(ValueError):
+        _tenant_id({})
+    with pytest.raises(ValueError):
+        _tenant_id({"tenantId": None})
 
 
-def test_03a_03b_include_tenant_id_when_present():
+def test_03a_03b_require_tenant_id():
     task = _task_with_ia(tenantId=10001)
     event = build_call_event(task)
     outcome = build_call_outcome(task)
@@ -48,16 +53,15 @@ def test_03a_03b_include_tenant_id_when_present():
     dumped_o = outcome.model_dump(mode="json", exclude_none=True)
     assert dumped_e["tenantId"] == 10001
     assert dumped_o["tenantId"] == 10001
+    assert dumped_e["executionSequence"] == 1
 
 
-def test_03a_03b_omit_tenant_id_when_absent():
+def test_03a_missing_tenant_id_raises():
     task = _task_with_ia()
-    event = build_call_event(task)
-    outcome = build_call_outcome(task)
-    assert event.tenantId is None
-    assert outcome.tenantId is None
-    assert "tenantId" not in event.model_dump(mode="json", exclude_none=True)
-    assert "tenantId" not in outcome.model_dump(mode="json", exclude_none=True)
+    # override after defaults: pop tenantId
+    del task.payload["ia"]["tenantId"]
+    with pytest.raises(ValueError, match="tenantId"):
+        build_call_event(task)
 
 
 def test_03a_required_fields_and_no_deprecated_status():
@@ -68,6 +72,8 @@ def test_03a_required_fields_and_no_deprecated_status():
     assert dumped["resultBundleId"] == "rb_shared"
     assert dumped["attemptNo"] == 2
     assert dumped["dispatchId"] == "disp_test_001"
+    assert dumped["executionSequence"] == 1
+    assert dumped["tenantId"] == 10001
     assert "taskStatus" not in dumped
     assert "closeReason" not in dumped
 
@@ -78,6 +84,7 @@ def test_03b_required_fields_and_shared_bundle():
     dumped = outcome.model_dump(mode="json", exclude_none=True)
     assert dumped["producedAt"].endswith("+08:00")
     assert dumped["resultBundleId"] == "rb_shared"
+    assert dumped["tenantId"] == 10001
     assert dumped["scenarioPayload"]["resendRequested"] is False
 
 
