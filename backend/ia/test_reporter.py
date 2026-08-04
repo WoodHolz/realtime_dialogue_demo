@@ -95,6 +95,17 @@ def test_03a_03b_share_default_bundle_id():
     assert event.resultBundleId == outcome.resultBundleId == "rb10001"
 
 
+def test_03b_converts_chinese_promised_time_to_iso():
+    task = _task_with_ia()
+    task.telephony = {
+        "business": {"promised_time": "2026年8月4日 18:00"},
+    }
+    outcome = build_call_outcome(task)
+    assert outcome.recipientPromisedTime == "2026-08-04T18:00:00+08:00"
+    assert outcome.reschedule["nextAction"]["dueTime"] == "2026-08-04T18:00:00+08:00"
+    assert outcome.reschedule["reason"] == "RECIPIENT_CALLBACK_REQUEST"
+
+
 def test_05_meta_includes_created_at_and_tenant():
     meta = ArtifactUploadMeta(
         taskId=1,

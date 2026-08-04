@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -17,6 +18,11 @@ _TZ_SHANGHAI = ZoneInfo("Asia/Shanghai")
 
 # Follow-up / callback miss → customer decides; no auto NO_ANSWER_RETRY.
 _CUSTOMER_DECISION_DISPATCH = frozenset({"PROMISE_FOLLOW_UP", "CALLBACK_APPOINTMENT"})
+
+# Internal xlsx display form → platform ISO datetime.
+_CN_YMD_HM_RE = re.compile(
+    r"(\d{4})\s*年\s*(\d{1,2})\s*月\s*(\d{1,2})\s*日(?:\s+(\d{1,2}):(\d{2}))?"
+)
 
 
 def _tenant_id(ia: dict[str, Any]) -> int:
@@ -53,6 +59,35 @@ def _iso_offset(value: str | None = None) -> str:
         except Exception:
             pass
     return datetime.now(_TZ_SHANGHAI).isoformat(timespec="seconds")
+
+
+def _to_platform_datetime(raw: str | None) -> str | None:
+    """Convert internal display time / ISO to platform datetime (+08:00).
+
+    Internal outcome uses forms like ``2026年8月4日 18:00``; IA-03B requires
+    ``2026-08-04T18:00:00+08:00``. Unparseable values are dropped (null).
+    """
+    text = str(raw or "").strip()
+    if not text:
+        return None
+    if "T" in text or text.endswith("Z") or "+" in text[10:]:
+        try:
+            return _iso_offset(text)
+        except Exception:
+            pass
+    m = _CN_YMD_HM_RE.fullmatch(text) or _CN_YMD_HM_RE.search(text)
+    if m:
+        y, mo, d = int(m.group(1)), int(m.group(2)), int(m.group(3))
+        h = int(m.group(4) or 0)
+        mi = int(m.group(5) or 0)
+        try:
+            dt = datetime(y, mo, d, h, mi, tzinfo=_TZ_SHANGHAI)
+            return dt.isoformat(timespec="seconds")
+        except ValueError:
+            LOG.warning("IA invalid Chinese datetime %r", text)
+            return None
+    LOG.warning("IA cannot map promised time to ISO: %r", text)
+    return None
 
 
 def _result_bundle_id(task: CallTask, ia: dict[str, Any]) -> str:
@@ -202,7 +237,8 @@ def build_call_outcome(
     else:
         # Prefer prod outcome extraction if present on telephony.business
         biz = ((task.telephony or {}).get("business") or {}) if task.telephony else {}
-        promised = biz.get("promised_time") or None
+        promised_raw = biz.get("promised_time") or None
+        promised = _to_platform_datetime(promised_raw) if promised_raw else None
         reschedule = {
             "reason": "RECIPIENT_CALLBACK_REQUEST" if promised else None,
             "triggerFamily": None,
