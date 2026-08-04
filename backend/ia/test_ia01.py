@@ -95,14 +95,16 @@ def test_task_dispatch_accept_and_idempotent(client: TestClient):
     data1 = r1.json()
     assert data1["accepted"] is True
     assert data1["duplicate"] is False
-    assert data1["plannedCallAt"]
+    assert "plannedCallAt" not in data1
     assert data1["taskRevision"] == 1
+    assert set(data1.keys()) == {"accepted", "duplicate", "taskRevision"}
 
     r2 = client.post("/va-algo/v1/task-dispatch", json=body)
     assert r2.status_code == 200, r2.text
     data2 = r2.json()
     assert data2["duplicate"] is True
-    assert data2["plannedCallAt"] == data1["plannedCallAt"]
+    assert data2["taskRevision"] == data1["taskRevision"]
+    assert "plannedCallAt" not in data2
 
 
 def test_task_dispatch_rejects_bad_script(client: TestClient):
@@ -140,11 +142,3 @@ def test_task_dispatch_omits_tenant_and_subject_key_ok(client: TestClient):
     assert "subjectKey" not in body
     r = client.post("/va-algo/v1/task-dispatch", json=body)
     assert r.status_code == 200, r.text
-
-
-def test_mapping_planned_call_at_never_null():
-    from backend.ia.mapping import estimate_planned_call_at
-
-    ts = estimate_planned_call_at(timezone_name="Asia/Shanghai", call_window="09:00-21:00")
-    assert "T" in ts
-    assert "+" in ts or ts.endswith("Z")

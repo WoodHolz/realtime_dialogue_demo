@@ -59,13 +59,18 @@ class PlatformClient:
         if not self.base_url:
             LOG.info(
                 "IA-05 dry-run meta=%s file=%s",
-                meta.model_dump(mode="json"),
+                meta.model_dump(mode="json", exclude_none=True),
                 file_path,
             )
             return {"dry_run": True, "ok": True}
 
         url = f"{self.base_url}{path}"
-        data = {"meta": json.dumps(meta.model_dump(mode="json"), ensure_ascii=False)}
+        data = {
+            "meta": json.dumps(
+                meta.model_dump(mode="json", exclude_none=True),
+                ensure_ascii=False,
+            )
+        }
         try:
             async with httpx.AsyncClient(timeout=60.0) as client:
                 with file_path.open("rb") as fh:

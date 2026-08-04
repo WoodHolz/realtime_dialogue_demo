@@ -9,7 +9,6 @@ import time
 from backend.ia.mapping import (
     INTERNAL_SCENARIO,
     dispatch_to_outbound_payload,
-    estimate_planned_call_at,
 )
 from backend.ia.models import TaskDispatchRequest, TaskDispatchResponse
 from backend.ia.store import AcceptedDispatch, get_dispatch_store
@@ -67,7 +66,6 @@ async def accept_task_dispatch(req: TaskDispatchRequest) -> TaskDispatchResponse
         return TaskDispatchResponse(
             accepted=True,
             duplicate=True,
-            plannedCallAt=existing.planned_call_at,
             taskRevision=existing.task_revision,
         )
 
@@ -79,18 +77,11 @@ async def accept_task_dispatch(req: TaskDispatchRequest) -> TaskDispatchResponse
                 f"taskId={req.taskId} already has active INITIAL dispatchId={active}",
             )
 
-    planned = estimate_planned_call_at(
-        timezone_name=req.timezone or "Asia/Shanghai",
-        call_window=req.callWindow,
-        requested_at=req.requestedAt,
-    )
-
     row = AcceptedDispatch(
         dispatch_id=req.dispatchId,
         task_id=req.taskId,
         task_revision=req.taskRevision,
         dispatch_type=req.dispatchType,
-        planned_call_at=planned,
         request_snapshot=req.model_dump(mode="json"),
     )
     store.put(row)
@@ -112,7 +103,6 @@ async def accept_task_dispatch(req: TaskDispatchRequest) -> TaskDispatchResponse
     return TaskDispatchResponse(
         accepted=True,
         duplicate=False,
-        plannedCallAt=planned,
         taskRevision=req.taskRevision,
     )
 

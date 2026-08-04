@@ -112,9 +112,10 @@ class TaskDispatchRequest(CamelModel):
 
 
 class TaskDispatchResponse(CamelModel):
+    """IA-01 success body (2026-07-30: no plannedCallAt; schedule truth on platform)."""
+
     accepted: bool
     duplicate: bool
-    plannedCallAt: str
     taskRevision: int
 
 
@@ -132,6 +133,8 @@ class CallEventRequest(CamelModel):
 
     taskId: int
     callId: int
+    # Smoke optional; target-state required. Pass-through from IA-01.
+    tenantId: int | None = None
     taskRevision: int
     executionSequence: int
     eventType: Literal["CALL_STARTED", "CALL_FINISHED", "CALL_SKIPPED", "TERMINATION_COMPLETED"]
@@ -148,9 +151,7 @@ class CallEventRequest(CamelModel):
     taskStatus: str | None = None
     closeReason: str | None = None
     failureEvidence: dict[str, Any] | None = None
-    # Reserved / pass-through
     resultBundleId: str | None = None
-    tenantId: int | None = None
 
 
 class CallOutcomeRequest(CamelModel):
@@ -158,6 +159,8 @@ class CallOutcomeRequest(CamelModel):
 
     taskId: int
     callId: int
+    # Smoke optional; target-state required. Pass-through from IA-01.
+    tenantId: int | None = None
     scenario: Scenario = "AUTHORIZATION_REMINDER"
     scenarioSchemaVersion: str = "1.0"
     compliance: dict[str, Any]
@@ -167,9 +170,7 @@ class CallOutcomeRequest(CamelModel):
     recipientWithdrawn: bool = False
     feedbackItems: list[dict[str, Any]] = Field(default_factory=list)
     scenarioPayload: dict[str, Any] = Field(default_factory=dict)
-    # Reserved / pass-through
     resultBundleId: str | None = None
-    tenantId: int | None = None
     outcomeId: str | None = None
 
 
@@ -178,7 +179,7 @@ class ArtifactUploadMeta(CamelModel):
 
     taskId: int
     callId: int
-    artifactType: Literal["RECORDING", "TRANSCRIPT"]
-    # Reserved / pass-through
+    # Smoke optional; target-state required. Pass-through from IA-01.
     tenantId: int | None = None
+    artifactType: Literal["RECORDING", "TRANSCRIPT"]
     uploadRequestId: str | None = None

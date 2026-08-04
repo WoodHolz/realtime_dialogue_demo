@@ -13,7 +13,6 @@ class AcceptedDispatch:
     task_id: int
     task_revision: int
     dispatch_type: str
-    planned_call_at: str
     call_ids: list[str] = field(default_factory=list)
     request_snapshot: dict[str, Any] = field(default_factory=dict)
     terminal: bool = False
