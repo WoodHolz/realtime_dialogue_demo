@@ -33,6 +33,8 @@ def _new_numeric_call_id() -> int:
 def _validate(req: TaskDispatchRequest) -> None:
     if not (req.dispatchId or "").strip():
         raise DispatchError("INVALID_DISPATCH", "dispatchId is required")
+    if req.attemptNo is None or int(req.attemptNo) < 1:
+        raise DispatchError("INVALID_DISPATCH", "attemptNo must be >= 1")
     if not (req.recipient.mobile or "").strip():
         raise DispatchError("INVALID_DISPATCH", "recipient.mobile is required")
     if not (req.recipient.name or "").strip():
@@ -117,7 +119,8 @@ async def _start_first_call(req: TaskDispatchRequest, row: AcceptedDispatch) -> 
     # Platform-facing long callId (IA-03A/03B/05). Keep SIP/Doubao on UUID like /prod.
     numeric_call_id = _new_numeric_call_id()
     payload["ia"]["callId"] = numeric_call_id
-    payload["ia"]["allowAutoRetry"] = req.dispatchType == "INITIAL"
+    # Platform owns retry schedule; algo only marks contact-budget family for local hints.
+    payload["ia"]["allowAutoRetry"] = req.dispatchType in {"INITIAL", "NO_ANSWER_RETRY"}
 
     from backend.prod.service import ensure_prod_env
 

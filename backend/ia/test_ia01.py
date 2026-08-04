@@ -16,6 +16,7 @@ os.environ.pop("IA_PLATFORM_BASE_URL", None)
 SAMPLE = {
     "dispatchId": "disp_test_001",
     "taskRevision": 1,
+    "attemptNo": 1,
     "dispatchType": "INITIAL",
     "taskId": 1948372615340032001,
     "externalOrderId": "order123",
@@ -140,5 +141,37 @@ def test_task_dispatch_omits_tenant_and_subject_key_ok(client: TestClient):
     body["dispatchId"] = "disp_no_tenant"
     assert "tenantId" not in body
     assert "subjectKey" not in body
+    r = client.post("/va-algo/v1/task-dispatch", json=body)
+    assert r.status_code == 200, r.text
+
+
+def test_task_dispatch_requires_attempt_no(client: TestClient):
+    body = dict(SAMPLE)
+    body["dispatchId"] = "disp_no_attempt"
+    del body["attemptNo"]
+    r = client.post("/va-algo/v1/task-dispatch", json=body)
+    assert r.status_code == 422
+
+
+def test_task_dispatch_accepts_no_answer_retry(client: TestClient):
+    body = dict(SAMPLE)
+    body["dispatchId"] = "disp_retry_001"
+    body["dispatchType"] = "NO_ANSWER_RETRY"
+    body["attemptNo"] = 2
+    r = client.post("/va-algo/v1/task-dispatch", json=body)
+    assert r.status_code == 200, r.text
+    from backend.ia.mapping import dispatch_to_outbound_payload
+    from backend.ia.models import TaskDispatchRequest
+
+    payload = dispatch_to_outbound_payload(TaskDispatchRequest.model_validate(body))
+    assert payload["ia"]["attemptNo"] == 2
+    assert payload["ia"]["dispatchType"] == "NO_ANSWER_RETRY"
+
+
+def test_task_dispatch_accepts_system_retry(client: TestClient):
+    body = dict(SAMPLE)
+    body["dispatchId"] = "disp_sys_retry_001"
+    body["dispatchType"] = "SYSTEM_RETRY"
+    body["attemptNo"] = 3
     r = client.post("/va-algo/v1/task-dispatch", json=body)
     assert r.status_code == 200, r.text

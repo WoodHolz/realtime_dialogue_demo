@@ -6,12 +6,17 @@ import logging
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from backend.ia.models import ArtifactUploadMeta, CallEventRequest, CallOutcomeRequest
 from backend.ia.platform_client import get_platform_client
 from backend.outbound.models import CallTask
 
 LOG = logging.getLogger(__name__)
+_TZ_SHANGHAI = ZoneInfo("Asia/Shanghai")
+
+# Follow-up / callback miss → customer decides; no auto NO_ANSWER_RETRY.
+_CUSTOMER_DECISION_DISPATCH = frozenset({"PROMISE_FOLLOW_UP", "CALLBACK_APPOINTMENT"})
 
 
 def _tenant_id(ia: dict[str, Any]) -> int | None:
@@ -37,6 +42,37 @@ def _call_id_int(task: CallTask, ia: dict[str, Any]) -> int:
     raise ValueError(f"IA payload missing numeric callId for task.call_id={task.call_id!r}")
 
 
+def _iso_offset(value: str | None = None) -> str:
+    """ISO 8601 datetime with UTC offset (doc: algo in CN → +08:00)."""
+    if value:
+        try:
+            dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            return dt.astimezone(_TZ_SHANGHAI).isoformat(timespec="seconds")
+        except Exception:
+            pass
+    return datetime.now(_TZ_SHANGHAI).isoformat(timespec="seconds")
+
+
+def _result_bundle_id(task: CallTask, ia: dict[str, Any]) -> str:
+    existing = ia.get("resultBundleId")
+    if existing:
+        return str(existing)
+    return f"rb{_call_id_int(task, ia)}"
+
+
+def _attempt_no(ia: dict[str, Any]) -> int | None:
+    raw = ia.get("attemptNo")
+    if raw is None or raw == "":
+        return None
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        LOG.warning("IA attemptNo not int-compatible: %r", raw)
+        return None
+
+
 def _map_call_outcome(task: CallTask) -> tuple[str, bool]:
     """Return (callOutcome enum, attemptCounted)."""
     result = (task.result or "").strip()
@@ -59,26 +95,17 @@ def _map_call_outcome(task: CallTask) -> tuple[str, bool]:
     return "CONNECTED_INEFFECTIVE", True
 
 
-def _map_task_status(task: CallTask, ia: dict[str, Any], call_outcome: str) -> tuple[str | None, str | None]:
-    dispatch_type = str(ia.get("dispatchType") or "INITIAL")
-    allow_retry = bool(ia.get("allowAutoRetry", dispatch_type == "INITIAL"))
-    if call_outcome in {"NO_ANSWER", "BUSY"} and allow_retry:
-        return "RETRY_SCHEDULED", None
-    if call_outcome in {"NO_ANSWER", "BUSY"} and not allow_retry:
-        return "ROUND_RETURNED", "OTHER"
-    if call_outcome == "CONNECTED_EFFECTIVE":
-        return "ACTIVE", None
-    if call_outcome == "FAILED":
-        return "ROUND_RETURNED", "OTHER"
-    return "ROUND_RETURNED", "OTHER"
-
-
-def build_call_event(task: CallTask, *, execution_sequence: int = 1) -> CallEventRequest:
+def build_call_event(
+    task: CallTask,
+    *,
+    execution_sequence: int = 1,
+    result_bundle_id: str | None = None,
+) -> CallEventRequest:
     ia = _ia_meta(task) or {}
     call_outcome, attempt_counted = _map_call_outcome(task)
-    task_status, close_reason = _map_task_status(task, ia, call_outcome)
-    started = task.created_at
-    ended = task.finished_at or datetime.now(timezone.utc).isoformat()
+    started = _iso_offset(task.created_at)
+    ended = _iso_offset(task.finished_at)
+    occurred = ended
     duration = None
     try:
         if task.created_at and task.finished_at:
@@ -88,13 +115,18 @@ def build_call_event(task: CallTask, *, execution_sequence: int = 1) -> CallEven
     except Exception:
         duration = None
 
+    bundle_id = result_bundle_id or _result_bundle_id(task, ia)
+    dispatch_id = ia.get("dispatchId")
     return CallEventRequest(
         taskId=int(ia["taskId"]),
         callId=_call_id_int(task, ia),
+        dispatchId=str(dispatch_id) if dispatch_id else None,
         taskRevision=int(ia.get("taskRevision") or 1),
         executionSequence=execution_sequence,
+        resultBundleId=bundle_id,
         eventType="CALL_FINISHED",
-        attemptNo=1,
+        occurredAt=occurred,
+        attemptNo=_attempt_no(ia),
         attemptCounted=attempt_counted,
         callOutcome=call_outcome,
         hangupInitiator="UNKNOWN",
@@ -102,22 +134,31 @@ def build_call_event(task: CallTask, *, execution_sequence: int = 1) -> CallEven
         endedAt=ended,
         durationSeconds=duration,
         scriptVersion=str(ia.get("scriptVersion") or "2.3"),
-        taskStatus=task_status,
-        closeReason=close_reason,
         tenantId=_tenant_id(ia),
     )
 
 
-def build_call_outcome(task: CallTask) -> CallOutcomeRequest:
+def build_call_outcome(
+    task: CallTask,
+    *,
+    result_bundle_id: str | None = None,
+    produced_at: str | None = None,
+) -> CallOutcomeRequest:
     ia = _ia_meta(task) or {}
     identity_mode = str((task.payload or {}).get("identity_mode") or "BRAND_SELF")
-    connected_effective = _map_call_outcome(task)[0] == "CONNECTED_EFFECTIVE"
+    call_outcome = _map_call_outcome(task)[0]
+    connected_effective = call_outcome == "CONNECTED_EFFECTIVE"
     dispatch_type = str(ia.get("dispatchType") or "INITIAL")
+    bundle_id = result_bundle_id or _result_bundle_id(task, ia)
 
     # Follow-up / callback missed → customer decision, no auto retry.
     feedback: list[dict[str, Any]] = []
     reschedule: dict[str, Any]
-    if dispatch_type != "INITIAL" and _map_call_outcome(task)[0] in {"NO_ANSWER", "BUSY", "FAILED"}:
+    if dispatch_type in _CUSTOMER_DECISION_DISPATCH and call_outcome in {
+        "NO_ANSWER",
+        "BUSY",
+        "FAILED",
+    }:
         reschedule = {
             "reason": None,
             "triggerFamily": None,
@@ -167,11 +208,16 @@ def build_call_outcome(task: CallTask) -> CallOutcomeRequest:
         "identityStatementCompliant": True if connected_effective else None,
     }
 
+    # resendRequested: true/false when connected dialog could judge; null when not connected.
+    resend_requested: bool | None = False if connected_effective else None
+
     return CallOutcomeRequest(
         taskId=int(ia["taskId"]),
         callId=_call_id_int(task, ia),
+        resultBundleId=bundle_id,
         scenario="AUTHORIZATION_REMINDER",
         scenarioSchemaVersion="1.0",
+        producedAt=produced_at or _iso_offset(),
         compliance=compliance,
         recipientPromisedTime=reschedule.get("nextAction", {}).get("dueTime"),
         reschedule=reschedule,
@@ -186,6 +232,7 @@ def build_call_outcome(task: CallTask) -> CallOutcomeRequest:
                 "fallbackSms": None,
             },
             "mpGuided": None,
+            "resendRequested": resend_requested,
             "resendChannel": None,
             "anomalyTags": [],
             "trustChallenge": None,
@@ -201,14 +248,21 @@ async def report_ia_call_finished(task: CallTask) -> None:
         return
 
     client = get_platform_client()
+    bundle_id = _result_bundle_id(task, ia)
+    produced_at = _iso_offset()
+
     try:
-        event = build_call_event(task)
+        event = build_call_event(task, result_bundle_id=bundle_id)
         await client.post_call_event(event)
     except Exception:
         LOG.exception("IA-03A report failed call_id=%s", task.call_id)
 
     try:
-        outcome = build_call_outcome(task)
+        outcome = build_call_outcome(
+            task,
+            result_bundle_id=bundle_id,
+            produced_at=produced_at,
+        )
         await client.post_call_outcome(outcome)
     except Exception:
         LOG.exception("IA-03B report failed call_id=%s", task.call_id)
@@ -223,6 +277,7 @@ async def report_ia_call_finished(task: CallTask) -> None:
                 taskId=int(ia["taskId"]),
                 callId=_call_id_int(task, ia),
                 artifactType="RECORDING",
+                createdAt=_iso_offset(task.finished_at),
                 tenantId=_tenant_id(ia),
             )
             await client.upload_recording(meta=meta, file_path=Path(stereo))

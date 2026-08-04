@@ -15,7 +15,13 @@ class CamelModel(BaseModel):
     model_config = ConfigDict(populate_by_name=True, extra="ignore")
 
 
-DispatchType = Literal["INITIAL", "PROMISE_FOLLOW_UP", "CALLBACK_APPOINTMENT"]
+DispatchType = Literal[
+    "INITIAL",
+    "NO_ANSWER_RETRY",
+    "PROMISE_FOLLOW_UP",
+    "CALLBACK_APPOINTMENT",
+    "SYSTEM_RETRY",
+]
 IdentityMode = Literal["CLIENT_IDENTITY", "BRAND_SELF"]
 Scenario = Literal["AUTHORIZATION_REMINDER"]
 
@@ -89,6 +95,8 @@ class TaskDispatchRequest(CamelModel):
 
     dispatchId: str
     taskRevision: int
+    # Platform-assigned attempt index; echo to IA-03A (do not invent).
+    attemptNo: int
     dispatchType: DispatchType
     taskId: int
     externalOrderId: str
@@ -129,15 +137,22 @@ class TaskDispatchError(CamelModel):
 
 
 class CallEventRequest(CamelModel):
-    """IA-03A POST /report/voice/callEvents."""
+    """IA-03A POST /report/voice/callEvents.
+
+    Do NOT send deprecated taskStatus / closeReason (platform ignores; new impl must omit).
+    """
 
     taskId: int
     callId: int
     # Smoke optional; target-state required. Pass-through from IA-01.
     tenantId: int | None = None
+    dispatchId: str | None = None
     taskRevision: int
     executionSequence: int
+    # Shared with IA-03B for CALL_FINISHED result-bundle gating.
+    resultBundleId: str | None = None
     eventType: Literal["CALL_STARTED", "CALL_FINISHED", "CALL_SKIPPED", "TERMINATION_COMPLETED"]
+    occurredAt: str
     attemptNo: int | None = None
     attemptCounted: bool | None = None
     callOutcome: str | None = None
@@ -148,10 +163,7 @@ class CallEventRequest(CamelModel):
     durationSeconds: int | None = None
     skipReason: str | None = None
     scriptVersion: str | None = None
-    taskStatus: str | None = None
-    closeReason: str | None = None
     failureEvidence: dict[str, Any] | None = None
-    resultBundleId: str | None = None
 
 
 class CallOutcomeRequest(CamelModel):
@@ -161,8 +173,11 @@ class CallOutcomeRequest(CamelModel):
     callId: int
     # Smoke optional; target-state required. Pass-through from IA-01.
     tenantId: int | None = None
+    # Must match IA-03A CALL_FINISHED resultBundleId.
+    resultBundleId: str | None = None
     scenario: Scenario = "AUTHORIZATION_REMINDER"
     scenarioSchemaVersion: str = "1.0"
+    producedAt: str
     compliance: dict[str, Any]
     recipientPromisedTime: str | None = None
     reschedule: dict[str, Any]
@@ -170,7 +185,6 @@ class CallOutcomeRequest(CamelModel):
     recipientWithdrawn: bool = False
     feedbackItems: list[dict[str, Any]] = Field(default_factory=list)
     scenarioPayload: dict[str, Any] = Field(default_factory=dict)
-    resultBundleId: str | None = None
     outcomeId: str | None = None
 
 
@@ -182,4 +196,5 @@ class ArtifactUploadMeta(CamelModel):
     # Smoke optional; target-state required. Pass-through from IA-01.
     tenantId: int | None = None
     artifactType: Literal["RECORDING", "TRANSCRIPT"]
+    createdAt: str
     uploadRequestId: str | None = None

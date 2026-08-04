@@ -74,6 +74,7 @@ def dispatch_to_outbound_payload(req: TaskDispatchRequest) -> dict[str, Any]:
             "dispatchId": req.dispatchId,
             "taskId": req.taskId,
             "taskRevision": req.taskRevision,
+            "attemptNo": req.attemptNo,
             "dispatchType": req.dispatchType,
             "externalOrderId": req.externalOrderId,
             "scriptId": req.scriptId,
