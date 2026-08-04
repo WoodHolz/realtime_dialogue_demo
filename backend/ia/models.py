@@ -42,6 +42,7 @@ class Identity(CamelModel):
 class ContactSlots(CamelModel):
     callbackNumber: str
     workingHours: str | None = "09:00-18:00"
+    # IANA for CS/callback locale; omit → fall back to task timezone (FAQ Q9).
     workingHoursTimezone: str | None = None
 
 

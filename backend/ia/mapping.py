@@ -56,6 +56,10 @@ def dispatch_to_outbound_payload(req: TaskDispatchRequest) -> dict[str, Any]:
         "employer": employer,
         "callback_number": contact.callbackNumber,
         "working_hours": contact.workingHours or "09:00-18:00",
+        # Doc: workingHoursTimezone defaults to task timezone (recipient locale).
+        "working_hours_timezone": (
+            contact.workingHoursTimezone or req.timezone or "Asia/Shanghai"
+        ),
         "has_email": bool(channels.emailEnabled),
         "fallback_sms_enabled": bool(channels.fallbackSmsEnabled),
         "fallback_sms_body": channels.fallbackSmsContent or "",
