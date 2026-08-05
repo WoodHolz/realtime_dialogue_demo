@@ -11,6 +11,7 @@ from zoneinfo import ZoneInfo
 
 from backend.ia.models import ArtifactUploadMeta, CallEventRequest, CallOutcomeRequest
 from backend.ia.platform_client import get_platform_client
+from backend.ia.recording_upload import prepare_recording_for_upload
 from backend.outbound.models import CallTask
 
 LOG = logging.getLogger(__name__)
@@ -359,6 +360,7 @@ async def report_ia_call_finished(task: CallTask) -> None:
         recordings = sip.get("recordings") or {}
         stereo = recordings.get("stereo")
         if stereo and Path(stereo).is_file():
+            upload_path = prepare_recording_for_upload(Path(stereo))
             meta = ArtifactUploadMeta(
                 taskId=int(ia["taskId"]),
                 callId=ia_call_id,
@@ -366,7 +368,7 @@ async def report_ia_call_finished(task: CallTask) -> None:
                 productAt=_iso_offset(task.finished_at),
                 tenantId=_tenant_id(ia),
             )
-            await client.upload_recording(meta=meta, file_path=Path(stereo))
+            await client.upload_recording(meta=meta, file_path=upload_path)
     except Exception:
         LOG.exception(
             "IA-05 upload failed call_id=%s iaCallId=%s",

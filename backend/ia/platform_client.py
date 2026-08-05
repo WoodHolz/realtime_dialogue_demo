@@ -73,9 +73,18 @@ class PlatformClient:
         try:
             async with httpx.AsyncClient(timeout=60.0) as client:
                 with file_path.open("rb") as fh:
+                    # Prefer audio/wav|audio/flac for platform sniffing.
+                    suffix = file_path.suffix.lower()
+                    mime = (
+                        "audio/flac"
+                        if suffix == ".flac"
+                        else "audio/wav"
+                        if suffix in {".wav", ".wave"}
+                        else "application/octet-stream"
+                    )
                     files = {
                         "recordingDeliverDTO": (None, meta_json, "application/json"),
-                        "file": (file_path.name, fh, "application/octet-stream"),
+                        "file": (file_path.name, fh, mime),
                     }
                     resp = await client.post(url, files=files, headers=_headers())
                 LOG.error(
