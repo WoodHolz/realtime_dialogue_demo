@@ -69,18 +69,17 @@ class PlatformClient:
             meta.model_dump(mode="json", exclude_none=True),
             ensure_ascii=False,
         )
-        # Platform: meta part must be application/json; file is binary.
-        # Put both in ``files`` so httpx sets multipart Content-Type per part.
+        # Platform Postman: form field is recordingDeliverDTO (application/json) + file.
         try:
             async with httpx.AsyncClient(timeout=60.0) as client:
                 with file_path.open("rb") as fh:
                     files = {
-                        "meta": (None, meta_json, "application/json"),
+                        "recordingDeliverDTO": (None, meta_json, "application/json"),
                         "file": (file_path.name, fh, "application/octet-stream"),
                     }
                     resp = await client.post(url, files=files, headers=_headers())
                 LOG.error(
-                    "IA-05 upload status=%s url=%s meta=%s resp=%s",
+                    "IA-05 upload status=%s url=%s recordingDeliverDTO=%s resp=%s",
                     resp.status_code,
                     url,
                     meta_json,
