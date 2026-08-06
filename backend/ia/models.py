@@ -96,8 +96,8 @@ class TaskDispatchRequest(CamelModel):
 
     dispatchId: str
     taskRevision: int
-    # Platform-assigned attempt index; echo to IA-03A (do not invent).
-    attemptNo: int
+    # Optional; neither side relies on it for smoke — accept if present, ignore if absent.
+    attemptNo: int | None = None
     dispatchType: DispatchType
     taskId: int
     externalOrderId: str

@@ -34,8 +34,6 @@ def _validate(req: TaskDispatchRequest) -> None:
         raise DispatchError("INVALID_DISPATCH", "dispatchId is required")
     if req.tenantId is None:
         raise DispatchError("INVALID_DISPATCH", "tenantId is required")
-    if req.attemptNo is None or int(req.attemptNo) < 1:
-        raise DispatchError("INVALID_DISPATCH", "attemptNo must be >= 1")
     if not (req.recipient.mobile or "").strip():
         raise DispatchError("INVALID_DISPATCH", "recipient.mobile is required")
     if not (req.recipient.name or "").strip():

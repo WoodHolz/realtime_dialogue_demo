@@ -155,12 +155,12 @@ def test_task_dispatch_duplicate_skips_second_dial(client: TestClient):
     assert r2.json()["duplicate"] is True
 
 
-def test_task_dispatch_requires_attempt_no(client: TestClient):
+def test_task_dispatch_accepts_missing_attempt_no(client: TestClient):
     body = dict(SAMPLE)
     body["dispatchId"] = "disp_no_attempt"
     del body["attemptNo"]
     r = client.post("/va-algo/v1/task-dispatch", json=body)
-    assert r.status_code == 422
+    assert r.status_code == 200, r.text
 
 
 def test_task_dispatch_accepts_no_answer_retry(client: TestClient):

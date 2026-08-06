@@ -98,17 +98,6 @@ def _result_bundle_id(task: CallTask, ia: dict[str, Any]) -> str:
     return f"rb{_call_id_int(task, ia)}"
 
 
-def _attempt_no(ia: dict[str, Any]) -> int | None:
-    raw = ia.get("attemptNo")
-    if raw is None or raw == "":
-        return None
-    try:
-        return int(raw)
-    except (TypeError, ValueError):
-        LOG.warning("IA attemptNo not int-compatible: %r", raw)
-        return None
-
-
 def _execution_sequence(ia: dict[str, Any], *, default: int = 1) -> int:
     """Platform: executionSequence 不能为空; never omit."""
     raw = ia.get("executionSequence")
@@ -142,6 +131,197 @@ def _map_call_outcome(task: CallTask) -> tuple[str, bool]:
     if task.error:
         return "FAILED", False
     return "CONNECTED_INEFFECTIVE", True
+
+
+_TRIGGER_FAMILY_RULES: tuple[tuple[tuple[str, ...], str], ...] = (
+    (("开会", "会议", "meeting", "in a meeting"), "BUSY_MEETING"),
+    (("开车", "驾驶", "driving"), "DRIVING"),
+    (("信号", "signal"), "SIGNAL_BAD"),
+    (("医院", "急诊", "emergency"), "EMERGENCY"),
+    (("条件", "材料不齐", "unavailable"), "CONDITION_UNAVAILABLE"),
+    (("组织", "领导", "审批", "org"), "ORG_NODE"),
+    (("邮件", "短信", "稍后处理", "自己弄", "async"), "ASYNC_ACTION"),
+    (("晚点", "待会", "一会儿", "稍后", "下午", "晚上", "改天", "有空", "方便", "later"), "VAGUE_LATER"),
+)
+
+_VAGUE_HINT_RE = re.compile(
+    r"晚点|待会|一会儿|稍后|下午|晚上|改天|有空|方便时|sometime|later|soon",
+    re.IGNORECASE,
+)
+
+
+def _infer_trigger_family(*parts: str | None) -> str | None:
+    blob = " ".join(str(p) for p in parts if p).strip()
+    if not blob:
+        return None
+    low = blob.lower()
+    for keys, family in _TRIGGER_FAMILY_RULES:
+        if any(k.lower() in low for k in keys):
+            return family
+    return None
+
+
+def _empty_reschedule(*, summary: str | None = None) -> dict[str, Any]:
+    return {
+        "reason": None,
+        "triggerFamily": None,
+        "nextAction": {
+            "type": "NONE",
+            "channel": None,
+            "owner": None,
+            "dueTime": None,
+            "dueWindow": None,
+        },
+        "weakCommitment": None,
+        "lastSpokenSummary": summary,
+    }
+
+
+def _build_callback_reschedule(
+    task: CallTask,
+    *,
+    promised_raw: str | None,
+    biz_result: str | None,
+) -> dict[str, Any]:
+    """IA-03B §3.2 reschedule for recipient callback / 改约."""
+    raw = (promised_raw or "").strip() or None
+    due = _to_platform_datetime(raw) if raw else None
+    summary = (task.result_summary or "").strip() or None
+    family = _infer_trigger_family(summary, raw, biz_result, task.result)
+    vague = bool(raw and _VAGUE_HINT_RE.search(raw)) or (bool(raw) and due is None)
+    # Clear clock → firm; vague / unparseable → weak; no time at all but 改约 intent → weak.
+    if due and not vague:
+        weak: bool | None = False
+        due_window = None
+    elif raw:
+        weak = True
+        due_window = raw
+        family = family or "VAGUE_LATER"
+    else:
+        weak = True
+        due_window = None
+        family = family or "VAGUE_LATER"
+
+    return {
+        "reason": "RECIPIENT_CALLBACK_REQUEST",
+        "triggerFamily": family,
+        "nextAction": {
+            "type": "CALLBACK",
+            "channel": "VOICE",
+            "owner": "PLATFORM",
+            "dueTime": due,
+            "dueWindow": due_window,
+        },
+        "weakCommitment": weak,
+        "lastSpokenSummary": summary or (f"候选人改约回电：{raw}" if raw else "候选人要求改约回电"),
+    }
+
+
+def _is_reschedule_intent(task: CallTask, biz: dict[str, Any]) -> bool:
+    result = (task.result or biz.get("result") or "").strip()
+    if result in {"not_convenient", "reschedule"}:
+        return True
+    if (biz.get("promised_time") or "").strip():
+        return True
+    return False
+
+
+def _dial_failure_reason(task: CallTask, call_outcome: str) -> str | None:
+    """Human-readable dial failure for IA-03A/03B (≤500 chars, zh+en).
+
+    Never paste raw SIP/provider error strings into the payload — only classify
+    soft signals to pick a natural-language description.
+    """
+    if call_outcome not in {
+        "FAILED",
+        "NO_ANSWER",
+        "BUSY",
+        "INVALID_NUMBER",
+        "ASSISTANT_BLOCKED",
+    }:
+        return None
+
+    # Soft signals for classification only (never copied into the returned text).
+    blob = " ".join(
+        str(x)
+        for x in (
+            task.result,
+            task.error,
+            task.result_summary,
+            ((task.telephony or {}).get("sip") or {}).get("status"),
+            ((task.telephony or {}).get("sip") or {}).get("hangup_reason"),
+            ((task.telephony or {}).get("sip") or {}).get("error"),
+        )
+        if x
+    ).lower()
+
+    if call_outcome == "NO_ANSWER":
+        text = (
+            "被叫未接听，振铃后无应答或线路侧返回未接通。"
+            " The callee did not answer; the call rang out or the carrier reported no answer."
+        )
+    elif call_outcome == "BUSY":
+        text = (
+            "被叫占线，当前无法接通。"
+            " The callee line was busy and could not be connected."
+        )
+    elif call_outcome == "ASSISTANT_BLOCKED":
+        text = (
+            "疑似语音助手代接或来电拦截，未能进入有效人工对话。"
+            " Likely answered by a voice assistant or call blocker; no effective human conversation."
+        )
+    elif call_outcome == "INVALID_NUMBER":
+        text = (
+            "号码无效或不可达，无法建立呼叫。"
+            " The number is invalid or unreachable; the call could not be established."
+        )
+    elif "concurrency" in blob or "并发" in blob:
+        text = (
+            "外呼并发已达上限，本次未能发起拨号。"
+            " Outbound concurrency limit reached; this dial attempt was not started."
+        )
+    elif any(k in blob for k in ("480", "486", "487", "no answer", "no_answer", "未接")):
+        text = (
+            "多次或单次拨号后仍未接通，被叫侧无有效应答。"
+            " Dialing completed without a successful connect; no effective answer from the callee."
+        )
+    elif any(
+        k in blob
+        for k in (
+            "normal_clearing",
+            "cause=16",
+            "bye",
+            "hangup",
+            "cleared",
+        )
+    ):
+        text = (
+            "呼叫过程中线路异常结束或对端提前释放，未能完成有效通话。"
+            " The call ended abnormally or the peer released early before an effective conversation."
+        )
+    elif any(k in blob for k in ("404", "not found", "unreachable", "不可达")):
+        text = (
+            "被叫暂时不可达或路由失败，呼叫未能接通。"
+            " The callee was temporarily unreachable or routing failed; the call did not connect."
+        )
+    elif any(k in blob for k in ("rtp", "sdp", "connect failed", "bind", "timeout", "超时")):
+        text = (
+            "媒体或信令链路建立失败，系统侧未能完成通话连接。"
+            " Media or signaling setup failed; the system could not complete the call connection."
+        )
+    elif any(k in blob for k in ("credential", "doubao", "auth", "鉴权")):
+        text = (
+            "语音服务鉴权或配置异常，导致本次外呼未能正常进行。"
+            " Voice service auth or configuration failed, so this outbound call could not proceed."
+        )
+    else:
+        text = (
+            "系统侧呼叫失败，未能建立有效通话（非业务改约/未接语义）。"
+            " System-side dial failure; no effective call was established "
+            "(not a business no-answer or reschedule case)."
+        )
+
+    return text[:500]
 
 
 def build_call_event(
@@ -181,10 +361,12 @@ def build_call_event(
         resultBundleId=bundle_id,
         eventType="CALL_FINISHED",
         occurredAt=occurred,
-        attemptNo=_attempt_no(ia),
+        # Smoke: attemptNo unused by both sides; omit from payload.
+        attemptNo=None,
         attemptCounted=attempt_counted,
         callOutcome=call_outcome,
         hangupInitiator="UNKNOWN",
+        dialFailureReason=_dial_failure_reason(task, call_outcome),
         startedAt=started,
         endedAt=ended,
         durationSeconds=duration,
@@ -204,10 +386,12 @@ def build_call_outcome(
     connected_effective = call_outcome == "CONNECTED_EFFECTIVE"
     dispatch_type = str(ia.get("dispatchType") or "INITIAL")
     bundle_id = result_bundle_id or _result_bundle_id(task, ia)
+    biz = ((task.telephony or {}).get("business") or {}) if task.telephony else {}
 
-    # Follow-up / callback missed → customer decision, no auto retry.
     feedback: list[dict[str, Any]] = []
     reschedule: dict[str, Any]
+
+    # Follow-up / callback miss → customer decision; no auto NO_ANSWER_RETRY.
     if dispatch_type in _CUSTOMER_DECISION_DISPATCH and call_outcome in {
         "NO_ANSWER",
         "BUSY",
@@ -224,35 +408,39 @@ def build_call_outcome(
                 "dueWindow": None,
             },
             "weakCommitment": None,
-            "lastSpokenSummary": None,
-        }
-        feedback.append(
-            {
-                "type": "CONTACT_PREFERENCE",
-                "action": "NONE",
-                "priority": "P1",
-                "reasonCode": "FOLLOW_UP_UNREACHED",
-                "summary": "跟进/回拨未触达，是否继续联系请客户决策",
-            }
-        )
-    else:
-        # Prefer prod outcome extraction if present on telephony.business
-        biz = ((task.telephony or {}).get("business") or {}) if task.telephony else {}
-        promised_raw = biz.get("promised_time") or None
-        promised = _to_platform_datetime(promised_raw) if promised_raw else None
-        reschedule = {
-            "reason": "RECIPIENT_CALLBACK_REQUEST" if promised else None,
-            "triggerFamily": None,
-            "nextAction": {
-                "type": "CALLBACK" if promised else "NONE",
-                "channel": "VOICE" if promised else None,
-                "owner": "PLATFORM" if promised else None,
-                "dueTime": promised,
-                "dueWindow": None,
-            },
-            "weakCommitment": False if promised else None,
             "lastSpokenSummary": (task.result_summary or None),
         }
+        # Smoke: feedbackItems only carry dialFailureReason (NL); other §3.3 fields later.
+        fail_nl = _dial_failure_reason(task, call_outcome)
+        if fail_nl:
+            feedback.append({"dialFailureReason": fail_nl})
+    elif call_outcome in {"NO_ANSWER", "BUSY"}:
+        # Business unreachable → platform may schedule NO_ANSWER_RETRY (dueTime by platform).
+        reschedule = {
+            "reason": "NO_ANSWER_RETRY",
+            "triggerFamily": None,
+            "nextAction": {
+                "type": "CALLBACK",
+                "channel": "VOICE",
+                "owner": "PLATFORM",
+                "dueTime": None,
+                "dueWindow": None,
+            },
+            "weakCommitment": False,
+            "lastSpokenSummary": (task.result_summary or "未接通，建议无人接听重呼"),
+        }
+    elif _is_reschedule_intent(task, biz):
+        # 改约 / 稍后回拨 → IA-03B §3.2 RECIPIENT_CALLBACK_REQUEST
+        reschedule = _build_callback_reschedule(
+            task,
+            promised_raw=(biz.get("promised_time") or None),
+            biz_result=str(biz.get("result") or task.result or ""),
+        )
+    elif call_outcome == "FAILED":
+        # System dial failure: dialFailureReason lives on IA-03A, not feedbackItems.
+        reschedule = _empty_reschedule(summary=None)
+    else:
+        reschedule = _empty_reschedule(summary=(task.result_summary or None))
 
     compliance = {
         "identityMode": identity_mode if identity_mode in {"BRAND_SELF", "CLIENT_IDENTITY"} else "BRAND_SELF",
