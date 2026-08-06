@@ -179,15 +179,14 @@ def test_03b_system_fail_no_feedback_items():
     assert outcome.feedbackItems == []
 
 
-def test_03b_followup_miss_feedback_only_dial_failure_reason():
+def test_03b_followup_miss_feedback_empty():
     task = _task_with_ia(dispatchType="PROMISE_FOLLOW_UP")
     task.result = "no_answer"
+    event = build_call_event(task)
     outcome = build_call_outcome(task)
+    assert event.callOutcome == "NO_ANSWER"
     assert outcome.reschedule["nextAction"]["type"] == "NONE"
-    assert isinstance(outcome.feedbackItems, list)
-    assert len(outcome.feedbackItems) == 1
-    assert set(outcome.feedbackItems[0].keys()) == {"dialFailureReason"}
-    assert "未接听" in outcome.feedbackItems[0]["dialFailureReason"]
+    assert outcome.feedbackItems == []
 
 
 def test_05_meta_uses_product_at():

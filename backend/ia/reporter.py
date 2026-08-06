@@ -410,10 +410,8 @@ def build_call_outcome(
             "weakCommitment": None,
             "lastSpokenSummary": (task.result_summary or None),
         }
-        # Smoke: feedbackItems only carry dialFailureReason (NL); other §3.3 fields later.
-        fail_nl = _dial_failure_reason(task, call_outcome)
-        if fail_nl:
-            feedback.append({"dialFailureReason": fail_nl})
+        # feedbackItems = client actionable tickets only; 人未接不是工单，保持 [].
+        # 未接事实在 03A callOutcome；是否继续联系由平台/客户看 §3.2 NONE.
     elif call_outcome in {"NO_ANSWER", "BUSY"}:
         # Business unreachable → platform may schedule NO_ANSWER_RETRY (dueTime by platform).
         reschedule = {
