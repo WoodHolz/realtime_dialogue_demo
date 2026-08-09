@@ -133,6 +133,21 @@ async def _run_sip_bridged_call(
             return
 
         cfg = load_sip_config().with_peer(peer_host, peer_port)
+        payload = task.payload if isinstance(task.payload, dict) else {}
+        # Per-call Doubao TTS speed override (webpage slider / API).
+        speed_override = payload.get("tts_speed", payload.get("speed"))
+        if speed_override is not None and str(speed_override).strip() != "":
+            try:
+                from dataclasses import replace as _replace_speed
+
+                speed_i = max(-50, min(100, int(speed_override)))
+                cfg = _replace_speed(cfg, tts_speed=speed_i)
+            except (TypeError, ValueError):
+                LOG.warning(
+                    "ignore invalid tts_speed=%r call_id=%s",
+                    speed_override,
+                    call_id,
+                )
         if is_prod_scenario(task.scenario) or is_reference_interview_scenario(
             task.scenario
         ):

@@ -138,7 +138,7 @@
     <h1>证明人访谈 · 投资人演示</h1>
     <p class="lead">
       基于 <code>prod</code> 外呼链路、沿用原 tmp-prod 单人页交互的长对话 demo（剧本 v1.5）。
-      你扮演证明人「周明远」接听；Agent 按背调访谈策略推进。
+      你扮演证明人「周明远女士」接听；Agent 按背调访谈策略推进。
     </p>
 
     <div class="layout">
@@ -152,13 +152,20 @@
           <label for="voice">豆包音色 voice_type</label>
           <select id="voice"></select>
 
+          <label for="ttsSpeed">TTS 语速 tts_speed（豆包 [-50,100]）</label>
+          <div class="row" style="align-items:center">
+            <input id="ttsSpeed" type="range" min="-50" max="100" step="5" value="20" />
+            <input id="ttsSpeedNum" type="number" min="-50" max="100" step="1" value="20" style="width:100%" />
+          </div>
+          <p class="hint" id="speedHint">0≈1.0x，正值更快，负值更慢。本通会写入 <code>tts_speed</code> 覆盖服务端默认。</p>
+
           <div class="row">
             <div>
               <label for="candidate">候选人</label>
               <input id="candidate" type="text" value="李昀" />
             </div>
             <div>
-              <label for="reference">证明人</label>
+              <label for="reference">证明人（女）</label>
               <input id="reference" type="text" value="周明远" />
             </div>
           </div>
@@ -224,6 +231,7 @@
       var API_BASE = pathPrefix + "/outbound/v1";
       var SCENARIO = "reference_interview_demo";
       var STORAGE_KEY = "ref_interview_voice_type";
+      var SPEED_KEY = "ref_interview_tts_speed";
 
       document.getElementById("linkHome").href = pathPrefix + "/";
       document.getElementById("linkProd").href = pathPrefix + "/prod/single";
@@ -247,6 +255,9 @@
       var el = {
         phone: document.getElementById("phone"),
         voice: document.getElementById("voice"),
+        ttsSpeed: document.getElementById("ttsSpeed"),
+        ttsSpeedNum: document.getElementById("ttsSpeedNum"),
+        speedHint: document.getElementById("speedHint"),
         candidate: document.getElementById("candidate"),
         reference: document.getElementById("reference"),
         company: document.getElementById("company"),
@@ -263,6 +274,33 @@
         asrInterim: document.getElementById("asrInterim"),
         txBox: document.getElementById("txBox"),
       };
+
+      function clampSpeed(v) {
+        var n = parseInt(v, 10);
+        if (isNaN(n)) n = 20;
+        return Math.max(-50, Math.min(100, n));
+      }
+      function syncSpeedUI(v, persist) {
+        var n = clampSpeed(v);
+        el.ttsSpeed.value = String(n);
+        el.ttsSpeedNum.value = String(n);
+        var approx = (1 + n / 100).toFixed(2);
+        el.speedHint.innerHTML =
+          "当前 <code>" + n + "</code> ≈ " + approx +
+          "x（0=1.0x）。本通写入 <code>tts_speed</code> 覆盖服务端默认。";
+        if (persist !== false) localStorage.setItem(SPEED_KEY, String(n));
+        return n;
+      }
+      (function initSpeed() {
+        var fromQuery = (new URLSearchParams(location.search).get("speed") || "").trim();
+        var fromStore = (localStorage.getItem(SPEED_KEY) || "").trim();
+        var bootSpeed = boot.default_tts_speed;
+        var preferred = fromQuery || fromStore || (bootSpeed != null ? String(bootSpeed) : "20");
+        syncSpeedUI(preferred, !!fromQuery || !!fromStore);
+      })();
+      el.ttsSpeed.addEventListener("input", function () { syncSpeedUI(el.ttsSpeed.value); });
+      el.ttsSpeedNum.addEventListener("change", function () { syncSpeedUI(el.ttsSpeedNum.value); });
+      el.ttsSpeedNum.addEventListener("input", function () { syncSpeedUI(el.ttsSpeedNum.value, false); });
 
       function populateVoices() {
         var scenes = boot.voices || [];
@@ -326,10 +364,12 @@
           scenario: SCENARIO,
           candidate_name: (el.candidate.value || "").trim() || "李昀",
           reference_name: (el.reference.value || "").trim() || "周明远",
+          reference_gender: "female",
           reference_company: (el.company.value || "").trim() || "云杉科技",
           employer: (el.company.value || "").trim() || "云杉科技",
           target_role: (el.targetRole.value || "").trim() || "支付平台技术专家",
           voice: el.voice.value || "",
+          tts_speed: clampSpeed(el.ttsSpeed.value),
         };
       }
 

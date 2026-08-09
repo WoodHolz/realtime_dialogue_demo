@@ -79,8 +79,16 @@ class CreateCallRequest(BaseModel):
         default="",
         description="豆包 TTS voice_type；空则用外呼默认音色。见 GET /outbound/v1/voices",
     )
+    tts_speed: int | None = Field(
+        default=None,
+        description="豆包 audio.output.speed，范围 [-50,100]；空则用 config/SIP 默认",
+    )
     # —— 证明人访谈（reference_interview_demo）槽位；空则用剧本默认虚构档案 ——
     reference_name: str = Field(default="", description="证明人姓名，如 周明远")
+    reference_gender: str = Field(
+        default="",
+        description="证明人性别：female/女士（默认）或 male/先生",
+    )
     reference_title: str = Field(default="", description="证明人职位，如 技术经理")
     reference_company: str = Field(default="", description="证明人所在公司 / 核实经历公司")
     reference_dept: str = Field(default="", description="证明人部门")
@@ -194,6 +202,7 @@ async def preview_opening(
         "mp_name": req.mp_name,
         "resend_channel": req.resend_channel,
         "reference_name": req.reference_name,
+        "reference_gender": req.reference_gender,
         "reference_title": req.reference_title,
         "reference_company": req.reference_company,
         "reference_dept": req.reference_dept,
@@ -208,6 +217,8 @@ async def preview_opening(
         payload["has_email"] = req.has_email
     if req.has_fallback_sms is not None:
         payload["has_fallback_sms"] = req.has_fallback_sms
+    if req.tts_speed is not None:
+        payload["tts_speed"] = int(req.tts_speed)
     try:
         _role, _style, opening, parts = build_scenario_prompt(req.scenario, payload)
     except ValueError as exc:
@@ -254,6 +265,7 @@ async def create_call(
         "ticket_id": req.ticket_id,
         "extra_note": req.extra_note,
         "reference_name": req.reference_name,
+        "reference_gender": req.reference_gender,
         "reference_title": req.reference_title,
         "reference_company": req.reference_company,
         "reference_dept": req.reference_dept,
@@ -268,6 +280,8 @@ async def create_call(
         payload["has_email"] = req.has_email
     if req.has_fallback_sms is not None:
         payload["has_fallback_sms"] = req.has_fallback_sms
+    if req.tts_speed is not None:
+        payload["tts_speed"] = int(req.tts_speed)
     try:
         voice = resolve_voice(req.voice)
         task = await create_outbound_call(

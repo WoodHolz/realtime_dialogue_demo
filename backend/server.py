@@ -672,6 +672,12 @@ async def reference_interview_page():
 
         cfg = load_dial_settings()
         voices = list_voice_catalog()
+        try:
+            from backend.sip.config import resolve_tts_audio_params
+
+            default_tts_speed = int(resolve_tts_audio_params()["speed"])
+        except Exception:  # noqa: BLE001
+            default_tts_speed = 20
         boot = {
             "called_prefix": cfg.called_prefix,
             "ani": cfg.ani,
@@ -680,6 +686,7 @@ async def reference_interview_page():
             "scenario": "reference_interview_demo",
             "default_voice": voices.get("default_voice"),
             "voices": voices.get("scenes") or [],
+            "default_tts_speed": default_tts_speed,
         }
     except Exception as exc:  # noqa: BLE001
         LOG.warning("reference-interview boot config failed: %s", exc)
@@ -691,6 +698,7 @@ async def reference_interview_page():
             "scenario": "reference_interview_demo",
             "default_voice": "saturn_zh_female_nuanxinxuejie_tob",
             "voices": [],
+            "default_tts_speed": 20,
             "error": str(exc),
         }
 

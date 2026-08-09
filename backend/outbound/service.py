@@ -135,6 +135,12 @@ async def create_outbound_call(
     )
     body["voice"] = resolved_voice
     body["voice_type"] = resolved_voice
+    raw_speed = body.get("tts_speed", body.get("speed"))
+    if raw_speed is not None and str(raw_speed).strip() != "":
+        try:
+            body["tts_speed"] = max(-50, min(100, int(raw_speed)))
+        except (TypeError, ValueError):
+            body.pop("tts_speed", None)
     if is_prod_scenario(scenario):
         from config.prod_prompt import stamp_trigger_beijing
 
@@ -174,7 +180,11 @@ async def create_outbound_call(
         )
         store.update(
             task.call_id,
-            telephony={"dial": dial.as_dict(), "voice": resolved_voice},
+            telephony={
+                "dial": dial.as_dict(),
+                "voice": resolved_voice,
+                "tts_speed": body.get("tts_speed"),
+            },
         )
         task = store.get(task.call_id) or task
     except Exception:
