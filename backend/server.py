@@ -656,6 +656,58 @@ async def sip_call_page():
     return HTMLResponse(raw, media_type="text/html; charset=utf-8")
 
 
+@app.get("/reference-interview")
+@app.get("/reference-interview/")
+@app.get("/prod/reference-interview")
+@app.get("/prod/reference-interview/")
+async def reference_interview_page():
+    """投资人演示：证明人访谈 SIP 外呼页（剧本 v1.5；UI 沿用 prod/tmp-prod 单人页风格）。"""
+    path = _frontend_dir() / "reference_interview.html"
+    if not path.exists():
+        return HTMLResponse("<p>reference_interview.html not found</p>", status_code=404)
+    raw = path.read_text(encoding="utf-8")
+    try:
+        from backend.doubao_voices import list_voice_catalog
+        from backend.outbound.dial import load_dial_settings
+
+        cfg = load_dial_settings()
+        voices = list_voice_catalog()
+        boot = {
+            "called_prefix": cfg.called_prefix,
+            "ani": cfg.ani,
+            "default_display": cfg.default_display,
+            "display_numbers": list(cfg.display_numbers),
+            "scenario": "reference_interview_demo",
+            "default_voice": voices.get("default_voice"),
+            "voices": voices.get("scenes") or [],
+        }
+    except Exception as exc:  # noqa: BLE001
+        LOG.warning("reference-interview boot config failed: %s", exc)
+        boot = {
+            "called_prefix": "a1",
+            "ani": "",
+            "default_display": "",
+            "display_numbers": [],
+            "scenario": "reference_interview_demo",
+            "default_voice": "saturn_zh_female_nuanxinxuejie_tob",
+            "voices": [],
+            "error": str(exc),
+        }
+
+    nums = [str(n).strip() for n in (boot.get("display_numbers") or []) if str(n).strip()]
+    default = str(boot.get("default_display") or (nums[0] if nums else "")).strip()
+    status = (
+        f"证明人访谈 demo · scenario=reference_interview_demo（基于 prod）。"
+        f"外显默认 {default or '-'}（号池 {len(nums)}）。ANI={boot.get('ani') or '-'}"
+        if nums
+        else "未配置外显号池，请检查 config.json outbound.display_numbers"
+    )
+    raw = raw.replace("<!--__STATUS_BOOT__-->", status, 1)
+    boot_json = json.dumps(boot, ensure_ascii=False).replace("<", "\\u003c")
+    raw = raw.replace("<!--__REF_INTERVIEW_BOOT_JSON__-->", boot_json, 1)
+    return HTMLResponse(raw, media_type="text/html; charset=utf-8")
+
+
 @app.get("/prod")
 @app.get("/prod/")
 @app.get("/tmp-prod")

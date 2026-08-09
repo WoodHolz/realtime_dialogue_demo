@@ -79,6 +79,17 @@ class CreateCallRequest(BaseModel):
         default="",
         description="豆包 TTS voice_type；空则用外呼默认音色。见 GET /outbound/v1/voices",
     )
+    # —— 证明人访谈（reference_interview_demo）槽位；空则用剧本默认虚构档案 ——
+    reference_name: str = Field(default="", description="证明人姓名，如 周明远")
+    reference_title: str = Field(default="", description="证明人职位，如 技术经理")
+    reference_company: str = Field(default="", description="证明人所在公司 / 核实经历公司")
+    reference_dept: str = Field(default="", description="证明人部门")
+    employment_period: str = Field(default="", description="候选人在职时间口径（可念述确认）")
+    resume_title: str = Field(default="", description="简历职位（软信息，禁止念出）")
+    resume_highlight: str = Field(default="", description="简历亮点（软信息，禁止念出）")
+    departure_reason_claimed: str = Field(default="", description="候选人申报离职原因（软信息）")
+    target_role: str = Field(default="", description="应聘岗位")
+    relation_claimed: str = Field(default="", description="候选人申报的证明人关系")
 
 
 class CompleteCallRequest(BaseModel):
@@ -108,6 +119,11 @@ async def list_scenarios(x_api_key: str | None = Header(default=None, alias="X-A
                 "id": "prod_auth_demo",
                 "name": "prod 催授权",
                 "description": "正式 prod 剧本：config/prod_prompt.py（芝麻背调自称）；旧 id tmp_prod_auth_demo 仍可用",
+            },
+            {
+                "id": "reference_interview_demo",
+                "name": "证明人访谈（投资人演示）",
+                "description": "长对话背调证明人访谈：config/reference_interview_prompt.py（剧本 v1.5）",
             },
         ]
     }
@@ -177,6 +193,16 @@ async def preview_opening(
         "fallback_sms_body": req.fallback_sms_body,
         "mp_name": req.mp_name,
         "resend_channel": req.resend_channel,
+        "reference_name": req.reference_name,
+        "reference_title": req.reference_title,
+        "reference_company": req.reference_company,
+        "reference_dept": req.reference_dept,
+        "employment_period": req.employment_period,
+        "resume_title": req.resume_title,
+        "resume_highlight": req.resume_highlight,
+        "departure_reason_claimed": req.departure_reason_claimed,
+        "target_role": req.target_role,
+        "relation_claimed": req.relation_claimed,
     }
     if req.has_email is not None:
         payload["has_email"] = req.has_email
@@ -227,6 +253,16 @@ async def create_call(
         "work_hours": req.work_hours,
         "ticket_id": req.ticket_id,
         "extra_note": req.extra_note,
+        "reference_name": req.reference_name,
+        "reference_title": req.reference_title,
+        "reference_company": req.reference_company,
+        "reference_dept": req.reference_dept,
+        "employment_period": req.employment_period,
+        "resume_title": req.resume_title,
+        "resume_highlight": req.resume_highlight,
+        "departure_reason_claimed": req.departure_reason_claimed,
+        "target_role": req.target_role,
+        "relation_claimed": req.relation_claimed,
     }
     if req.has_email is not None:
         payload["has_email"] = req.has_email

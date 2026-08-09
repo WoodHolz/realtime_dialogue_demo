@@ -116,7 +116,12 @@ async def _run_sip_bridged_call(
     peer_host: str,
     peer_port: int,
 ) -> None:
-    from backend.outbound.service import complete_call, is_prod_scenario, notify_partner_callback
+    from backend.outbound.service import (
+        complete_call,
+        is_prod_scenario,
+        is_reference_interview_scenario,
+        notify_partner_callback,
+    )
     from backend.sip.agent_bridge import SipAgentBridge
     from backend.sip.config import load_sip_config
     from backend.sip.traffic import get_traffic_gate
@@ -128,17 +133,27 @@ async def _run_sip_bridged_call(
             return
 
         cfg = load_sip_config().with_peer(peer_host, peer_port)
-        if is_prod_scenario(task.scenario):
+        if is_prod_scenario(task.scenario) or is_reference_interview_scenario(
+            task.scenario
+        ):
             from dataclasses import replace
             from pathlib import Path
 
-            rec = Path(os.environ.get("SIP_RECORD_DIR") or "")
-            if not str(rec):
-                from backend.prod.paths import prod_root
+            if is_reference_interview_scenario(task.scenario):
+                rec = Path(
+                    os.environ.get("SIP_RECORD_DIR")
+                    or "data/reference_interview/recordings"
+                )
+                max_sec = 720.0
+            else:
+                rec = Path(os.environ.get("SIP_RECORD_DIR") or "")
+                if not str(rec):
+                    from backend.prod.paths import prod_root
 
-                rec = prod_root() / "recordings"
+                    rec = prod_root() / "recordings"
+                max_sec = 900.0
             rec.mkdir(parents=True, exist_ok=True)
-            cfg = replace(cfg, max_call_sec=900.0, record_dir=str(rec))
+            cfg = replace(cfg, max_call_sec=max_sec, record_dir=str(rec))
         dial = (task.telephony or {}).get("dial") or {}
         phone = str(dial.get("called") or task.phone)
 
@@ -191,6 +206,25 @@ async def _run_sip_bridged_call(
 
             slots = prod_slots_from_payload(task.payload)
             system_role = build_prod_system_role(**slots, opening_preplayed=True)
+        elif cfg.ai_speak_first and opening and is_reference_interview_scenario(
+            task.scenario
+        ):
+            from config.reference_interview_prompt import (
+                build_reference_interview_system_role,
+                reference_interview_slots_from_payload,
+            )
+
+            slots = reference_interview_slots_from_payload(task.payload)
+            system_role = build_reference_interview_system_role(
+                **slots, opening_preplayed=True
+            )
+
+        if task.scenario == "urge_auth":
+            bot_name = "催授权助手"
+        elif is_reference_interview_scenario(task.scenario):
+            bot_name = "背调访谈助理"
+        else:
+            bot_name = "语音助手"
 
         max_attempts = 1 + SIP_CLEARING_404_RETRIES
         dial_attempts: list[dict[str, Any]] = []
@@ -206,7 +240,7 @@ async def _run_sip_bridged_call(
                 system_role=system_role,
                 speaking_style=task.speaking_style,
                 call_id=call_id,
-                bot_name="催授权助手" if task.scenario == "urge_auth" else "语音助手",
+                bot_name=bot_name,
                 opening_line=opening,
                 opening_parts=parts,
                 on_status=on_status,

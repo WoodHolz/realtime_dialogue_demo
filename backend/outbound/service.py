@@ -32,11 +32,16 @@ LOG = logging.getLogger(__name__)
 PROD_SCENARIO = "prod_auth_demo"
 # Legacy aliases so in-flight / old batch rows and tmp-prod deploy still resolve.
 _PROD_SCENARIOS = {PROD_SCENARIO, "tmp_prod_auth_demo", "guotou_auth_demo"}
-SUPPORTED_SCENARIOS = {"urge_auth", *_PROD_SCENARIOS}
+REFERENCE_INTERVIEW_SCENARIO = "reference_interview_demo"
+SUPPORTED_SCENARIOS = {"urge_auth", REFERENCE_INTERVIEW_SCENARIO, *_PROD_SCENARIOS}
 
 
 def is_prod_scenario(scenario: str) -> bool:
     return (scenario or "").strip() in _PROD_SCENARIOS
+
+
+def is_reference_interview_scenario(scenario: str) -> bool:
+    return (scenario or "").strip() == REFERENCE_INTERVIEW_SCENARIO
 
 
 # Backward-compatible name used by older call sites / docs.
@@ -78,6 +83,20 @@ def build_scenario_prompt(scenario: str, payload: dict[str, Any]) -> tuple[str, 
         parts = build_prod_opening_parts(**slots)
         opening = build_prod_opening(**slots)
         return role, TMP_STYLE, opening, parts
+    if is_reference_interview_scenario(scenario):
+        from config.reference_interview_prompt import (
+            DEFAULT_SPEAKING_STYLE as REF_STYLE,
+            build_reference_interview_opening,
+            build_reference_interview_opening_parts,
+            build_reference_interview_system_role,
+            reference_interview_slots_from_payload,
+        )
+
+        slots = reference_interview_slots_from_payload(payload)
+        role = build_reference_interview_system_role(**slots)
+        parts = build_reference_interview_opening_parts(**slots)
+        opening = build_reference_interview_opening(**slots)
+        return role, REF_STYLE, opening, parts
     if scenario != "urge_auth":
         raise ValueError(f"Unsupported scenario: {scenario}")
     slots = urge_auth_slots_from_payload(payload)

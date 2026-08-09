@@ -1,0 +1,488 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>证明人访谈 · 投资人演示</title>
+  <style>
+    :root {
+      --bg: #eef1f0;
+      --ink: #1a1f1c;
+      --muted: #5c675f;
+      --line: #d0d8d2;
+      --accent: #0d5c45;
+      --accent-soft: #e7f2ed;
+      --card: #ffffff;
+      --danger: #9b2c2c;
+      --user: #0f766e;
+      --ai: #b45309;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: "IBM Plex Sans", "Noto Sans SC", system-ui, sans-serif;
+      color: var(--ink);
+      background:
+        radial-gradient(ellipse 70% 45% at 0% 0%, #dceee6 0%, transparent 55%),
+        var(--bg);
+      min-height: 100vh;
+    }
+    main { width: min(1100px, calc(100% - 2rem)); margin: 2rem auto 3rem; }
+    h1 { margin: 0 0 0.35rem; font-size: 1.55rem; }
+    .lead { color: var(--muted); margin: 0 0 1.1rem; line-height: 1.5; }
+    .nav { display: flex; flex-wrap: wrap; gap: 0.75rem 1.1rem; margin-bottom: 1rem; font-size: 0.9rem; }
+    .nav a { color: var(--accent); text-decoration: none; }
+    .nav a:hover { text-decoration: underline; }
+    .layout {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(280px, 380px);
+      gap: 1rem;
+      align-items: start;
+    }
+    @media (max-width: 900px) { .layout { grid-template-columns: 1fr; } }
+    .panel {
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      padding: 1.1rem 1.2rem 1.25rem;
+      margin-bottom: 1rem;
+    }
+    .panel h2 {
+      margin: 0 0 0.65rem;
+      font-size: 0.92rem;
+      color: var(--muted);
+      letter-spacing: 0.02em;
+      text-transform: uppercase;
+    }
+    label { display: block; font-size: 0.85rem; font-weight: 600; margin: 0.7rem 0 0.3rem; }
+    label:first-of-type { margin-top: 0; }
+    input, button, select {
+      font: inherit; width: 100%;
+      border: 1px solid var(--line); border-radius: 8px; padding: 0.6rem 0.75rem;
+    }
+    button {
+      background: var(--accent); color: #fff; border: 0; font-weight: 600;
+      cursor: pointer; margin-top: 0.85rem;
+    }
+    button.secondary { background: #2f3d36; }
+    button:disabled { opacity: 0.55; cursor: not-allowed; }
+    .row { display: grid; grid-template-columns: 1fr 1fr; gap: 0.75rem; }
+    @media (max-width: 700px) { .row { grid-template-columns: 1fr; } }
+    .hint { font-size: 0.8rem; color: var(--muted); margin-top: 0.35rem; line-height: 1.45; }
+    .hint code {
+      font-size: 0.85em; background: var(--accent-soft);
+      padding: 0.05rem 0.3rem; border-radius: 4px;
+    }
+    .status {
+      white-space: pre-wrap; font-size: 0.85rem; line-height: 1.45;
+      background: #f7faf8; border: 1px solid var(--line); border-radius: 8px;
+      padding: 0.75rem; min-height: 3rem; margin-top: 0.75rem;
+      word-break: break-word;
+    }
+    .status.err { color: var(--danger); background: #fff5f5; }
+    .preview {
+      margin-top: 0.35rem;
+      padding: 0.75rem 0.85rem;
+      border-radius: 8px;
+      background: var(--accent-soft);
+      border: 1px solid #b8d9ce;
+      font-size: 0.86rem;
+      line-height: 1.5;
+      white-space: pre-wrap;
+    }
+    .dossier {
+      font-size: 0.84rem;
+      line-height: 1.5;
+      margin: 0;
+      padding-left: 1.1rem;
+      color: var(--ink);
+    }
+    .dossier li { margin: 0.25rem 0; }
+    .tx {
+      max-height: 480px; overflow: auto; margin-top: 0.5rem;
+      border: 1px solid var(--line); border-radius: 8px; background: #fafcfb;
+    }
+    .tx-item {
+      padding: 0.65rem 0.75rem; border-bottom: 1px solid var(--line);
+      font-size: 0.84rem; line-height: 1.45;
+    }
+    .tx-item:last-child { border-bottom: 0; }
+    .tx-meta {
+      display: flex; flex-wrap: wrap; gap: 0.35rem 0.55rem;
+      font-size: 0.72rem; color: var(--muted); margin-bottom: 0.25rem;
+    }
+    .badge {
+      display: inline-block; padding: 0.05rem 0.4rem; border-radius: 999px;
+      font-weight: 700; font-size: 0.68rem;
+    }
+    .badge.user { background: #ccfbf1; color: var(--user); }
+    .badge.ai { background: #ffedd5; color: var(--ai); }
+    .badge.opening { background: #e0e7ff; color: #3730a3; }
+    .interim {
+      margin-top: 0.5rem; padding: 0.55rem 0.7rem; border-radius: 8px;
+      background: #fffbeb; border: 1px dashed #f59e0b;
+      font-size: 0.82rem; color: #92400e; min-height: 1.4rem;
+    }
+    .empty { color: var(--muted); font-size: 0.82rem; padding: 0.75rem; }
+    audio { width: 100%; margin-top: 0.5rem; }
+  </style>
+</head>
+<body>
+  <main>
+    <nav class="nav">
+      <a id="linkHome" href="../">← 首页</a>
+      <a id="linkProd" href="../prod/single">prod 单人（原 tmp-prod）</a>
+      <a id="linkVoices" href="../prod/voices">豆包音色</a>
+      <a id="linkSip" href="../sip-call">催授权 SIP</a>
+    </nav>
+    <h1>证明人访谈 · 投资人演示</h1>
+    <p class="lead">
+      基于 <code>prod</code> 外呼链路、沿用原 tmp-prod 单人页交互的长对话 demo（剧本 v1.5）。
+      你扮演证明人「周明远」接听；Agent 按背调访谈策略推进。
+    </p>
+
+    <div class="layout">
+      <section>
+        <form class="panel" id="form">
+          <h2>拨号 · reference_interview_demo</h2>
+          <label for="phone">被测手机号（证明人侧）</label>
+          <input id="phone" type="tel" inputmode="numeric" placeholder="例如 18324133080" required autocomplete="tel" />
+          <p class="hint">被叫自动加 <code id="prefixHint">a1</code>；外显号由服务端号池分配。</p>
+
+          <label for="voice">豆包音色 voice_type</label>
+          <select id="voice"></select>
+
+          <div class="row">
+            <div>
+              <label for="candidate">候选人</label>
+              <input id="candidate" type="text" value="李昀" />
+            </div>
+            <div>
+              <label for="reference">证明人</label>
+              <input id="reference" type="text" value="周明远" />
+            </div>
+          </div>
+          <div class="row">
+            <div>
+              <label for="company">核实公司</label>
+              <input id="company" type="text" value="云杉科技" />
+            </div>
+            <div>
+              <label for="targetRole">应聘岗位</label>
+              <input id="targetRole" type="text" value="支付平台技术专家" />
+            </div>
+          </div>
+
+          <label for="apiKey">X-API-Key（可选）</label>
+          <input id="apiKey" type="password" placeholder="PARTNER_API_KEY 为空可留空" autocomplete="off" />
+
+          <h2 style="margin-top:1.1rem;">开场预览（系统预播核身句）</h2>
+          <div class="preview" id="openingPreview">加载中…</div>
+          <p class="hint">接通后系统先播核身；对方确认本人后，模型再说合规开场。</p>
+
+          <button type="submit" id="callBtn">发起证明人访谈外呼</button>
+          <button type="button" class="secondary" id="previewBtn">刷新预览</button>
+          <div class="status" id="status"><!--__STATUS_BOOT__--></div>
+        </form>
+      </section>
+
+      <aside>
+        <section class="panel">
+          <h2>预载档案（演示默认）</h2>
+          <ul class="dossier">
+            <li>在职：云杉科技 2022.03–2025.12（可念述确认）</li>
+            <li>简历职位：高级后端工程师（盲问，勿念）</li>
+            <li>亮点：主导计费结算 0→1…（盲问，勿念）</li>
+            <li>离职口径：个人职业发展（盲问，勿念）</li>
+            <li>证明人申报关系：直属上级（须核验）</li>
+          </ul>
+          <p class="hint">软信息禁止念出口径；故事内核见 docs 剧本。</p>
+        </section>
+
+        <section class="panel">
+          <h2>录音</h2>
+          <audio id="stereoPlayer" controls preload="none"></audio>
+          <p class="hint" id="recHint">通话结束后可加载 stereo.wav。</p>
+          <button type="button" class="secondary" id="btnStereo" disabled>加载 stereo</button>
+        </section>
+
+        <section class="panel">
+          <h2>ASR / AI 转写</h2>
+          <div class="interim" id="asrInterim">实时 ASR interim：—</div>
+          <div class="tx" id="txBox"><div class="empty">通话开始后显示转写</div></div>
+        </section>
+      </aside>
+    </div>
+  </main>
+
+  <script type="application/json" id="ref-boot"><!--__REF_INTERVIEW_BOOT_JSON__--></script>
+  <script>
+    (function () {
+      var pathPrefix = location.pathname.indexOf("/s2s/") === 0 || location.pathname === "/s2s"
+        ? "/s2s"
+        : "";
+      var API_BASE = pathPrefix + "/outbound/v1";
+      var SCENARIO = "reference_interview_demo";
+      var STORAGE_KEY = "ref_interview_voice_type";
+
+      document.getElementById("linkHome").href = pathPrefix + "/";
+      document.getElementById("linkProd").href = pathPrefix + "/prod/single";
+      document.getElementById("linkVoices").href = pathPrefix + "/prod/voices";
+      document.getElementById("linkSip").href = pathPrefix + "/sip-call";
+
+      var boot = {};
+      try {
+        boot = JSON.parse((document.getElementById("ref-boot").textContent) || "{}");
+      } catch (e) {
+        boot = {};
+      }
+      var calledPrefix = boot.called_prefix || "a1";
+      document.getElementById("prefixHint").textContent = calledPrefix;
+
+      var pollTimer = null;
+      var previewTimer = null;
+      var activeCallId = null;
+      var lastRecordingUrls = null;
+
+      var el = {
+        phone: document.getElementById("phone"),
+        voice: document.getElementById("voice"),
+        candidate: document.getElementById("candidate"),
+        reference: document.getElementById("reference"),
+        company: document.getElementById("company"),
+        targetRole: document.getElementById("targetRole"),
+        apiKey: document.getElementById("apiKey"),
+        openingPreview: document.getElementById("openingPreview"),
+        status: document.getElementById("status"),
+        form: document.getElementById("form"),
+        callBtn: document.getElementById("callBtn"),
+        previewBtn: document.getElementById("previewBtn"),
+        stereoPlayer: document.getElementById("stereoPlayer"),
+        recHint: document.getElementById("recHint"),
+        btnStereo: document.getElementById("btnStereo"),
+        asrInterim: document.getElementById("asrInterim"),
+        txBox: document.getElementById("txBox"),
+      };
+
+      function populateVoices() {
+        var scenes = boot.voices || [];
+        var defaultVoice = boot.default_voice || "saturn_zh_female_nuanxinxuejie_tob";
+        var fromQuery = (new URLSearchParams(location.search).get("voice") || "").trim();
+        var fromStore = (localStorage.getItem(STORAGE_KEY) || "").trim();
+        var preferred = fromQuery || fromStore || defaultVoice;
+        el.voice.innerHTML = "";
+        var known = {};
+        scenes.forEach(function (g) {
+          var optgroup = document.createElement("optgroup");
+          optgroup.label = g.scene || g.scene_id || "音色";
+          (g.voices || []).forEach(function (v) {
+            known[v.voice_type] = true;
+            var opt = document.createElement("option");
+            opt.value = v.voice_type;
+            opt.textContent = v.name + " · " + (v.lang || "") + " (" + v.voice_type + ")";
+            optgroup.appendChild(opt);
+          });
+          el.voice.appendChild(optgroup);
+        });
+        if (!el.voice.options.length) {
+          var fallback = document.createElement("option");
+          fallback.value = defaultVoice;
+          fallback.textContent = "暖心学姐 (默认)";
+          el.voice.appendChild(fallback);
+        }
+        if (known[preferred] || preferred === defaultVoice) {
+          el.voice.value = preferred;
+        } else {
+          el.voice.value = defaultVoice;
+        }
+        localStorage.setItem(STORAGE_KEY, el.voice.value);
+      }
+      populateVoices();
+      el.voice.addEventListener("change", function () {
+        localStorage.setItem(STORAGE_KEY, el.voice.value);
+      });
+
+      function headers() {
+        var h = { "Content-Type": "application/json" };
+        var key = (el.apiKey.value || "").trim();
+        if (key) h["X-API-Key"] = key;
+        return h;
+      }
+      function normalizePhone(raw) {
+        return String(raw || "").replace(/[\s\-()]/g, "").trim();
+      }
+      function setStatus(text, isErr) {
+        el.status.textContent = text;
+        el.status.classList.toggle("err", !!isErr);
+      }
+      function authQuery() {
+        var key = (el.apiKey.value || "").trim();
+        return key ? ("?api_key=" + encodeURIComponent(key)) : "";
+      }
+
+      function payloadFromForm() {
+        return {
+          phone: normalizePhone(el.phone.value) || "13800000000",
+          scenario: SCENARIO,
+          candidate_name: (el.candidate.value || "").trim() || "李昀",
+          reference_name: (el.reference.value || "").trim() || "周明远",
+          reference_company: (el.company.value || "").trim() || "云杉科技",
+          employer: (el.company.value || "").trim() || "云杉科技",
+          target_role: (el.targetRole.value || "").trim() || "支付平台技术专家",
+          voice: el.voice.value || "",
+        };
+      }
+
+      async function refreshOpeningPreview() {
+        el.openingPreview.textContent = "预览生成中…";
+        try {
+          var resp = await fetch(API_BASE + "/preview-opening", {
+            method: "POST",
+            headers: headers(),
+            body: JSON.stringify(payloadFromForm()),
+          });
+          var raw = await resp.text();
+          var data = {};
+          try { data = JSON.parse(raw); } catch (e) { data = {}; }
+          if (!resp.ok) {
+            el.openingPreview.textContent = data.detail || raw || "预览失败";
+            return;
+          }
+          el.openingPreview.textContent =
+            (data.opening_parts && data.opening_parts.length)
+              ? data.opening_parts.join("\n\n")
+              : (data.opening_line || "（空）");
+        } catch (err) {
+          el.openingPreview.textContent = String(err.message || err);
+        }
+      }
+
+      function renderTranscript(list) {
+        var items = Array.isArray(list) ? list : [];
+        if (!items.length) {
+          el.txBox.innerHTML = '<div class="empty">暂无转写</div>';
+          return;
+        }
+        el.txBox.innerHTML = items.map(function (t) {
+          var role = String(t.role || t.speaker || "").toLowerCase();
+          var isOpening = !!t.opening || role === "opening";
+          var isUser = role === "user" || role === "human" || role === "customer";
+          var badge = isOpening ? "opening" : (isUser ? "user" : "ai");
+          var label = isOpening ? "开场" : (isUser ? "用户" : "AI");
+          var text = t.text || t.content || t.transcript || "";
+          return (
+            '<div class="tx-item"><div class="tx-meta"><span class="badge ' + badge + '">' +
+            label + '</span></div>' + String(text).replace(/</g, "&lt;") + "</div>"
+          );
+        }).join("");
+        el.txBox.scrollTop = el.txBox.scrollHeight;
+      }
+
+      function updateRecordings(urls) {
+        lastRecordingUrls = urls || null;
+        var stereo = urls && (urls.stereo || urls.stereo_url);
+        el.btnStereo.disabled = !stereo;
+        if (!stereo) {
+          el.recHint.textContent = "通话结束后可加载 stereo.wav。";
+          el.stereoPlayer.removeAttribute("src");
+        }
+      }
+
+      function pollCall(callId) {
+        if (pollTimer) clearInterval(pollTimer);
+        pollTimer = setInterval(async function () {
+          try {
+            var resp = await fetch(API_BASE + "/calls/" + callId, { headers: headers() });
+            if (!resp.ok) return;
+            var data = await resp.json();
+            var dial = data.telephony && data.telephony.dial;
+            var sip = data.telephony && data.telephony.sip;
+            var line =
+              "call_id=" + data.call_id +
+              "\nstatus=" + data.status +
+              (data.result ? ("\nresult=" + data.result) : "") +
+              (dial ? ("\ncalled=" + dial.called + " display=" + dial.display) : "");
+            if (sip && sip.status) line += "\nsip_status=" + sip.status;
+            if (sip && sip.error) line += "\nsip=" + sip.error;
+            if (data.error) line += "\nerror=" + data.error;
+            if (data.result_summary) line += "\n" + data.result_summary;
+            setStatus(line, data.status === "failed");
+
+            var interim = (sip && sip.asr_interim) || data.asr_interim || "";
+            el.asrInterim.textContent = "实时 ASR interim：" + (interim || "—");
+            renderTranscript(data.transcript || []);
+            updateRecordings(data.recording_urls || (sip && sip.recordings) || null);
+
+            if (data.status === "completed" || data.status === "failed") {
+              clearInterval(pollTimer);
+              pollTimer = null;
+              el.callBtn.disabled = false;
+            }
+          } catch (e) { /* keep polling */ }
+        }, 1500);
+      }
+
+      ["candidate", "reference", "company", "targetRole"].forEach(function (id) {
+        el[id].addEventListener("input", function () {
+          if (previewTimer) clearTimeout(previewTimer);
+          previewTimer = setTimeout(refreshOpeningPreview, 350);
+        });
+      });
+      el.previewBtn.addEventListener("click", refreshOpeningPreview);
+      refreshOpeningPreview();
+
+      el.btnStereo.addEventListener("click", function () {
+        var stereo = lastRecordingUrls && (lastRecordingUrls.stereo || lastRecordingUrls.stereo_url);
+        if (!stereo) return;
+        var url = stereo.indexOf("http") === 0 ? stereo : (pathPrefix + stereo + authQuery());
+        el.stereoPlayer.src = url;
+        el.stereoPlayer.play().catch(function () {});
+        el.recHint.textContent = "正在播放 stereo：" + url;
+      });
+
+      el.form.addEventListener("submit", async function (e) {
+        e.preventDefault();
+        var phone = normalizePhone(el.phone.value);
+        if (!phone) {
+          setStatus("请填写手机号", true);
+          return;
+        }
+        el.callBtn.disabled = true;
+        setStatus("正在发起外呼…");
+        renderTranscript([]);
+        updateRecordings(null);
+        try {
+          var body = payloadFromForm();
+          body.phone = phone;
+          var resp = await fetch(API_BASE + "/calls", {
+            method: "POST",
+            headers: headers(),
+            body: JSON.stringify(body),
+          });
+          var raw = await resp.text();
+          var data = {};
+          try { data = JSON.parse(raw); } catch (err) { data = {}; }
+          if (!resp.ok) {
+            setStatus(data.detail || raw || "外呼失败", true);
+            el.callBtn.disabled = false;
+            return;
+          }
+          activeCallId = data.call_id;
+          var dial = data.dial || {};
+          setStatus(
+            "已提交\ncall_id=" + data.call_id +
+            "\nopening=" + (data.opening_line || "") +
+            (dial.called ? ("\ncalled=" + dial.called) : "") +
+            (data.dry_run ? "\n(dry_run)" : "")
+          );
+          if (data.call_id && !data.dry_run) pollCall(data.call_id);
+          else el.callBtn.disabled = false;
+        } catch (err) {
+          setStatus(String(err.message || err), true);
+          el.callBtn.disabled = false;
+        }
+      });
+    })();
+  </script>
+</body>
+</html>
