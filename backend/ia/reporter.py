@@ -136,12 +136,13 @@ def _map_call_outcome(task: CallTask) -> tuple[str, bool]:
 _TRIGGER_FAMILY_RULES: tuple[tuple[tuple[str, ...], str], ...] = (
     (("开会", "会议", "meeting", "in a meeting"), "BUSY_MEETING"),
     (("开车", "驾驶", "driving"), "DRIVING"),
-    (("信号", "signal"), "SIGNAL_BAD"),
+    (("信号不好", "信号差", "signal bad"), "SIGNAL_BAD"),
     (("医院", "急诊", "emergency"), "EMERGENCY"),
-    (("条件", "材料不齐", "unavailable"), "CONDITION_UNAVAILABLE"),
-    (("组织", "领导", "审批", "org"), "ORG_NODE"),
-    (("邮件", "短信", "稍后处理", "自己弄", "async"), "ASYNC_ACTION"),
-    (("晚点", "待会", "一会儿", "稍后", "下午", "晚上", "改天", "有空", "方便", "later"), "VAGUE_LATER"),
+    (("材料不齐", "条件不具备"), "CONDITION_UNAVAILABLE"),
+    (("领导审批", "组织节点"), "ORG_NODE"),
+    # Do NOT match bare 短信/邮件 — "已收到短信并承诺…" is not ASYNC_ACTION.
+    (("稍后自己处理", "自己弄", "异步处理"), "ASYNC_ACTION"),
+    (("晚点", "待会", "一会儿", "改天", "有空再说", "方便时再"), "VAGUE_LATER"),
 )
 
 _VAGUE_HINT_RE = re.compile(

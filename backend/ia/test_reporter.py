@@ -117,6 +117,25 @@ def test_03b_reschedule_clear_callback_time():
     assert outcome.recipientPromisedTime == "2026-08-04T18:00:00+08:00"
 
 
+def test_03b_promise_summary_with_sms_does_not_set_async_action():
+    """「已收到短信」must not be misclassified as ASYNC_ACTION (platform D0004)."""
+    task = _task_with_ia()
+    task.result = "email_registered"
+    task.result_summary = "已收到短信并承诺完成时间：2026年8月7日 18:00"
+    task.telephony = {
+        "business": {
+            "result": "email_registered",
+            "promised_time": "2026年8月7日 18:00",
+        },
+    }
+    outcome = build_call_outcome(task)
+    rs = outcome.reschedule
+    assert rs["reason"] == "RECIPIENT_CALLBACK_REQUEST"
+    assert rs["triggerFamily"] is None
+    assert rs["nextAction"]["dueTime"] == "2026-08-07T18:00:00+08:00"
+    assert rs["weakCommitment"] is False
+
+
 def test_03b_reschedule_vague_keeps_due_window():
     task = _task_with_ia()
     task.result = "not_convenient"
