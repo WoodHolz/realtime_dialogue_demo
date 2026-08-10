@@ -14,6 +14,36 @@ from backend.ia.models import ArtifactUploadMeta, CallEventRequest, CallOutcomeR
 
 LOG = logging.getLogger(__name__)
 
+# Platform business codes often return HTTP 4xx/5xx with empty message — map for ops clarity.
+_PLATFORM_CODE_HINTS: dict[str, str] = {
+    "D0004": "TEMPORARILY_UNAVAILABLE / 平台暂不可用（对方临时不可用，非我方字段校验失败）",
+    "A0005": "Upload file size exceeds limit / 上传文件超限",
+    "D0002": "TASK_ALREADY_ACTIVE / 同一订单场景已有未终态任务",
+}
+
+
+def _platform_resp_summary(resp: httpx.Response) -> str:
+    """Human-readable platform response for logs (fills empty D0004 message etc.)."""
+    text = (resp.text or "").strip()
+    code = ""
+    message = ""
+    try:
+        data = resp.json()
+        if isinstance(data, dict):
+            code = str(data.get("code") or "").strip()
+            message = str(data.get("message") or "").strip()
+    except Exception:
+        return text[:2000] or f"http={resp.status_code}"
+    hint = _PLATFORM_CODE_HINTS.get(code, "")
+    if code == "D0004" and not message:
+        message = "平台暂不可用"
+    parts = [f"code={code or '?'}", f"message={message or '(empty)'}"]
+    if hint:
+        parts.append(f"hint={hint}")
+    if text and text not in {"", "{}"}:
+        parts.append(f"raw={text[:800]}")
+    return " ".join(parts)
+
 
 def platform_base_url() -> str:
     return (os.environ.get("IA_PLATFORM_BASE_URL") or "").rstrip("/")
@@ -92,9 +122,14 @@ class PlatformClient:
                     resp.status_code,
                     url,
                     meta_json,
-                    (resp.text or "")[:2000],
+                    _platform_resp_summary(resp),
                 )
-                resp.raise_for_status()
+                if resp.status_code >= 400:
+                    raise httpx.HTTPStatusError(
+                        f"IA-05 upload failed: {_platform_resp_summary(resp)}",
+                        request=resp.request,
+                        response=resp,
+                    )
                 if resp.content:
                     try:
                         return resp.json()
@@ -113,14 +148,20 @@ class PlatformClient:
         try:
             async with httpx.AsyncClient(timeout=20.0) as client:
                 resp = await client.post(url, json=body, headers=_headers())
+            summary = _platform_resp_summary(resp)
             LOG.error(
                 "IA platform POST %s status=%s body=%s resp=%s",
                 path,
                 resp.status_code,
                 body,
-                (resp.text or "")[:2000],
+                summary,
             )
-            resp.raise_for_status()
+            if resp.status_code >= 400:
+                raise httpx.HTTPStatusError(
+                    f"IA platform POST {path} failed: {summary}",
+                    request=resp.request,
+                    response=resp,
+                )
             if resp.content:
                 try:
                     return resp.json()
