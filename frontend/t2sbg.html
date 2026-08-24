@@ -1754,6 +1754,14 @@
                 const merged = msg.merged_followup ? ' merged_followup=1' : '';
                 log('ChatTextQuery sent [reason=' + reason + ', trigger=' + trigger + ']' + merged);
                 voiceE2eMark('chat_text_query_sent');
+              } else if (msg.type === 'pipeline_turn' || msg.type === 'llm_speculative_start' || msg.type === 'llm_revised' || msg.type === 'llm_committed' || msg.type === 'tts_cancel') {
+                log(
+                  msg.type +
+                    ' phase=' + (msg.phase || '-') +
+                    ' gen=' + (msg.gen_id || '-') +
+                    (msg.user_text ? (' user=' + msg.user_text) : '') +
+                    (msg.source ? (' source=' + msg.source) : '')
+                );
               } else if (msg.type === 'error') {
                 if (followupPending && tsFollowupRequestStart) {
                   logStageLatency('追问', Date.now() - tsFollowupRequestStart, 'followup_request_start → error');

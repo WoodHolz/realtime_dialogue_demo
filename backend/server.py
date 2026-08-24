@@ -73,6 +73,7 @@ from backend.hush import (
     init_hush_manager,
     shutdown_hush_manager,
 )
+from backend.hush.manager import hush_manager_error
 from backend.demo_asr_broadcast import (
     DEMO_ASR_EVENT_TYPES,
     demo_asr_last_event,
@@ -717,6 +718,23 @@ async def t2sbg_voice_page():
     return HTMLResponse(raw, media_type="text/html; charset=utf-8")
 
 
+@app.get("/t2sbg-pipeline")
+async def t2sbg_pipeline_page():
+    """ASR→LLM→TTS pipeline demo (own TTS; stubs until models are wired)."""
+    path = _frontend_dir() / "t2sbg.html"
+    if not path.exists():
+        return HTMLResponse("<p>t2sbg.html not found</p>", status_code=404)
+    raw = path.read_text(encoding="utf-8")
+    raw = raw.replace("'__T2SBG_VOICE_VERSION__'", json.dumps(_read_t2sbg_voice_version_from_config()))
+    raw = raw.replace("mode: 't2s'", "mode: 'pipeline'")
+    raw = raw.replace(
+        "芝麻背调证明人访谈（T2S 纯文本 → 语音）",
+        "芝麻背调证明人访谈（ASR→LLM→TTS pipeline）",
+    )
+    raw = _inline_ttfs_script_into_t2sbg_html(raw)
+    return HTMLResponse(raw, media_type="text/html; charset=utf-8")
+
+
 @app.get("/t2sbg-omni")
 async def t2sbg_omni_page():
     """Omni 直连演示页（Qwen Omni；默认 Smart Turn v3 本地判停 + manual commit）。"""
@@ -879,6 +897,7 @@ async def websocket_endpoint(websocket: WebSocket):
 
     session_voice = _WS_DEFAULT_SPEAKER
     client: DuplexVoiceClient | None = None
+    pipeline_orch = None
     # 标记当前这一轮模型回复（文本/音频）是否还在进行中，主要用于 one-shot 501 防止抢占打断
     reply_in_progress = False
     barge_in_flag = False
@@ -1246,11 +1265,30 @@ async def websocket_endpoint(websocket: WebSocket):
 
     def _t2s_tts_barge_suppress_active() -> bool:
         """首帧 TTS 发出后的保护窗内为 True：不触发 barge_in / 不把 VAD speech_start 当用户开说。"""
+        if mode == "pipeline":
+            return bool(pipeline_orch and pipeline_orch.tts_barge_suppress_active())
         if mode != "t2s" or T2S_TTS_BARGE_SUPPRESS_MS <= 0:
             return False
         if t2s_tts_first_audio_mono <= 0:
             return False
         return (time.monotonic() - t2s_tts_first_audio_mono) * 1000.0 < float(T2S_TTS_BARGE_SUPPRESS_MS)
+
+    async def _forward_split_asr_pcm(pcm: bytes) -> None:
+        if mode == "pipeline":
+            if pipeline_orch:
+                await pipeline_orch.feed_pcm(pcm)
+            return
+        if t2s_asr_streaming:
+            t2s_asr_stream_buffer.extend(pcm)
+            t2s_asr_capture_buffer.extend(pcm)
+            while len(t2s_asr_stream_buffer) >= ASR_CHUNK_BYTES:
+                to_send = bytes(t2s_asr_stream_buffer[:ASR_CHUNK_BYTES])
+                del t2s_asr_stream_buffer[:ASR_CHUNK_BYTES]
+                await t2s_asr_streaming.send_audio(to_send, is_last=False)
+                _touch_t2s_asr_real_send()
+        else:
+            t2s_pcm_buffer.extend(pcm)
+            t2s_asr_capture_buffer.extend(pcm)
 
     async def _apply_t2s_vad_event(ev: VadEvent) -> bool:
         """
@@ -1287,27 +1325,24 @@ async def websocket_endpoint(websocket: WebSocket):
                     return False
                 t2s_speech_started = True
                 t2s_speech_started_ts = t2s_last_nonidle_ts
-                barge_in_flag = True
-                send_json(
-                    {
-                        "type": "barge_in",
-                        "source": ev.provider,
-                        "reason": "user_speech",
-                        "reason_label": "用户打断（检测到说话）",
-                    }
-                )
+                if mode == "pipeline" and pipeline_orch:
+                    await pipeline_orch.on_speech_start(source=str(ev.provider))
+                else:
+                    barge_in_flag = True
+                    send_json(
+                        {
+                            "type": "barge_in",
+                            "source": ev.provider,
+                            "reason": "user_speech",
+                            "reason_label": "用户打断（检测到说话）",
+                        }
+                    )
                 t2s_asr_gate_open = True
                 t2s_vad_idle_streak = 0
                 if t2s_pre_roll_chunks:
-                    if t2s_asr_streaming:
+                    if mode == "pipeline" or t2s_asr_streaming:
                         for pr in list(t2s_pre_roll_chunks):
-                            t2s_asr_stream_buffer.extend(pr)
-                            t2s_asr_capture_buffer.extend(pr)
-                        while len(t2s_asr_stream_buffer) >= ASR_CHUNK_BYTES:
-                            to_send = bytes(t2s_asr_stream_buffer[:ASR_CHUNK_BYTES])
-                            del t2s_asr_stream_buffer[:ASR_CHUNK_BYTES]
-                            await t2s_asr_streaming.send_audio(to_send, is_last=False)
-                            _touch_t2s_asr_real_send()
+                            await _forward_split_asr_pcm(pr)
                     else:
                         for pr in list(t2s_pre_roll_chunks):
                             t2s_pcm_buffer.extend(pr)
@@ -1740,11 +1775,11 @@ async def websocket_endpoint(websocket: WebSocket):
     async def _t2s_trigger_complete(*, source: str) -> None:
         """Server-side equivalent of voice_input_complete (t2s only), with dedupe/guard."""
         nonlocal t2s_complete_task, t2s_voice_active, t2s_eou_fired, t2s_last_complete_ts
-        if mode != "t2s":
+        if mode not in {"t2s", "pipeline"}:
             return
-        if not client:
+        if mode == "t2s" and not client:
             return
-        if not t2s_asr_streaming and not t2s_pcm_buffer:
+        if mode == "t2s" and not t2s_asr_streaming and not t2s_pcm_buffer:
             return
         if source in SEMANTIC_VAD_SOURCES:
             now = time.monotonic()
@@ -1759,6 +1794,11 @@ async def websocket_endpoint(websocket: WebSocket):
         t2s_last_complete_ts = time.monotonic()
         _dump_t2s_asr_capture_once(source)
         send_json({"type": "voice_input_complete_suggested", "source": source})
+
+        if mode == "pipeline":
+            if pipeline_orch:
+                asyncio.create_task(pipeline_orch.on_eou())
+            return
 
         if t2s_complete_task and not t2s_complete_task.done():
             return
@@ -2001,6 +2041,11 @@ async def websocket_endpoint(websocket: WebSocket):
                 pass
             t2s_vad = None
         t2s_voice_active = False
+        if mode == "pipeline" and pipeline_orch:
+            try:
+                await pipeline_orch.abort_uplink()
+            except Exception:
+                LOG.debug("pipeline abort_uplink failed", exc_info=True)
 
     async def _t2s_start_voice_input(
         vad_provider_override: str | None = None,
@@ -2014,7 +2059,11 @@ async def websocket_endpoint(websocket: WebSocket):
         nonlocal t2s_pre_roll_chunks, t2s_asr_capture_buffer, t2s_vad_turn_buffer, t2s_vad
         nonlocal t2s_asr_last_real_send_monotonic, t2s_asr_last_keepalive_monotonic, t2s_asr_keepalive_task
 
-        if not client or mode != "t2s":
+        if mode == "pipeline":
+            if not pipeline_orch:
+                send_json({"type": "error", "message": "voice_input_start only valid after pipeline session ready"})
+                return False
+        elif not client or mode != "t2s":
             send_json({"type": "error", "message": "voice_input_start only valid in t2s mode"})
             return False
         if t2s_asr_streaming or t2s_vad is not None:
@@ -2109,6 +2158,33 @@ async def websocket_endpoint(websocket: WebSocket):
         async def _on_asr_notify(level: str, message: str) -> None:
             push_server_log(level, message)
 
+        if mode == "pipeline":
+            try:
+                await pipeline_orch.start_uplink()
+            except Exception as e:
+                LOG.warning("pipeline ASR start failed: %s", e)
+                push_server_log("error", f"pipeline ASR start failed: {e}")
+                t2s_voice_active = False
+                if t2s_vad is not None:
+                    try:
+                        await t2s_vad.close_session()
+                    except Exception:
+                        pass
+                    t2s_vad = None
+                send_json(
+                    {
+                        "type": "error",
+                        "message": (
+                            f"ASR 连接失败: {e}. 排查：config.json asr_app_id / asr_access_key "
+                            "或 ASR_APP_ID / ASR_ACCESS_KEY"
+                        ),
+                    }
+                )
+                send_json({"type": "voice_input_failed", "reason": "asr_init", "message": str(e)})
+                return False
+            send_json({"type": "voice_input_started"})
+            return True
+
         use_livekit_stt = active_vad == "livekit_turn_detector"
         if use_livekit_stt:
             resolved_stt = resolve_livekit_turn_stt_backend(override=stt_backend_override)
@@ -2194,12 +2270,14 @@ async def websocket_endpoint(websocket: WebSocket):
             cfg_mode = (cfg.get("mode") or "").strip()
             if cfg_mode:
                 mode = cfg_mode
+            elif "/t2sbg-pipeline" in referer:
+                mode = "pipeline"
             elif "/t2sbg" in referer:
                 mode = "t2s"
             else:
                 mode = "e2e"
 
-            if mode == "t2s" and hush_enabled():
+            if mode in {"t2s", "pipeline"} and hush_enabled():
                 t2s_hush = create_hush_session()
                 if t2s_hush is not None:
                     LOG.info("t2s Hush denoiser session ready")
@@ -2211,14 +2289,15 @@ async def websocket_endpoint(websocket: WebSocket):
             # Independent demo toggle for "auto 501 from ASR" behavior.
             auto_501_from_asr_enabled = bool(cfg.get("auto_501_from_asr_enabled", True))
             # t2sbg：追问链路暂时关闭；其他 mode 默认开启，可由客户端显式覆盖。
-            external_followup_enabled = bool(cfg.get("external_followup_enabled", mode != "t2s"))
+            # t2sbg / pipeline：追问链路默认关闭
+            external_followup_enabled = bool(cfg.get("external_followup_enabled", mode not in {"t2s", "pipeline"}))
             if cfg.get("system_role"):
                 prompt_manager.set_custom_prompt(
                     system_role=cfg.get("system_role"),
                     speaking_style=cfg.get("speaking_style"),
                 )
             duplex_server_vad = _resolve_duplex_server_vad(cfg, DEFAULT_DUPLEX_SERVER_VAD)
-            if duplex_server_vad and mode != "semi":
+            if duplex_server_vad and mode not in {"semi", "pipeline"}:
                 mode = "e2e"
             raw_voice = (cfg.get("voice") or cfg.get("voice_type") or "").strip()
             if raw_voice:
@@ -2235,113 +2314,67 @@ async def websocket_endpoint(websocket: WebSocket):
         except json.JSONDecodeError:
             pass
 
-        if not DOUBAO_API_KEY and not (APP_ID and ACCESS_KEY):
-            await websocket.send_text(
-                json.dumps(
-                    {
-                        "type": "error",
-                        "message": (
-                            "Missing Doubao credentials. Set DOUBAO_API_KEY (new console, X-Api-Key) "
-                            "or DOUBAO_APP_ID + DOUBAO_ACCESS_KEY (legacy console)."
-                        ),
-                    }
-                )
-            )
-            await websocket.close()
-            return
+        if mode == "pipeline":
+            from backend.pipeline.adapters.asr_volc import VolcAsrAdapter
+            from backend.pipeline.adapters.llm_stub import StubLlm
+            from backend.pipeline.adapters.tts_stub import StubTts
+            from backend.pipeline.orchestrator import PipelineOrchestrator
 
-        client = DuplexVoiceClient(
-            api_key=DOUBAO_API_KEY,
-            app_id=APP_ID,
-            access_key=ACCESS_KEY,
-            on_asr=on_asr,
-            on_asr_ended=on_asr_ended,
-            on_tts_audio=on_tts_audio,
-            on_tts_start=on_tts_start,
-            on_tts_end=on_tts_end,
-            on_chat_response=on_chat_response,
-            on_chat_ended=on_chat_ended,
-            on_barge_in=on_barge_in,
-            on_session_started=on_session_started,
-            on_error=on_error,
-        )
-        await client.connect()
-        # mode: e2e（语音-语音）, semi（语音+追问）, t2s（外部 ASR → 文本 → 语音）
-        input_mod = "audio" if duplex_server_vad else ("text" if mode == "t2s" else "audio")
-        duplex_input_mod = input_mod
-        LOG.info(
-            "StartSession with mode=%s input_mod=%s duplex_server_vad=%s voice=%s",
-            mode,
-            input_mod,
-            duplex_server_vad,
-            session_voice,
-        )
-        session_id = await client.start_session(
-            system_role=prompt_manager.get_system_role(),
-            speaking_style=prompt_manager.get_speaking_style(),
-            input_mod=input_mod,
-            server_vad=duplex_server_vad,
-            end_smooth_window_ms=duplex_end_smooth_ms,
-            voice=session_voice,
-        )
-        client.start_receive_loop()
-        sessions[conn_id] = {
-            "client": client,
-            "session_id": session_id,
-            "mode": mode,
-            "prompt_manager": prompt_manager,
-            "latency_logger": latency_logger,
-        }
-        # 把本轮会话的关键配置打到前端日志里，便于确认是 audio 还是 text。
-        send_json(
-            {
-                "type": "start_session_config",
-                "mode": mode,
-                "input_mod": input_mod,
-                "duplex_input_mod": duplex_input_mod,
-                "duplex_server_vad": duplex_server_vad,
-                "end_smooth_window_ms": duplex_end_smooth_ms,
-                "session_id": session_id,
-                "voice": session_voice,
-                "api_version": "duplex-3.0",
-                "auth_mode": client.auth_mode(),
-                "model": "1.2.6.0",
-                "followup": followup_client.describe_for_client(),
-                "auto_501_from_asr_enabled": auto_501_from_asr_enabled,
-                "external_followup_enabled": external_followup_enabled,
-                "followup_pipeline_active": bool(
-                    mode == "t2s"
-                    and auto_501_from_asr_enabled
-                    and external_followup_enabled
-                    and followup_client.enabled
-                ),
-            }
-        )
-        send_json(
-            {
-                "type": "ready",
+            def _pipeline_asr_factory():
+                rid = os.environ.get("ASR_RESOURCE_ID", DEFAULT_ASR_RESOURCE_ID)
+                return VolcAsrAdapter(ASR_APP_ID, ASR_ACCESS_KEY, resource_id=rid)
+
+            async def _pipeline_emit_pcm(data: bytes) -> None:
+                await _send_bytes_safe(data)
+
+            pipeline_orch = PipelineOrchestrator(
+                llm=StubLlm(chunk_delay_sec=0.012),
+                tts=StubTts(),
+                asr_factory=_pipeline_asr_factory,
+                emit_json=send_json,
+                emit_pcm=_pipeline_emit_pcm,
+                system_role=prompt_manager.get_system_role(),
+                voice=session_voice,
+                tts_barge_suppress_ms=T2S_TTS_BARGE_SUPPRESS_MS,
+            )
+            session_id = str(uuid.uuid4())
+            sessions[conn_id] = {
+                "client": None,
                 "session_id": session_id,
                 "mode": mode,
-                "duplex_server_vad": duplex_server_vad,
-                "recording_ready": mode != "t2s" or duplex_server_vad,
-                "followup": followup_client.describe_for_client(),
-                "auto_501_from_asr_enabled": auto_501_from_asr_enabled,
-                "external_followup_enabled": external_followup_enabled,
-                "followup_pipeline_active": bool(
-                    mode == "t2s"
-                    and auto_501_from_asr_enabled
-                    and external_followup_enabled
-                    and followup_client.enabled
-                ),
-                "hush": hush_status_payload(
-                    ready=t2s_hush is not None,
-                    error=hush_manager_error() if mode == "t2s" and hush_enabled() and t2s_hush is None else "",
-                )
-                if mode == "t2s"
-                else hush_status_payload(ready=False, error=""),
+                "prompt_manager": prompt_manager,
+                "latency_logger": latency_logger,
+                "pipeline": pipeline_orch,
             }
-        )
-        if mode == "t2s" and not duplex_server_vad:
+            send_json(
+                {
+                    "type": "start_session_config",
+                    "mode": mode,
+                    "input_mod": "asr_llm_tts",
+                    "session_id": session_id,
+                    "voice": session_voice,
+                    "api_version": "pipeline-stub",
+                    "model": "stub-llm+stub-tts",
+                    "followup": {"enabled": False},
+                    "auto_501_from_asr_enabled": False,
+                    "external_followup_enabled": False,
+                    "followup_pipeline_active": False,
+                }
+            )
+            send_json(
+                {
+                    "type": "ready",
+                    "session_id": session_id,
+                    "mode": mode,
+                    "duplex_server_vad": False,
+                    "recording_ready": False,
+                    "followup": {"enabled": False},
+                    "hush": hush_status_payload(
+                        ready=t2s_hush is not None,
+                        error=hush_manager_error() if hush_enabled() and t2s_hush is None else "",
+                    ),
+                }
+            )
             send_json(
                 {
                     "type": "session_preparing",
@@ -2349,7 +2382,119 @@ async def websocket_endpoint(websocket: WebSocket):
                     "message": "等待客户端启动 VAD 与语音识别…",
                 }
             )
-            # VAD/ASR 由客户端 voice_input_start 触发（携带 vad_provider），避免连接时用全局默认抢先启动 smart_turn_v3。
+        else:
+            if not DOUBAO_API_KEY and not (APP_ID and ACCESS_KEY):
+                await websocket.send_text(
+                    json.dumps(
+                        {
+                            "type": "error",
+                            "message": (
+                                "Missing Doubao credentials. Set DOUBAO_API_KEY (new console, X-Api-Key) "
+                                "or DOUBAO_APP_ID + DOUBAO_ACCESS_KEY (legacy console)."
+                            ),
+                        }
+                    )
+                )
+                await websocket.close()
+                return
+
+            client = DuplexVoiceClient(
+                api_key=DOUBAO_API_KEY,
+                app_id=APP_ID,
+                access_key=ACCESS_KEY,
+                on_asr=on_asr,
+                on_asr_ended=on_asr_ended,
+                on_tts_audio=on_tts_audio,
+                on_tts_start=on_tts_start,
+                on_tts_end=on_tts_end,
+                on_chat_response=on_chat_response,
+                on_chat_ended=on_chat_ended,
+                on_barge_in=on_barge_in,
+                on_session_started=on_session_started,
+                on_error=on_error,
+            )
+            await client.connect()
+            input_mod = "audio" if duplex_server_vad else ("text" if mode == "t2s" else "audio")
+            duplex_input_mod = input_mod
+            LOG.info(
+                "StartSession with mode=%s input_mod=%s duplex_server_vad=%s voice=%s",
+                mode,
+                input_mod,
+                duplex_server_vad,
+                session_voice,
+            )
+            session_id = await client.start_session(
+                system_role=prompt_manager.get_system_role(),
+                speaking_style=prompt_manager.get_speaking_style(),
+                input_mod=input_mod,
+                server_vad=duplex_server_vad,
+                end_smooth_window_ms=duplex_end_smooth_ms,
+                voice=session_voice,
+            )
+            client.start_receive_loop()
+            sessions[conn_id] = {
+                "client": client,
+                "session_id": session_id,
+                "mode": mode,
+                "prompt_manager": prompt_manager,
+                "latency_logger": latency_logger,
+            }
+            send_json(
+                {
+                    "type": "start_session_config",
+                    "mode": mode,
+                    "input_mod": input_mod,
+                    "duplex_input_mod": duplex_input_mod,
+                    "duplex_server_vad": duplex_server_vad,
+                    "end_smooth_window_ms": duplex_end_smooth_ms,
+                    "session_id": session_id,
+                    "voice": session_voice,
+                    "api_version": "duplex-3.0",
+                    "auth_mode": client.auth_mode(),
+                    "model": "1.2.6.0",
+                    "followup": followup_client.describe_for_client(),
+                    "auto_501_from_asr_enabled": auto_501_from_asr_enabled,
+                    "external_followup_enabled": external_followup_enabled,
+                    "followup_pipeline_active": bool(
+                        mode == "t2s"
+                        and auto_501_from_asr_enabled
+                        and external_followup_enabled
+                        and followup_client.enabled
+                    ),
+                }
+            )
+            send_json(
+                {
+                    "type": "ready",
+                    "session_id": session_id,
+                    "mode": mode,
+                    "duplex_server_vad": duplex_server_vad,
+                    "recording_ready": mode != "t2s" or duplex_server_vad,
+                    "followup": followup_client.describe_for_client(),
+                    "auto_501_from_asr_enabled": auto_501_from_asr_enabled,
+                    "external_followup_enabled": external_followup_enabled,
+                    "followup_pipeline_active": bool(
+                        mode == "t2s"
+                        and auto_501_from_asr_enabled
+                        and external_followup_enabled
+                        and followup_client.enabled
+                    ),
+                    "hush": hush_status_payload(
+                        ready=t2s_hush is not None,
+                        error=hush_manager_error() if mode == "t2s" and hush_enabled() and t2s_hush is None else "",
+                    )
+                    if mode == "t2s"
+                    else hush_status_payload(ready=False, error=""),
+                }
+            )
+            if mode == "t2s" and not duplex_server_vad:
+                send_json(
+                    {
+                        "type": "session_preparing",
+                        "stage": "vad_asr",
+                        "message": "等待客户端启动 VAD 与语音识别…",
+                    }
+                )
 
         while True:
             try:
@@ -2363,9 +2508,12 @@ async def websocket_endpoint(websocket: WebSocket):
                 raise
             if "bytes" in msg and msg["bytes"]:
                 data = msg["bytes"]
-                if not client or client._session_id is None:
+                if mode == "pipeline":
+                    if not pipeline_orch:
+                        continue
+                elif not client or client._session_id is None:
                     continue
-                if mode == "t2s":
+                if mode in {"t2s", "pipeline"}:
                     data = _normalize_input_audio_to_16k(data)
                     if not data:
                         continue
@@ -2374,12 +2522,11 @@ async def websocket_endpoint(websocket: WebSocket):
                         continue
                 chunks = pcm_chunks_from_bytes(data)
                 for ch in chunks:
-                    if mode == "t2s":
+                    if mode in {"t2s", "pipeline"}:
                         # After EoU/completion fires, discard any late mic packets until next start.
                         if t2s_eou_fired:
                             continue
 
-                        # Pluggable semantic VAD (t2s only)
                         chunk_forwarded_by_preroll = False
                         if t2s_voice_active and not t2s_eou_fired:
                             t2s_vad_turn_buffer.extend(ch)
@@ -2395,24 +2542,13 @@ async def websocket_endpoint(websocket: WebSocket):
                                     if await _apply_t2s_vad_event(vad_ev):
                                         chunk_forwarded_by_preroll = True
 
-                        # Gate ASR: only forward audio after nonidle.
                         if (
                             t2s_voice_active
                             and t2s_asr_gate_open
                             and not t2s_eou_fired
                             and not chunk_forwarded_by_preroll
                         ):
-                            if t2s_asr_streaming:
-                                t2s_asr_stream_buffer.extend(ch)
-                                t2s_asr_capture_buffer.extend(ch)
-                                while len(t2s_asr_stream_buffer) >= ASR_CHUNK_BYTES:
-                                    to_send = bytes(t2s_asr_stream_buffer[:ASR_CHUNK_BYTES])
-                                    del t2s_asr_stream_buffer[:ASR_CHUNK_BYTES]
-                                    await t2s_asr_streaming.send_audio(to_send, is_last=False)
-                                    _touch_t2s_asr_real_send()
-                            else:
-                                t2s_pcm_buffer.extend(ch)
-                                t2s_asr_capture_buffer.extend(ch)
+                            await _forward_split_asr_pcm(ch)
                     else:
                         await client.send_audio(ch)
             elif "text" in msg and msg["text"]:
@@ -2436,12 +2572,20 @@ async def websocket_endpoint(websocket: WebSocket):
                             system_role=obj.get("system_role"),
                             speaking_style=obj.get("speaking_style"),
                         )
-                        asyncio.create_task(restart_session("update_prompt"))
+                        if mode == "pipeline" and pipeline_orch:
+                            pipeline_orch.set_system_role(prompt_manager.get_system_role())
+                            send_json({"type": "session_restarted", "reason": "update_prompt"})
+                        else:
+                            asyncio.create_task(restart_session("update_prompt"))
                     elif obj.get("type") == "set_stage":
                         prompt_manager.set_stage(obj.get("stage", "introduction"))
-                        asyncio.create_task(restart_session("set_stage"))
+                        if mode == "pipeline" and pipeline_orch:
+                            pipeline_orch.set_system_role(prompt_manager.get_system_role())
+                            send_json({"type": "session_restarted", "reason": "set_stage"})
+                        else:
+                            asyncio.create_task(restart_session("set_stage"))
                     elif obj.get("type") == "config_audio":
-                        if mode != "t2s":
+                        if mode not in {"t2s", "pipeline"}:
                             continue
                         sr = _set_t2s_input_sample_rate(
                             obj.get("input_sample_rate", obj.get("sample_rate", VAD_ASR_TARGET_SAMPLE_RATE))
@@ -2486,13 +2630,18 @@ async def websocket_endpoint(websocket: WebSocket):
                         # Deprecated: removed from demo UI.
                         send_json({"type": "error", "message": "soft_prompt_update is disabled in this demo"})
                     elif obj.get("type") == "chat_text_query":
-                        # Manual (501) trigger: start a new turn from text.
-                        if not client:
-                            send_json({"type": "error", "message": "client not ready"})
-                            continue
                         content = obj.get("content", "") or ""
                         if not content.strip():
                             send_json({"type": "error", "message": "missing content"})
+                            continue
+                        if mode == "pipeline":
+                            if not pipeline_orch:
+                                send_json({"type": "error", "message": "client not ready"})
+                                continue
+                            await pipeline_orch.on_text_query(content)
+                            continue
+                        if not client:
+                            send_json({"type": "error", "message": "client not ready"})
                             continue
                         await client.send_text_query(content)
                         if mode == "t2s":
@@ -2511,9 +2660,8 @@ async def websocket_endpoint(websocket: WebSocket):
                             lk_th = obj.get("threshold")
                         await _t2s_start_voice_input(vp or None, stt_be or None, lk_th)
                     elif obj.get("type") == "voice_input_complete":
-                        # t2s 模式：用户语音结束，用豆包 ASR 转写后发送给语音对话模型。
-                        if not client or mode != "t2s":
-                            send_json({"type": "error", "message": "voice_input_complete only valid in t2s mode"})
+                        if mode not in {"t2s", "pipeline"}:
+                            send_json({"type": "error", "message": "voice_input_complete only valid in t2s/pipeline mode"})
                             continue
                         # 默认关闭“本地能量 VAD 自动结束”入口：仅允许显式 manual 触发。
                         complete_source = (obj.get("source", "") or "").strip().lower()
@@ -2596,6 +2744,11 @@ async def websocket_endpoint(websocket: WebSocket):
                 pass
             t2s_hush = None
         _close_t2s_debug_files()
+        if pipeline_orch:
+            try:
+                await pipeline_orch.close()
+            except Exception:
+                LOG.debug("pipeline close failed", exc_info=True)
         if client:
             await client.disconnect()
 
