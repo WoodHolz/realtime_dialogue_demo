@@ -82,6 +82,9 @@ class StubLlm:
             gen_id=gen_id,
         )
 
+    async def commit(self, *, final_text: str, gen_id: str) -> None:
+        return
+
     async def cancel(self, gen_id: str) -> None:
         if not gen_id:
             return

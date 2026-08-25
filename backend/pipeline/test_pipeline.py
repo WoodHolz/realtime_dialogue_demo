@@ -176,15 +176,13 @@ async def _restart_resends_committed_history_only():
     await _wait_until(lambda: bool(pcm_out) or bool(tts.fed))
     await _wait_until(lambda: orch._llm_done, timeout=1.0)
     await asyncio.sleep(0.08)
-    if not any(t.role == "assistant" for t in orch.state.history):
-        orch._finalize_history(orch.state.spoken_text or "收到。第一轮。")
-        orch.state.phase = "idle"
     await orch.on_speech_start(source="test")
     await orch.on_asr_partial("第二轮", False)
     await _wait_until(lambda: any(c["user_text"] == "第二轮" for c in llm.calls))
     second = next(c for c in reversed(llm.calls) if c["user_text"] == "第二轮")
     hist = second["history"]
     assert ("user", "第一轮") in hist
+    assert any(r == "assistant" and t for r, t in hist)
     assert "第二轮" not in [t[1] for t in hist]
     await orch.close()
 
@@ -203,3 +201,136 @@ async def _identical_partial_does_not_restart():
     await asyncio.sleep(0.06)
     assert len(llm.calls) == n
     await orch.close()
+
+
+class _SilentTts:
+    """Starts and accepts feed but never fires on_end — TTS hang / WS timeout."""
+
+    def __init__(self) -> None:
+        self.fed: list[str] = []
+        self.on_audio = None
+        self.on_start = None
+        self.on_end = None
+
+    def bind(self, *, on_audio=None, on_start=None, on_end=None) -> None:
+        if on_audio:
+            self.on_audio = on_audio
+        if on_start:
+            self.on_start = on_start
+        if on_end:
+            self.on_end = on_end
+
+    async def start(self, *, voice: str, sample_rate: int = 24000, gen_id: str = "") -> None:
+        if self.on_start:
+            result = self.on_start()
+            if asyncio.iscoroutine(result):
+                await result
+
+    async def feed(self, text: str) -> None:
+        self.fed.append(text)
+
+    async def flush(self) -> None:
+        return
+
+    async def cancel(self) -> None:
+        return
+
+
+def test_next_turn_commits_draft_if_tts_never_ends():
+    asyncio.run(_next_turn_commits_draft_if_tts_never_ends())
+
+
+async def _next_turn_commits_draft_if_tts_never_ends():
+    events: list[dict] = []
+    llm = StubLlm(chunk_delay_sec=0.0)
+    tts = _SilentTts()
+    asr = FakeAsr()
+    orch = PipelineOrchestrator(
+        llm=llm,
+        tts=tts,
+        asr=asr,
+        emit_json=events.append,
+        system_role="你是访谈员",
+        voice="stub",
+        speculate_debounce_sec=0.02,
+        tts_barge_suppress_ms=0,
+    )
+    await orch.on_speech_start(source="test")
+    await orch.on_asr_partial("你好", False)
+    await _wait_until(lambda: len(llm.calls) >= 1)
+    await orch.on_eou(final_text="你好")
+    await _wait_until(lambda: orch._llm_done)
+    await asyncio.sleep(0.05)
+    assert not any(t.role == "assistant" for t in orch.state.history)
+    await orch.on_speech_start(source="test")
+    await orch.on_asr_partial("方便", False)
+    await _wait_until(lambda: any(c["user_text"] == "方便" for c in llm.calls))
+    second = next(c for c in reversed(llm.calls) if c["user_text"] == "方便")
+    hist = second["history"]
+    assert ("user", "你好") in hist
+    assert any(r == "assistant" and "你好" in t for r, t in hist)
+    await orch.close()
+
+
+def test_eou_during_tts_without_speech_start_keeps_history():
+    asyncio.run(_eou_during_tts_without_speech_start_keeps_history())
+
+
+async def _eou_during_tts_without_speech_start_keeps_history():
+    orch, llm, tts, _events, _pcm, _asr = _orch()
+    await orch.on_speech_start(source="test")
+    await orch.on_asr_partial("你好", False)
+    await _wait_until(lambda: len(llm.calls) >= 1)
+    await orch.on_eou(final_text="你好")
+    await _wait_until(lambda: orch.state.phase in {"committed", "tts_playing"})
+    await _wait_until(lambda: orch._llm_done)
+    await asyncio.sleep(0.05)
+    # No on_speech_start — same bug as barge-suppress / missed VAD.
+    await orch.on_eou(final_text="方便的")
+    await _wait_until(lambda: any(c["user_text"] == "方便的" for c in llm.calls))
+    second = next(c for c in reversed(llm.calls) if c["user_text"] == "方便的")
+    hist = second["history"]
+    assert ("user", "你好") in hist
+    assert any(r == "assistant" and t for r, t in hist)
+    await orch.close()
+
+
+def test_dashscope_urls_and_text_delta_filter():
+    from backend.pipeline.config import PUBLIC_LLM_BASE, PUBLIC_TTS_WS, llm_base_url, tts_ws_url
+    from backend.pipeline.adapters.llm_dashscope import build_responses_input, output_text_delta
+    from backend.pipeline.dialogue import HistoryTurn
+
+    assert llm_base_url(workspace_id="workspace-abc") == PUBLIC_LLM_BASE
+    assert llm_base_url() == "https://dashscope.aliyuncs.com/compatible-mode/v1"
+    assert tts_ws_url(workspace_id="workspace-abc") == PUBLIC_TTS_WS
+    assert llm_base_url(base_url="https://example.test/v1/") == "https://example.test/v1"
+    legacy = (
+        "https://ws.cn-beijing.maas.aliyuncs.com"
+        "/api/v2/apps/protocols/compatible-mode/v1"
+    )
+    assert llm_base_url(base_url=legacy) == (
+        "https://ws.cn-beijing.maas.aliyuncs.com/compatible-mode/v1"
+    )
+    from backend.pipeline.config import workspace_llm_base, workspace_tts_ws
+
+    assert workspace_llm_base("ws") == (
+        "https://ws.cn-beijing.maas.aliyuncs.com/compatible-mode/v1"
+    )
+    assert workspace_tts_ws("ws") == "wss://ws.cn-beijing.maas.aliyuncs.com/api-ws/v1/inference"
+
+    items = build_responses_input(
+        "系统",
+        [HistoryTurn(role="user", text="上轮"), HistoryTurn(role="assistant", text="已播前缀")],
+        "帮我查一下上海",
+    )
+    assert items[0] == {"role": "user", "content": "上轮"}
+    assert items[-1] == {"role": "user", "content": "帮我查一下上海"}
+    assert items[1]["role"] == "assistant"
+    from backend.pipeline.dialogue import system_with_progress
+
+    sys = system_with_progress("系统", [HistoryTurn(role="assistant", text="开场白")])
+    assert "禁止再次朗读" in sys
+
+    assert output_text_delta({"type": "response.output_text.delta", "delta": "好的"}) == "好的"
+    assert output_text_delta({"type": "response.reasoning_summary_text.delta", "delta": "思考"}) == ""
+    assert output_text_delta({"type": "response.thinking.delta", "delta": "x"}) == ""

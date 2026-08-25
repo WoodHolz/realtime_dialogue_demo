@@ -18,3 +18,5 @@ funasr>=1.2.0
 modelscope>=1.20.0
 torch>=2.0.0
 torchaudio>=2.0.0
+openai>=1.40.0
+dashscope>=1.20.0

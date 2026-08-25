@@ -720,7 +720,7 @@ async def t2sbg_voice_page():
 
 @app.get("/t2sbg-pipeline")
 async def t2sbg_pipeline_page():
-    """ASR→LLM→TTS pipeline demo (own TTS; stubs until models are wired)."""
+    """ASR→LLM→TTS pipeline demo (DashScope Responses LLM + qwen-audio TTS)."""
     path = _frontend_dir() / "t2sbg.html"
     if not path.exists():
         return HTMLResponse("<p>t2sbg.html not found</p>", status_code=404)
@@ -2316,9 +2316,32 @@ async def websocket_endpoint(websocket: WebSocket):
 
         if mode == "pipeline":
             from backend.pipeline.adapters.asr_volc import VolcAsrAdapter
-            from backend.pipeline.adapters.llm_stub import StubLlm
-            from backend.pipeline.adapters.tts_stub import StubTts
+            from backend.pipeline.config import (
+                build_streaming_llm,
+                build_streaming_tts,
+                load_pipeline_settings,
+            )
             from backend.pipeline.orchestrator import PipelineOrchestrator
+
+            pipeline_settings = load_pipeline_settings()
+            cloud_llm = pipeline_settings.llm_adapter not in {"stub", "llm_stub"}
+            cloud_tts = pipeline_settings.tts_adapter not in {"stub", "tts_stub"}
+            if (cloud_llm or cloud_tts) and not pipeline_settings.api_key:
+                await websocket.send_text(
+                    json.dumps(
+                        {
+                            "type": "error",
+                            "message": (
+                                "Pipeline LLM/TTS needs DASHSCOPE_API_KEY "
+                                "(default host https://dashscope.aliyuncs.com; "
+                                "optional PIPELINE_LLM_BASE_URL / PIPELINE_TTS_WS_URL)."
+                            ),
+                        },
+                        ensure_ascii=False,
+                    )
+                )
+                await websocket.close()
+                return
 
             def _pipeline_asr_factory():
                 rid = os.environ.get("ASR_RESOURCE_ID", DEFAULT_ASR_RESOURCE_ID)
@@ -2327,14 +2350,25 @@ async def websocket_endpoint(websocket: WebSocket):
             async def _pipeline_emit_pcm(data: bytes) -> None:
                 await _send_bytes_safe(data)
 
+            pipeline_voice = pipeline_settings.tts_voice or session_voice
+            try:
+                pipeline_llm = build_streaming_llm(pipeline_settings)
+                pipeline_tts = build_streaming_tts(pipeline_settings)
+            except Exception as exc:
+                await websocket.send_text(
+                    json.dumps({"type": "error", "message": str(exc)}, ensure_ascii=False)
+                )
+                await websocket.close()
+                return
+
             pipeline_orch = PipelineOrchestrator(
-                llm=StubLlm(chunk_delay_sec=0.012),
-                tts=StubTts(),
+                llm=pipeline_llm,
+                tts=pipeline_tts,
                 asr_factory=_pipeline_asr_factory,
                 emit_json=send_json,
                 emit_pcm=_pipeline_emit_pcm,
                 system_role=prompt_manager.get_system_role(),
-                voice=session_voice,
+                voice=pipeline_voice,
                 tts_barge_suppress_ms=T2S_TTS_BARGE_SUPPRESS_MS,
             )
             session_id = str(uuid.uuid4())
@@ -2352,9 +2386,13 @@ async def websocket_endpoint(websocket: WebSocket):
                     "mode": mode,
                     "input_mod": "asr_llm_tts",
                     "session_id": session_id,
-                    "voice": session_voice,
-                    "api_version": "pipeline-stub",
-                    "model": "stub-llm+stub-tts",
+                    "voice": pipeline_voice,
+                    "api_version": "pipeline-dashscope",
+                    "model": pipeline_settings.llm_model,
+                    "tts_model": pipeline_settings.tts_model,
+                    "llm_adapter": pipeline_settings.llm_adapter,
+                    "tts_adapter": pipeline_settings.tts_adapter,
+                    "enable_thinking": pipeline_settings.enable_thinking,
                     "followup": {"enabled": False},
                     "auto_501_from_asr_enabled": False,
                     "external_followup_enabled": False,

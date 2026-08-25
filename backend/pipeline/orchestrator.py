@@ -8,7 +8,7 @@ import time
 import uuid
 from collections.abc import Awaitable, Callable
 
-from backend.pipeline.dialogue import DialogueState, HistoryTurn
+from backend.pipeline.dialogue import DialogueState, HistoryTurn, system_with_progress
 from backend.pipeline.protocols import StreamingAsr, StreamingLlm, StreamingTts
 from backend.pipeline.textutil import SentenceBuffer, normalize_user_text, user_prompts_aligned
 
@@ -62,6 +62,7 @@ class PipelineOrchestrator:
         self._pending_snapshot = ""
         self._queued_spoken_candidate = ""
         self._flush_scheduled = False
+        self._turn_committed = False
         self._bind_llm_tts()
 
     def _bind_llm_tts(self) -> None:
@@ -175,6 +176,17 @@ class PipelineOrchestrator:
             self._emit({"type": "voice_turn_finished", "asr_text_sent": False})
             self.state.phase = "idle"
             return
+        # speech_start can be skipped (TTS barge suppress / VAD miss). If we
+        # overwrite pending_user while still committed/tts_playing, history stays
+        # empty and the next LLM recites the opening again.
+        if self.state.phase in {"committed", "tts_playing"}:
+            if self.state.phase == "tts_playing":
+                await self.tts.cancel()
+                self._tts_started = False
+            await self._cancel_llm()
+            self._begin_user_turn()
+        elif self.state.phase == "idle":
+            self._begin_user_turn()
         self._emit({"type": "local_asr_text", "text": final})
         self.state.pending_user = final
         await self._commit_or_restart(final)
@@ -184,7 +196,10 @@ class PipelineOrchestrator:
         final = (text or "").strip()
         if not final:
             return
-        self.state.phase = "user_speaking"
+        if self.state.phase == "tts_playing":
+            await self.tts.cancel()
+            self._tts_started = False
+        self._begin_user_turn()
         self.state.user_snapshot = final
         self._emit({"type": "local_asr_text", "text": final})
         self.state.pending_user = final
@@ -192,6 +207,9 @@ class PipelineOrchestrator:
         self._emit({"type": "chat_text_query_sent", "reason": "pipeline_text"})
 
     def _begin_user_turn(self) -> None:
+        # Must land the previous user+assistant before wiping draft, or the
+        # next LLM call only sees system_role + new user text and repeats Q0.
+        self._finalize_current_turn()
         self.state.turn_id = _new_id("turn")
         self.state.user_snapshot = ""
         self.state.prompt_user = ""
@@ -209,6 +227,7 @@ class PipelineOrchestrator:
         self._queued_spoken_candidate = ""
         self._pending_snapshot = ""
         self._flush_scheduled = False
+        self._turn_committed = False
         self._emit_turn("speculative")
 
     def _schedule_speculate(self, snapshot: str) -> None:
@@ -255,10 +274,18 @@ class PipelineOrchestrator:
                 "gen_id": gen_id,
                 "user_text": user_text,
                 "reason": reason,
+                "history_turns": len(self.state.history),
             }
         )
+        LOG.info(
+            "pipeline llm start gen_id=%s reason=%s hist=%s user=%s",
+            gen_id,
+            reason,
+            len(self.state.history),
+            (user_text or "")[:40],
+        )
         await self.llm.start_speculative(
-            system=self.system_role,
+            system=system_with_progress(self.system_role, self.state.history),
             history=self.state.committed_history(),
             user_text=user_text,
             gen_id=gen_id,
@@ -268,6 +295,7 @@ class PipelineOrchestrator:
         aligned = bool(self.state.gen_id) and user_prompts_aligned(self.state.prompt_user, final)
         if aligned:
             self.state.phase = "committed"
+            await self.llm.commit(final_text=final, gen_id=self.state.gen_id)
             self._emit(
                 {
                     "type": "llm_committed",
@@ -283,6 +311,7 @@ class PipelineOrchestrator:
             self._emit_turn("discarded")
         await self._restart_llm(final, reason="eou_mismatch")
         self.state.phase = "committed"
+        await self.llm.commit(final_text=final, gen_id=self.state.gen_id)
         self._emit(
             {
                 "type": "llm_committed",
@@ -295,7 +324,9 @@ class PipelineOrchestrator:
         await self._drain_tts()
 
     async def _drain_tts(self) -> None:
-        if self.state.phase != "committed" or self._tts_started:
+        if self._tts_started:
+            return
+        if self.state.phase not in {"committed", "tts_playing"}:
             return
         ready = list(self._queued)
         if not ready and self._llm_done:
@@ -305,6 +336,8 @@ class PipelineOrchestrator:
         if not ready:
             return
         await self._start_tts()
+        if not self._tts_started:
+            return
         self._queued.clear()
         for sent in ready:
             await self._feed_tts_sentence(sent)
@@ -317,16 +350,35 @@ class PipelineOrchestrator:
     async def _start_tts(self) -> None:
         if self._tts_started:
             return
-        self._tts_started = True
+        prev_phase = self.state.phase
         self.state.phase = "tts_playing"
         self._first_audio_mono = 0.0
-        await self.tts.start(voice=self.voice, sample_rate=24000, gen_id=self.state.gen_id)
+        try:
+            await self.tts.start(voice=self.voice, sample_rate=24000, gen_id=self.state.gen_id)
+            self._tts_started = True
+        except Exception:
+            LOG.warning("pipeline TTS start failed gen_id=%s", self.state.gen_id, exc_info=True)
+            self._tts_started = False
+            self.state.phase = prev_phase if prev_phase in {"committed", "tts_playing"} else "committed"
+            self._emit(
+                {
+                    "type": "pipeline_error",
+                    "where": "tts_start",
+                    "turn_id": self.state.turn_id,
+                    "gen_id": self.state.gen_id,
+                }
+            )
+            # Keep draft so the next user turn can still commit assistant text.
 
     async def _feed_tts_sentence(self, sentence: str) -> None:
         if not sentence or not self._tts_started:
             return
         self._queued_spoken_candidate = sentence
-        await self.tts.feed(sentence)
+        try:
+            await self.tts.feed(sentence)
+        except Exception:
+            # DashScope adapter should not raise; keep LLM stream alive regardless.
+            LOG.warning("pipeline TTS feed failed gen_id=%s", self.state.gen_id, exc_info=True)
 
     async def _on_llm_delta(self, gen_id: str, chunk: str) -> None:
         if gen_id != self.state.gen_id or self._closed:
@@ -334,7 +386,10 @@ class PipelineOrchestrator:
         self.state.draft += chunk
         self._emit({"type": "chat", "content": chunk, "reply_id": gen_id, "question_id": self.state.turn_id})
         for sent in self._sentences.feed(chunk):
-            await self._on_llm_sentence(gen_id, sent)
+            try:
+                await self._on_llm_sentence(gen_id, sent)
+            except Exception:
+                LOG.warning("pipeline sentence→TTS path failed gen_id=%s", gen_id, exc_info=True)
 
     async def _on_llm_sentence(self, gen_id: str, sentence: str) -> None:
         if gen_id != self.state.gen_id or self._closed:
@@ -401,15 +456,13 @@ class PipelineOrchestrator:
     async def _on_tts_end(self) -> None:
         if self.state.phase != "tts_playing":
             return
-        spoken = self.state.spoken_text or "".join(self._spoken_sentences)
-        self._finalize_history(spoken)
+        self._finalize_current_turn()
         self.state.phase = "idle"
         self._tts_started = False
         self._emit({"type": "tts_end", "question_id": self.state.turn_id, "reply_id": self.state.gen_id})
 
     async def _barge_in(self, *, source: str) -> None:
-        spoken = self.state.spoken_text or "".join(self._spoken_sentences)
-        self._finalize_history(spoken)
+        self._finalize_current_turn()
         await self.tts.cancel()
         await self._cancel_llm()
         self._tts_started = False
@@ -424,6 +477,27 @@ class PipelineOrchestrator:
             }
         )
         self._emit_turn("barge_in")
+
+    def _assistant_text_for_history(self) -> str:
+        spoken = (self.state.spoken_text or "".join(self._spoken_sentences)).strip()
+        if spoken:
+            return spoken
+        return (self.state.draft or "").strip()
+
+    def _finalize_current_turn(self) -> None:
+        """Persist this turn before the next LLM call. Spoken PCM wins; else draft.
+
+        History used to wait for TTS on_end only. If TTS never started/ended, the
+        next start_speculative saw empty history and replayed the opening script.
+        """
+        if self._turn_committed:
+            return
+        user = (self.state.pending_user or "").strip()
+        assistant = self._assistant_text_for_history()
+        if not user and not assistant:
+            return
+        self._finalize_history(assistant)
+        self._turn_committed = True
 
     def _finalize_history(self, spoken: str) -> None:
         user = (self.state.pending_user or "").strip()
@@ -442,5 +516,3 @@ class PipelineOrchestrator:
                 await self.llm.cancel(gen_id)
             except Exception:
                 LOG.debug("llm cancel failed", exc_info=True)
-
-    # Silence unused Sequence import if any - actually I imported Sequence unused. I'll remove it when writing... I already have it unused. Let me not import Sequence.

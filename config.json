@@ -80,6 +80,23 @@
     "duplug_enabled": false,
     "duplug_url": ""
   },
+  "pipeline": {
+    "description": "ASR→LLM→TTS (/t2sbg-pipeline). Default host https://dashscope.aliyuncs.com/compatible-mode/v1. Workspace dedicated domains later; do not use /api/v2/apps/protocols/compatible-mode/v1.",
+    "workspace_id": "",
+    "llm": {
+      "adapter": "dashscope_responses",
+      "model": "qwen3.5-flash",
+      "base_url": "",
+      "enable_thinking": false
+    },
+    "tts": {
+      "adapter": "dashscope_tts",
+      "model": "qwen-audio-3.0-tts-plus",
+      "voice": "longanlingxi",
+      "ws_url": "",
+      "sample_rate": 24000
+    }
+  },
   "debug": {
     "_comment": "t2s debug and VAD endpointing tuning (all timings in ms/sec as noted).",
     "t2s_audio_dump_enabled": false,
