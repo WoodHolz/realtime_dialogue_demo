@@ -529,6 +529,10 @@ def _read_t2sbg_voice_version_from_config() -> str:
     return _read_config_version("t2sbg_voice_version")
 
 
+def _read_pipeline_voice_version_from_config() -> str:
+    return _read_config_version("pipeline_voice_version")
+
+
 def _read_omni_voice_version_from_config() -> str:
     return _read_config_version("omni_voice_version")
 
@@ -714,6 +718,7 @@ async def t2sbg_voice_page():
         return HTMLResponse("<p>t2sbg.html not found</p>", status_code=404)
     raw = path.read_text(encoding="utf-8")
     raw = raw.replace("'__T2SBG_VOICE_VERSION__'", json.dumps(_read_t2sbg_voice_version_from_config()))
+    raw = raw.replace("'__T2SBG_PAGE_LABEL__'", json.dumps("t2sbg-voice"))
     raw = _inline_ttfs_script_into_t2sbg_html(raw)
     return HTMLResponse(raw, media_type="text/html; charset=utf-8")
 
@@ -725,7 +730,8 @@ async def t2sbg_pipeline_page():
     if not path.exists():
         return HTMLResponse("<p>t2sbg.html not found</p>", status_code=404)
     raw = path.read_text(encoding="utf-8")
-    raw = raw.replace("'__T2SBG_VOICE_VERSION__'", json.dumps(_read_t2sbg_voice_version_from_config()))
+    raw = raw.replace("'__T2SBG_VOICE_VERSION__'", json.dumps(_read_pipeline_voice_version_from_config()))
+    raw = raw.replace("'__T2SBG_PAGE_LABEL__'", json.dumps("t2sbg-pipeline"))
     raw = raw.replace("mode: 't2s'", "mode: 'pipeline'")
     raw = raw.replace(
         "芝麻背调证明人访谈（T2S 纯文本 → 语音）",

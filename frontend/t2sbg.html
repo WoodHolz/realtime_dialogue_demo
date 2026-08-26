@@ -331,8 +331,9 @@
   <script>
     (function () {
       const T2SBG_VOICE_VERSION = '__T2SBG_VOICE_VERSION__';
+      const T2SBG_PAGE_LABEL = '__T2SBG_PAGE_LABEL__';
       const pageVersionEl = document.getElementById('pageVersion');
-      if (pageVersionEl) pageVersionEl.textContent = 't2sbg-voice v' + T2SBG_VOICE_VERSION;
+      if (pageVersionEl) pageVersionEl.textContent = T2SBG_PAGE_LABEL + ' v' + T2SBG_VOICE_VERSION;
       const statusEl = document.getElementById('status');
       const modeLabel = document.getElementById('modeLabel');
       const transcriptEl = document.getElementById('transcript');
