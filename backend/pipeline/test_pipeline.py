@@ -277,7 +277,7 @@ def test_eou_during_tts_without_speech_start_keeps_history():
 
 
 async def _eou_during_tts_without_speech_start_keeps_history():
-    orch, llm, tts, _events, _pcm, _asr = _orch()
+    orch, llm, tts, events, _pcm, _asr = _orch()
     await orch.on_speech_start(source="test")
     await orch.on_asr_partial("你好", False)
     await _wait_until(lambda: len(llm.calls) >= 1)
@@ -287,11 +287,176 @@ async def _eou_during_tts_without_speech_start_keeps_history():
     await asyncio.sleep(0.05)
     # No on_speech_start — same bug as barge-suppress / missed VAD.
     await orch.on_eou(final_text="方便的")
+    assert any(e.get("type") == "barge_in" for e in events)
     await _wait_until(lambda: any(c["user_text"] == "方便的" for c in llm.calls))
     second = next(c for c in reversed(llm.calls) if c["user_text"] == "方便的")
     hist = second["history"]
     assert ("user", "你好") in hist
     assert any(r == "assistant" and t for r, t in hist)
+    await orch.close()
+
+
+def test_barge_in_emits_before_slow_tts_cancel():
+    asyncio.run(_barge_in_emits_before_slow_tts_cancel())
+
+
+async def _barge_in_emits_before_slow_tts_cancel():
+    class SlowCancelTts:
+        def __init__(self) -> None:
+            self.fed: list[str] = []
+            self.cancel_started = asyncio.Event()
+            self.allow_finish = asyncio.Event()
+            self.on_audio = None
+            self.on_start = None
+            self.on_end = None
+
+        def bind(self, *, on_audio=None, on_start=None, on_end=None) -> None:
+            if on_audio:
+                self.on_audio = on_audio
+            if on_start:
+                self.on_start = on_start
+            if on_end:
+                self.on_end = on_end
+
+        async def start(self, *, voice: str, sample_rate: int = 24000, gen_id: str = "") -> None:
+            if self.on_start:
+                result = self.on_start()
+                if asyncio.iscoroutine(result):
+                    await result
+
+        async def feed(self, text: str) -> None:
+            self.fed.append(text)
+            if self.on_audio:
+                result = self.on_audio(b"first")
+                if asyncio.iscoroutine(result):
+                    await result
+
+        async def flush(self) -> None:
+            return
+
+        async def cancel(self) -> None:
+            self.cancel_started.set()
+            await self.allow_finish.wait()
+
+    events: list[dict] = []
+    pcm_out: list[bytes] = []
+    llm = StubLlm(chunk_delay_sec=0.0)
+    tts = SlowCancelTts()
+    asr = FakeAsr()
+    orch = PipelineOrchestrator(
+        llm=llm,
+        tts=tts,
+        asr=asr,
+        emit_json=events.append,
+        emit_pcm=lambda b: pcm_out.append(b),
+        system_role="你是访谈员",
+        voice="stub",
+        speculate_debounce_sec=0.02,
+        tts_barge_suppress_ms=0,
+    )
+    await orch.on_speech_start(source="test")
+    await orch.on_asr_partial("你好", False)
+    await _wait_until(lambda: len(llm.calls) >= 1)
+    await orch.on_eou(final_text="你好")
+    await _wait_until(lambda: b"first" in pcm_out)
+    barge_task = asyncio.create_task(orch.on_speech_start(source="vad"))
+    await _wait_until(lambda: any(e.get("type") == "barge_in" for e in events))
+    assert orch._downlink_muted
+    await orch._on_tts_audio(b"LATE")
+    assert b"LATE" not in pcm_out
+    tts.allow_finish.set()
+    await barge_task
+    await orch.close()
+
+
+def test_speech_start_barges_after_server_tts_end():
+    asyncio.run(_speech_start_barges_after_server_tts_end())
+
+
+async def _speech_start_barges_after_server_tts_end():
+    orch, llm, _tts, events, pcm_out, _asr = _orch()
+    await orch.on_speech_start(source="test")
+    await orch.on_asr_partial("你好", False)
+    await _wait_until(lambda: len(llm.calls) >= 1)
+    await orch.on_eou(final_text="你好")
+    await _wait_until(lambda: bool(pcm_out))
+    await _wait_until(lambda: orch.state.phase == "idle", timeout=2.0)
+    assert orch._client_may_have_tts
+    barged = await orch.on_speech_start(source="vad")
+    assert barged
+    assert any(e.get("type") == "barge_in" for e in events)
+    await orch.close()
+
+
+def test_barge_cancels_in_flight_flush():
+    asyncio.run(_barge_cancels_in_flight_flush())
+
+
+async def _barge_cancels_in_flight_flush():
+    class SlowFlushTts:
+        def __init__(self) -> None:
+            self.fed: list[str] = []
+            self.flush_entered = asyncio.Event()
+            self.flush_finished = False
+            self.on_audio = None
+            self.on_start = None
+            self.on_end = None
+
+        def bind(self, *, on_audio=None, on_start=None, on_end=None) -> None:
+            if on_audio:
+                self.on_audio = on_audio
+            if on_start:
+                self.on_start = on_start
+            if on_end:
+                self.on_end = on_end
+
+        async def start(self, *, voice: str, sample_rate: int = 24000, gen_id: str = "") -> None:
+            if self.on_start:
+                result = self.on_start()
+                if asyncio.iscoroutine(result):
+                    await result
+
+        async def feed(self, text: str) -> None:
+            self.fed.append(text)
+            if self.on_audio:
+                result = self.on_audio(b"pcm")
+                if asyncio.iscoroutine(result):
+                    await result
+
+        async def flush(self) -> None:
+            self.flush_entered.set()
+            await asyncio.sleep(2.0)
+            self.flush_finished = True
+
+        async def cancel(self) -> None:
+            return
+
+    events: list[dict] = []
+    pcm_out: list[bytes] = []
+    llm = StubLlm(chunk_delay_sec=0.0)
+    tts = SlowFlushTts()
+    asr = FakeAsr()
+    orch = PipelineOrchestrator(
+        llm=llm,
+        tts=tts,
+        asr=asr,
+        emit_json=events.append,
+        emit_pcm=lambda b: pcm_out.append(b),
+        system_role="你是访谈员",
+        voice="stub",
+        speculate_debounce_sec=0.02,
+        tts_barge_suppress_ms=0,
+    )
+    await orch.on_speech_start(source="test")
+    await orch.on_asr_partial("你好", False)
+    await _wait_until(lambda: len(llm.calls) >= 1)
+    await orch.on_eou(final_text="你好")
+    await _wait_until(lambda: orch._llm_done)
+    await _wait_until(lambda: tts.flush_entered.is_set())
+    barged = await orch.on_speech_start(source="vad")
+    assert barged
+    await asyncio.sleep(0.05)
+    assert not tts.flush_finished
     await orch.close()
 
 

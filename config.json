@@ -111,10 +111,11 @@
     "t2s_min_speech_ms": 300,
     "t2s_min_turn_gap_ms_comment": "Minimum interval between two completed turns to prevent rapid re-trigger.",
     "t2s_min_turn_gap_ms": 300,
-    "t2s_tts_barge_suppress_ms": 2000
+    "t2s_tts_barge_suppress_ms_comment": "Echo lead-in after first TTS PCM (ms). Keep ~300; 2000 blocks real barge-in.",
+    "t2s_tts_barge_suppress_ms": 300
   },
   "t2sbg_voice_version": "0.0.14",
-  "pipeline_voice_version": "0.0.1",
+  "pipeline_voice_version": "0.0.4",
   "omni_voice_version": "0.0.19",
   "outbound": {
     "description": "Partner API POST /outbound/v1/calls → SIP INVITE/RTP + Duplex Agent. Scenario urge_auth uses config/urge_auth_prompt.py. Set SIP_* / PARTNER_API_KEY / OUTBOUND_DRY_RUN in .env.",

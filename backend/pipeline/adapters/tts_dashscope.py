@@ -25,6 +25,9 @@ StartCb = Callable[[], Awaitable[None] | None]
 EndCb = Callable[[], Awaitable[None] | None]
 
 _CONNECT_TIMEOUT_SEC = float(os.getenv("PIPELINE_TTS_CONNECT_TIMEOUT", "20") or "20")
+# Normal turn: wait for remaining synthesis after streaming_complete (opening can be long).
+# Barge-in cancels the flush task + streaming_cancel; do not shorten this or mid-sentence cuts.
+_FLUSH_TIMEOUT_MS = int(os.getenv("PIPELINE_TTS_FLUSH_TIMEOUT_MS", "60000") or "60000")
 
 
 @contextmanager
@@ -146,23 +149,39 @@ class DashScopeSpeechTts:
                 )
 
     async def flush(self) -> None:
-        synth = self._synth
-        if self._cancelled or not self._started or synth is None:
-            await self._stop_pump(join=False)
-            self._started = False
-            self._synth = None
-            return
+        """Finish the current synthesizer session and emit on_end when audio is done.
+
+        Must not hold ``_feed_lock`` across ``streaming_complete``: barge-in needs
+        to ``cancel()`` / ``start()`` without waiting for the full flush window.
+        On barge-in the orchestrator cancels this task and ``_cancelled`` makes us
+        exit without stopping a newer session.
+        """
+        gen = self._gen_id
         async with self._feed_lock:
-            if self._failed or synth is None:
-                LOG.debug("DashScopeSpeechTts flush skipped (failed or missing synth)")
-            else:
-                try:
-                    await asyncio.to_thread(synth.streaming_complete, 60000)
-                except Exception:
-                    LOG.warning("DashScopeSpeechTts flush failed", exc_info=True)
+            synth = self._synth
+            if self._cancelled or not self._started or synth is None:
+                return
+        timeout_ms = max(1000, _FLUSH_TIMEOUT_MS)
+        try:
+            await asyncio.to_thread(synth.streaming_complete, timeout_ms)
+        except TimeoutError as exc:
+            if self._cancelled or self._gen_id != gen:
+                LOG.debug("DashScopeSpeechTts flush timeout after cancel gen_id=%s", gen)
+                return
+            LOG.warning("DashScopeSpeechTts flush timeout gen_id=%s: %s", gen, exc)
+        except Exception:
+            if self._cancelled or self._gen_id != gen:
+                return
+            LOG.warning("DashScopeSpeechTts flush failed gen_id=%s", gen, exc_info=True)
+            return
+        if self._cancelled or self._gen_id != gen:
+            return
         await self._stop_pump(join=True)
+        if self._cancelled or self._gen_id != gen:
+            return
+        if self._synth is synth:
+            self._synth = None
         self._started = False
-        self._synth = None
         if self.on_end and not self._cancelled:
             result = self.on_end()
             if asyncio.iscoroutine(result):
@@ -175,9 +194,13 @@ class DashScopeSpeechTts:
         self._synth = None
         if synth is not None:
             try:
-                await asyncio.to_thread(synth.streaming_cancel, 200)
+                await asyncio.wait_for(asyncio.to_thread(synth.streaming_cancel, 200), timeout=0.6)
             except Exception:
                 LOG.debug("DashScopeSpeechTts cancel failed", exc_info=True)
+                try:
+                    synth.close()
+                except Exception:
+                    pass
         await self._stop_pump(join=False)
 
     def _make_and_preconnect(self):

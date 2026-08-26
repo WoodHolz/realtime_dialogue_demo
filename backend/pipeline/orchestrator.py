@@ -62,7 +62,11 @@ class PipelineOrchestrator:
         self._pending_snapshot = ""
         self._queued_spoken_candidate = ""
         self._flush_scheduled = False
+        self._flush_task: asyncio.Task | None = None
         self._turn_committed = False
+        self._downlink_muted = True
+        self._client_may_have_tts = False
+        self._tts_cancel_task: asyncio.Task | None = None
         self._bind_llm_tts()
 
     def _bind_llm_tts(self) -> None:
@@ -74,7 +78,8 @@ class PipelineOrchestrator:
             bind_t(on_audio=self._on_tts_audio, on_start=self._on_tts_start, on_end=self._on_tts_end)
 
     def tts_barge_suppress_active(self) -> bool:
-        if self.tts_barge_suppress_ms <= 0 or self._first_audio_mono <= 0:
+        """Echo lead-in only while server is still in tts_playing."""
+        if self._downlink_muted or self.tts_barge_suppress_ms <= 0 or self._first_audio_mono <= 0:
             return False
         if self.state.phase != "tts_playing":
             return False
@@ -134,9 +139,12 @@ class PipelineOrchestrator:
                 self._asr = None
 
     async def on_speech_start(self, *, source: str = "vad") -> bool:
-        """Open a user turn. If TTS is playing, barge-in first. Returns True if barge-in fired."""
+        """Open a user turn. Stop leftover browser TTS even after server on_end."""
         barged = False
-        if self.state.phase == "tts_playing" and not self.tts_barge_suppress_active():
+        should_stop = (
+            self.state.phase == "tts_playing" or self._tts_started or self._client_may_have_tts
+        )
+        if should_stop and not self.tts_barge_suppress_active():
             await self._barge_in(source=source)
             barged = True
         if self.state.phase in {"idle", "committed"} or barged:
@@ -179,11 +187,11 @@ class PipelineOrchestrator:
         # speech_start can be skipped (TTS barge suppress / VAD miss). If we
         # overwrite pending_user while still committed/tts_playing, history stays
         # empty and the next LLM recites the opening again.
-        if self.state.phase in {"committed", "tts_playing"}:
-            if self.state.phase == "tts_playing":
-                await self.tts.cancel()
-                self._tts_started = False
-            await self._cancel_llm()
+        if self.state.phase in {"committed", "tts_playing"} or self._client_may_have_tts:
+            if self.state.phase == "tts_playing" or self._tts_started or self._client_may_have_tts:
+                await self._barge_in(source="eou")
+            else:
+                await self._cancel_llm()
             self._begin_user_turn()
         elif self.state.phase == "idle":
             self._begin_user_turn()
@@ -196,9 +204,8 @@ class PipelineOrchestrator:
         final = (text or "").strip()
         if not final:
             return
-        if self.state.phase == "tts_playing":
-            await self.tts.cancel()
-            self._tts_started = False
+        if self.state.phase == "tts_playing" or self._tts_started or self._client_may_have_tts:
+            await self._barge_in(source="text")
         self._begin_user_turn()
         self.state.user_snapshot = final
         self._emit({"type": "local_asr_text", "text": final})
@@ -227,7 +234,10 @@ class PipelineOrchestrator:
         self._queued_spoken_candidate = ""
         self._pending_snapshot = ""
         self._flush_scheduled = False
+        self._flush_task = None
         self._turn_committed = False
+        self._downlink_muted = True
+        self._client_may_have_tts = False
         self._emit_turn("speculative")
 
     def _schedule_speculate(self, snapshot: str) -> None:
@@ -353,6 +363,7 @@ class PipelineOrchestrator:
         prev_phase = self.state.phase
         self.state.phase = "tts_playing"
         self._first_audio_mono = 0.0
+        self._downlink_muted = False
         try:
             await self.tts.start(voice=self.voice, sample_rate=24000, gen_id=self.state.gen_id)
             self._tts_started = True
@@ -424,22 +435,29 @@ class PipelineOrchestrator:
         self._emit({"type": "chat_end", "question_id": self.state.turn_id, "reply_id": gen_id})
 
     def _schedule_flush(self) -> None:
-        if self._flush_scheduled or not self._tts_started:
+        if self._flush_scheduled or not self._tts_started or self._downlink_muted:
             return
         self._flush_scheduled = True
-        asyncio.create_task(self._safe_flush())
+        self._flush_task = asyncio.create_task(self._safe_flush(), name="pipeline-tts-flush")
 
     async def _safe_flush(self) -> None:
+        if self._downlink_muted or self._closed:
+            return
+        gen = self.state.gen_id
         try:
             await self.tts.flush()
+        except asyncio.CancelledError:
+            raise
         except Exception:
             LOG.debug("pipeline tts flush failed", exc_info=True)
+        if gen != self.state.gen_id or self._downlink_muted:
+            return
 
     async def _on_tts_start(self) -> None:
         self._emit({"type": "tts_start", "question_id": self.state.turn_id, "reply_id": self.state.gen_id})
 
     async def _on_tts_audio(self, pcm: bytes) -> None:
-        if self.state.phase != "tts_playing" or self._closed:
+        if self._downlink_muted or self.state.phase != "tts_playing" or self._closed:
             return
         if pcm:
             if self._first_audio_mono <= 0:
@@ -449,6 +467,7 @@ class PipelineOrchestrator:
                 self._spoken_sentences.append(pending)
                 self.state.spoken_text = "".join(self._spoken_sentences)
         if pcm and self.emit_pcm:
+            self._client_may_have_tts = True
             result = self.emit_pcm(pcm)
             if asyncio.iscoroutine(result):
                 await result
@@ -462,21 +481,62 @@ class PipelineOrchestrator:
         self._emit({"type": "tts_end", "question_id": self.state.turn_id, "reply_id": self.state.gen_id})
 
     async def _barge_in(self, *, source: str) -> None:
-        self._finalize_current_turn()
-        await self.tts.cancel()
-        await self._cancel_llm()
-        self._tts_started = False
-        self.state.phase = "idle"
-        self._emit({"type": "tts_cancel", "turn_id": self.state.turn_id, "gen_id": self.state.gen_id, "source": source})
-        self._emit(
-            {
-                "type": "barge_in",
-                "source": source,
-                "reason": "user_speech",
-                "reason_label": "用户打断（检测到说话）",
-            }
+        """Mute + notify browser first; remote cancel runs in the background."""
+        was_playing = (
+            self.state.phase == "tts_playing" or self._tts_started or self._client_may_have_tts
         )
-        self._emit_turn("barge_in")
+        self._downlink_muted = True
+        self._client_may_have_tts = False
+        flush_task = self._flush_task
+        self._flush_task = None
+        self._flush_scheduled = False
+        if flush_task and not flush_task.done():
+            flush_task.cancel()
+        self._finalize_current_turn()
+        gen_id = self.state.gen_id
+        if self.state.phase == "tts_playing":
+            self.state.phase = "idle"
+        self._tts_started = False
+        self._first_audio_mono = 0.0
+        if was_playing:
+            self._emit(
+                {
+                    "type": "barge_in",
+                    "source": source,
+                    "reason": "user_speech",
+                    "reason_label": "用户打断（检测到说话）",
+                }
+            )
+            self._emit(
+                {
+                    "type": "tts_cancel",
+                    "turn_id": self.state.turn_id,
+                    "gen_id": gen_id,
+                    "source": source,
+                }
+            )
+            self._emit_turn("barge_in")
+        self._schedule_cancel_tts()
+        if gen_id:
+            asyncio.create_task(self._cancel_llm_gen(gen_id), name="pipeline-llm-cancel")
+
+    def _schedule_cancel_tts(self) -> None:
+        task = self._tts_cancel_task
+        if task and not task.done():
+            return
+        self._tts_cancel_task = asyncio.create_task(self._safe_cancel_tts(), name="pipeline-tts-cancel")
+
+    async def _safe_cancel_tts(self) -> None:
+        try:
+            await self.tts.cancel()
+        except Exception:
+            LOG.debug("pipeline tts cancel failed", exc_info=True)
+
+    async def _cancel_llm_gen(self, gen_id: str) -> None:
+        try:
+            await self.llm.cancel(gen_id)
+        except Exception:
+            LOG.debug("llm cancel failed", exc_info=True)
 
     def _assistant_text_for_history(self) -> str:
         spoken = (self.state.spoken_text or "".join(self._spoken_sentences)).strip()
