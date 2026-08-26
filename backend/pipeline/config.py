@@ -42,6 +42,15 @@ def _truthy(raw: str | None, default: bool) -> bool:
     return str(raw).strip().lower() in {"1", "true", "yes", "on"}
 
 
+def _clamp_speech_rate(raw: object, default: float = 1.2) -> float:
+    """DashScope speech_rate is [0.5, 2.0]."""
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        value = float(default)
+    return max(0.5, min(2.0, value))
+
+
 def normalize_llm_base_url(url: str) -> str:
     """Responses API lives at {host}/compatible-mode/v1, not the deprecated v2 apps path."""
     cleaned = (url or "").strip().rstrip("/")
@@ -92,6 +101,7 @@ class PipelineSettings:
     tts_model: str = DEFAULT_TTS_MODEL
     tts_voice: str = DEFAULT_TTS_VOICE
     tts_sample_rate: int = 24000
+    tts_speech_rate: float = 1.2
 
     @property
     def resolved_llm_base(self) -> str:
@@ -108,6 +118,7 @@ class PipelineSettings:
             "llm_model": self.llm_model,
             "tts_model": self.tts_model,
             "tts_voice": self.tts_voice,
+            "tts_speech_rate": self.tts_speech_rate,
             "enable_thinking": self.enable_thinking,
             "has_api_key": bool(self.api_key),
             "workspace_configured": bool(self.workspace_id),
@@ -162,6 +173,9 @@ def load_pipeline_settings() -> PipelineSettings:
             os.getenv("PIPELINE_TTS_VOICE") or tts_cfg.get("voice") or DEFAULT_TTS_VOICE
         ).strip(),
         tts_sample_rate=int(tts_cfg.get("sample_rate") or 24000),
+        tts_speech_rate=_clamp_speech_rate(
+            os.getenv("PIPELINE_TTS_SPEECH_RATE") or tts_cfg.get("speech_rate") or 1.2
+        ),
     )
 
 
@@ -191,4 +205,5 @@ def build_streaming_tts(settings: PipelineSettings | None = None) -> StreamingTt
         model=cfg.tts_model,
         voice=cfg.tts_voice,
         sample_rate=cfg.tts_sample_rate,
+        speech_rate=cfg.tts_speech_rate,
     )

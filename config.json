@@ -94,7 +94,9 @@
       "model": "qwen-audio-3.0-tts-plus",
       "voice": "longanlingxi",
       "ws_url": "",
-      "sample_rate": 24000
+      "sample_rate": 24000,
+      "speech_rate": 1.2,
+      "speech_rate_comment": "DashScope speech_rate in [0.5, 2.0]; 1.0=normal. Override with PIPELINE_TTS_SPEECH_RATE."
     }
   },
   "debug": {
@@ -115,7 +117,7 @@
     "t2s_tts_barge_suppress_ms": 300
   },
   "t2sbg_voice_version": "0.0.14",
-  "pipeline_voice_version": "0.0.4",
+  "pipeline_voice_version": "0.0.6",
   "omni_voice_version": "0.0.19",
   "outbound": {
     "description": "Partner API POST /outbound/v1/calls → SIP INVITE/RTP + Duplex Agent. Scenario urge_auth uses config/urge_auth_prompt.py. Set SIP_* / PARTNER_API_KEY / OUTBOUND_DRY_RUN in .env.",

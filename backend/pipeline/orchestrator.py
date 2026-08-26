@@ -11,6 +11,7 @@ from collections.abc import Awaitable, Callable
 from backend.pipeline.dialogue import DialogueState, HistoryTurn, system_with_progress
 from backend.pipeline.protocols import StreamingAsr, StreamingLlm, StreamingTts
 from backend.pipeline.textutil import SentenceBuffer, normalize_user_text, user_prompts_aligned
+from config.tts_script_prompt import with_tts_script_requirements
 
 LOG = logging.getLogger(__name__)
 
@@ -294,8 +295,12 @@ class PipelineOrchestrator:
             len(self.state.history),
             (user_text or "")[:40],
         )
+        # Base interview prompt stays shared; TTS manuscript rules only join on pipeline LLM calls.
         await self.llm.start_speculative(
-            system=system_with_progress(self.system_role, self.state.history),
+            system=system_with_progress(
+                with_tts_script_requirements(self.system_role),
+                self.state.history,
+            ),
             history=self.state.committed_history(),
             user_text=user_text,
             gen_id=gen_id,

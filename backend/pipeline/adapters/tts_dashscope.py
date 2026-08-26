@@ -60,6 +60,7 @@ class DashScopeSpeechTts:
         model: str,
         voice: str,
         sample_rate: int = 24000,
+        speech_rate: float = 1.2,
         on_audio: AudioCb | None = None,
         on_start: StartCb | None = None,
         on_end: EndCb | None = None,
@@ -69,6 +70,11 @@ class DashScopeSpeechTts:
         self.model = (model or "").strip()
         self.default_voice = (voice or "").strip()
         self.sample_rate = int(sample_rate or 24000)
+        try:
+            rate = float(speech_rate)
+        except (TypeError, ValueError):
+            rate = 1.2
+        self.speech_rate = max(0.5, min(2.0, rate))
         self.on_audio = on_audio
         self.on_start = on_start
         self.on_end = on_end
@@ -274,6 +280,7 @@ class DashScopeSpeechTts:
             model=self.model,
             voice=self._voice,
             format=audio_format,
+            speech_rate=self.speech_rate,
             callback=_Callback(),
             url=self.ws_url or None,
         )

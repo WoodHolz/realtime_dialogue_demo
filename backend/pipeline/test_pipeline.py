@@ -496,6 +496,14 @@ def test_dashscope_urls_and_text_delta_filter():
     sys = system_with_progress("系统", [HistoryTurn(role="assistant", text="开场白")])
     assert "禁止再次朗读" in sys
 
+    from config.tts_script_prompt import TTS_SCRIPT_REQUIREMENTS, with_tts_script_requirements
+
+    joined = with_tts_script_requirements("你是访谈员")
+    assert joined.startswith("你是访谈员")
+    assert "【TTS 合成文稿要求】" in joined
+    assert "[serious]" in joined
+    assert "[laughing]" in TTS_SCRIPT_REQUIREMENTS
+
     assert output_text_delta({"type": "response.output_text.delta", "delta": "好的"}) == "好的"
     assert output_text_delta({"type": "response.reasoning_summary_text.delta", "delta": "思考"}) == ""
     assert output_text_delta({"type": "response.thinking.delta", "delta": "x"}) == ""
