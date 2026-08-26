@@ -1669,6 +1669,8 @@
                       ' · source=' + ((msg && msg.source) ? msg.source : '-')
                   );
                   voiceE2eReset('barge_in');
+                } else if (msg.reason === 'leftover_clear') {
+                  log('tts_cancel: clear leftover queue after AI finished · source=' + ((msg && msg.source) ? msg.source : '-'));
                 } else {
                   log(
                     'tts_cancel: stop TTS · source=' +

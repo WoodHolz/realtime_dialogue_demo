@@ -369,11 +369,11 @@ async def _barge_in_emits_before_slow_tts_cancel():
     await orch.close()
 
 
-def test_speech_start_barges_after_server_tts_end():
-    asyncio.run(_speech_start_barges_after_server_tts_end())
+def test_speech_start_after_tts_end_is_not_barge_in():
+    asyncio.run(_speech_start_after_tts_end_is_not_barge_in())
 
 
-async def _speech_start_barges_after_server_tts_end():
+async def _speech_start_after_tts_end_is_not_barge_in():
     orch, llm, _tts, events, pcm_out, _asr = _orch()
     await orch.on_speech_start(source="test")
     await orch.on_asr_partial("你好", False)
@@ -382,9 +382,13 @@ async def _speech_start_barges_after_server_tts_end():
     await _wait_until(lambda: bool(pcm_out))
     await _wait_until(lambda: orch.state.phase == "idle", timeout=2.0)
     assert orch._client_may_have_tts
+    events.clear()
     barged = await orch.on_speech_start(source="vad")
-    assert barged
-    assert any(e.get("type") == "barge_in" for e in events)
+    assert not barged
+    assert not any(e.get("type") == "barge_in" for e in events)
+    cancel = next(e for e in events if e.get("type") == "tts_cancel")
+    assert cancel.get("reason") == "leftover_clear"
+    assert orch.state.phase == "user_speaking"
     await orch.close()
 
 

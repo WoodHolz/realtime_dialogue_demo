@@ -140,14 +140,15 @@ class PipelineOrchestrator:
                 self._asr = None
 
     async def on_speech_start(self, *, source: str = "vad") -> bool:
-        """Open a user turn. Stop leftover browser TTS even after server on_end."""
+        """Open a user turn. Real barge-in only while TTS is still active."""
         barged = False
-        should_stop = (
-            self.state.phase == "tts_playing" or self._tts_started or self._client_may_have_tts
-        )
-        if should_stop and not self.tts_barge_suppress_active():
+        actively_playing = self.state.phase == "tts_playing" or self._tts_started
+        if actively_playing and not self.tts_barge_suppress_active():
             await self._barge_in(source=source)
             barged = True
+        elif self._client_may_have_tts and self.state.phase == "idle":
+            # Server already finished; leftover browser queue is not a user interrupt.
+            await self._clear_leftover_playback(source=source)
         if self.state.phase in {"idle", "committed"} or barged:
             self._begin_user_turn()
         return barged
@@ -188,13 +189,18 @@ class PipelineOrchestrator:
         # speech_start can be skipped (TTS barge suppress / VAD miss). If we
         # overwrite pending_user while still committed/tts_playing, history stays
         # empty and the next LLM recites the opening again.
-        if self.state.phase in {"committed", "tts_playing"} or self._client_may_have_tts:
-            if self.state.phase == "tts_playing" or self._tts_started or self._client_may_have_tts:
+        if self.state.phase in {"committed", "tts_playing"}:
+            if self.state.phase == "tts_playing" or self._tts_started:
                 await self._barge_in(source="eou")
+            elif self._client_may_have_tts:
+                await self._clear_leftover_playback(source="eou")
+                await self._cancel_llm()
             else:
                 await self._cancel_llm()
             self._begin_user_turn()
         elif self.state.phase == "idle":
+            if self._client_may_have_tts:
+                await self._clear_leftover_playback(source="eou")
             self._begin_user_turn()
         self._emit({"type": "local_asr_text", "text": final})
         self.state.pending_user = final
@@ -205,8 +211,10 @@ class PipelineOrchestrator:
         final = (text or "").strip()
         if not final:
             return
-        if self.state.phase == "tts_playing" or self._tts_started or self._client_may_have_tts:
+        if self.state.phase == "tts_playing" or self._tts_started:
             await self._barge_in(source="text")
+        elif self._client_may_have_tts:
+            await self._clear_leftover_playback(source="text")
         self._begin_user_turn()
         self.state.user_snapshot = final
         self._emit({"type": "local_asr_text", "text": final})
@@ -483,13 +491,29 @@ class PipelineOrchestrator:
         self._finalize_current_turn()
         self.state.phase = "idle"
         self._tts_started = False
+        # Keep _client_may_have_tts so a following utterance can silently clear
+        # leftover browser queue without being labeled barge-in.
         self._emit({"type": "tts_end", "question_id": self.state.turn_id, "reply_id": self.state.gen_id})
+
+    async def _clear_leftover_playback(self, *, source: str) -> None:
+        """Stop browser leftover PCM after server tts_end without labeling barge-in."""
+        if not self._client_may_have_tts:
+            return
+        self._downlink_muted = True
+        self._client_may_have_tts = False
+        self._emit(
+            {
+                "type": "tts_cancel",
+                "turn_id": self.state.turn_id,
+                "gen_id": self.state.gen_id,
+                "source": source,
+                "reason": "leftover_clear",
+            }
+        )
 
     async def _barge_in(self, *, source: str) -> None:
         """Mute + notify browser first; remote cancel runs in the background."""
-        was_playing = (
-            self.state.phase == "tts_playing" or self._tts_started or self._client_may_have_tts
-        )
+        was_playing = self.state.phase == "tts_playing" or self._tts_started
         self._downlink_muted = True
         self._client_may_have_tts = False
         flush_task = self._flush_task
