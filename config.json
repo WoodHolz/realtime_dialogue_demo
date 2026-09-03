@@ -117,7 +117,7 @@
     "t2s_tts_barge_suppress_ms": 300
   },
   "t2sbg_voice_version": "0.0.14",
-  "pipeline_voice_version": "0.0.7",
+  "pipeline_voice_version": "0.0.8",
   "omni_voice_version": "0.0.19",
   "outbound": {
     "description": "Partner API POST /outbound/v1/calls → SIP INVITE/RTP + Duplex Agent. Scenario urge_auth uses config/urge_auth_prompt.py. Set SIP_* / PARTNER_API_KEY / OUTBOUND_DRY_RUN in .env.",

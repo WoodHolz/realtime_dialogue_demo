@@ -6,7 +6,12 @@ from __future__ import annotations
 
 import json
 import gradio as gr
-from config.prompt_templates import DEFAULT_SYSTEM_ROLE, DEFAULT_SPEAKING_STYLE, STAGE_PROMPTS
+from config.prompt_templates import (
+    DEFAULT_SPEAKING_STYLE,
+    DEFAULT_SYSTEM_ROLE,
+    STAGE_PROMPTS,
+    verification_case_to_json,
+)
 
 # Base URL for backend (same origin when served together)
 # 使用相对路径向上一层，兼容 /voice 与 /s2s/voice 这种挂载方式。
@@ -36,9 +41,15 @@ def ui_blocks():
                 info="动态阶段：开场 / 项目讨论 / 深度技术 / 压力面试",
             )
 
-        with gr.Accordion("System Prompt (O 版本)", open=True):
+        with gr.Accordion("核实案例 + System Prompt", open=True):
+            verification_case = gr.Textbox(
+                label="Verification Case JSON（每人/每通不同）",
+                value=verification_case_to_json(),
+                lines=12,
+                placeholder="config/verification_cases/default.json 同结构",
+            )
             system_role = gr.Textbox(
-                label="System Role",
+                label="System Role（可由案例生成；voice 页可一键重建）",
                 value=DEFAULT_SYSTEM_ROLE,
                 lines=6,
                 placeholder="系统人设与规则",
@@ -48,6 +59,10 @@ def ui_blocks():
                 value=DEFAULT_SPEAKING_STYLE,
                 lines=2,
                 placeholder="说话风格",
+            )
+            gr.Markdown(
+                "改案例后请到 Real-Time Voice 页粘贴 JSON，点「用案例生成 Prompt」；"
+                "或直接编辑 `config/verification_cases/default.json` 后重启服务。"
             )
 
         with gr.Row():

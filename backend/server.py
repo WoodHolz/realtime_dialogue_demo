@@ -29,8 +29,8 @@ from datetime import datetime, timezone
 from typing import Any
 
 import numpy as np
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
-from fastapi.responses import HTMLResponse, FileResponse
+from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 
 try:
     import soxr
@@ -692,6 +692,52 @@ async def prod_voices_page():
     from backend.prod.routes import render_prod_voices_page
 
     return render_prod_voices_page()
+
+
+@app.get("/api/verification-case/default")
+async def verification_case_default():
+    """Default 背调核实案例 JSON（每人/每通可由网页覆盖）。"""
+    from config.prompt_templates import (
+        DEFAULT_VERIFICATION_CASE,
+        build_verification_system_role,
+        verification_case_to_json,
+    )
+
+    case = dict(DEFAULT_VERIFICATION_CASE)
+    return JSONResponse(
+        {
+            "case": case,
+            "case_json": verification_case_to_json(case),
+            "system_role": build_verification_system_role(case),
+        }
+    )
+
+
+@app.post("/api/verification-case/build")
+async def verification_case_build(request: Request):
+    """Build system_role from an external verification case body."""
+    from config.prompt_templates import (
+        build_verification_system_role,
+        merge_verification_case,
+        verification_case_to_json,
+    )
+
+    try:
+        payload = await request.json()
+    except Exception:  # noqa: BLE001
+        payload = {}
+    raw = payload.get("case") if isinstance(payload, dict) else None
+    if raw is None and isinstance(payload, dict):
+        # Allow posting the case object directly.
+        raw = payload
+    case = merge_verification_case(raw if isinstance(raw, dict) else None)
+    return JSONResponse(
+        {
+            "case": case,
+            "case_json": verification_case_to_json(case),
+            "system_role": build_verification_system_role(case),
+        }
+    )
 
 
 @app.get("/voice")
@@ -2297,10 +2343,11 @@ async def websocket_endpoint(websocket: WebSocket):
             # t2sbg：追问链路暂时关闭；其他 mode 默认开启，可由客户端显式覆盖。
             # t2sbg / pipeline：追问链路默认关闭
             external_followup_enabled = bool(cfg.get("external_followup_enabled", mode not in {"t2s", "pipeline"}))
-            if cfg.get("system_role"):
+            if cfg.get("verification_case") or cfg.get("system_role"):
                 prompt_manager.set_custom_prompt(
                     system_role=cfg.get("system_role"),
                     speaking_style=cfg.get("speaking_style"),
+                    verification_case=cfg.get("verification_case"),
                 )
             duplex_server_vad = _resolve_duplex_server_vad(cfg, DEFAULT_DUPLEX_SERVER_VAD)
             if duplex_server_vad and mode not in {"semi", "pipeline"}:
@@ -2615,6 +2662,7 @@ async def websocket_endpoint(websocket: WebSocket):
                         prompt_manager.set_custom_prompt(
                             system_role=obj.get("system_role"),
                             speaking_style=obj.get("speaking_style"),
+                            verification_case=obj.get("verification_case"),
                         )
                         if mode == "pipeline" and pipeline_orch:
                             pipeline_orch.set_system_role(prompt_manager.get_system_role())
