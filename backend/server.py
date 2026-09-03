@@ -2273,7 +2273,13 @@ async def websocket_endpoint(websocket: WebSocket):
                 t2s_vad = None
             if use_livekit_stt:
                 resolved_stt = resolve_livekit_turn_stt_backend(override=stt_backend_override)
-                if resolved_stt == "funasr":
+                if resolved_stt == "dashscope":
+                    err_msg = (
+                        f"DashScope Paraformer ASR 连接失败: {e}. "
+                        "排查：1) 设置 DASHSCOPE_API_KEY 2) pip install dashscope "
+                        "3) 可选 LIVEKIT_TURN_STT=dashscope / vad.livekit_turn.stt_backend"
+                    )
+                elif resolved_stt == "funasr":
                     err_msg = (
                         f"FunASR SenseVoice 启动失败: {e}. "
                         "请安装: pip install funasr modelscope torch torchaudio "

@@ -2,8 +2,8 @@
 """
 STT factory for LiveKit turn-detector.
 
-Default: local FunASR SenseVoiceSmall (CPU, no cloud keys).
-Optional: Volc streaming ASR (Doubao) or LiveKit Cloud Inference STT.
+Default: DashScope Paraformer realtime (online, DASHSCOPE_API_KEY).
+Optional: local FunASR, Volc streaming ASR, or LiveKit Cloud Inference STT.
 """
 from __future__ import annotations
 
@@ -14,8 +14,12 @@ from pathlib import Path
 from typing import Awaitable, Callable
 
 from backend.asr_client import DEFAULT_ASR_RESOURCE_ID, VolcAsrStreamingSession
+from backend.dashscope_asr_client import (
+    DashScopeAsrStreamingSession,
+    dashscope_asr_model,
+    dashscope_language_hints,
+)
 from backend.funasr_sensevoice_stt_client import (
-    CHUNK_BYTES,
     FunasrSenseVoiceStreamingSession,
     funasr_sensevoice_language,
     funasr_sensevoice_model,
@@ -28,7 +32,21 @@ from backend.livekit_inference_stt_client import (
 
 LOG = logging.getLogger(__name__)
 
-_BACKENDS = frozenset({"funasr", "sensevoice", "local", "volc", "livekit_inference", "inference"})
+_BACKENDS = frozenset(
+    {
+        "dashscope",
+        "aliyun",
+        "ali",
+        "paraformer",
+        "bailian",
+        "funasr",
+        "sensevoice",
+        "local",
+        "volc",
+        "livekit_inference",
+        "inference",
+    }
+)
 
 
 def _load_cfg() -> dict:
@@ -48,6 +66,8 @@ def normalize_livekit_stt_backend(raw: str | None) -> str | None:
     val = (raw or "").strip().lower()
     if not val:
         return None
+    if val in {"dashscope", "aliyun", "ali", "paraformer", "bailian", "百炼"}:
+        return "dashscope"
     if val in {"sensevoice", "local", "funasr"}:
         return "funasr"
     if val in {"volc", "volcano", "doubao", "volc_streaming", "volc_asr", "豆包"}:
@@ -70,7 +90,7 @@ def _default_livekit_turn_stt_backend() -> str:
     norm = normalize_livekit_stt_backend(cfg)
     if norm:
         return norm
-    return "funasr"
+    return "dashscope"
 
 
 def resolve_livekit_turn_stt_backend(*, override: str | None = None) -> str:
@@ -86,6 +106,8 @@ def livekit_turn_stt_backend() -> str:
 
 def livekit_turn_stt_display_label(backend: str | None = None) -> str:
     active = backend or resolve_livekit_turn_stt_backend()
+    if active == "dashscope":
+        return "DashScope Paraformer"
     if active == "funasr":
         return "FunASR SenseVoice"
     if active == "volc":
@@ -97,6 +119,8 @@ def livekit_turn_stt_display_label(backend: str | None = None) -> str:
 
 def livekit_turn_stt_model_label(backend: str | None = None) -> str:
     active = backend or resolve_livekit_turn_stt_backend()
+    if active == "dashscope":
+        return dashscope_asr_model()
     if active == "funasr":
         return funasr_sensevoice_model()
     if active == "volc":
@@ -106,6 +130,9 @@ def livekit_turn_stt_model_label(backend: str | None = None) -> str:
 
 def livekit_turn_stt_language_label(backend: str | None = None) -> str:
     active = backend or resolve_livekit_turn_stt_backend()
+    if active == "dashscope":
+        hints = dashscope_language_hints()
+        return hints[0] if hints else "zh"
     if active == "funasr":
         return funasr_sensevoice_language()
     if active == "volc":
@@ -146,6 +173,19 @@ def create_livekit_turn_stt_session(
     on_server_error: Callable[[int | None], Awaitable[None]] | None = None,
 ):
     backend = resolve_livekit_turn_stt_backend(override=stt_backend)
+    if backend == "dashscope":
+        LOG.info(
+            "LiveKit turn STT: DashScope Paraformer (%s, hints=%s)",
+            dashscope_asr_model(),
+            dashscope_language_hints(),
+        )
+        return DashScopeAsrStreamingSession(
+            model=dashscope_asr_model(),
+            language_hints=dashscope_language_hints(),
+            on_partial=on_partial,
+            on_notify=on_notify,
+            on_server_error=on_server_error,
+        )
     if backend == "funasr":
         LOG.info(
             "LiveKit turn STT: FunASR SenseVoice (%s, %s, cpu)",

@@ -54,7 +54,7 @@
     }
   },
   "vad": {
-    "description": "VAD provider: smart_turn_v3 (default), livekit_turn_detector, or duplug. Used by t2sbg and t2sbg-omni. Env: VAD_PROVIDER, SMART_TURN_*, LIVEKIT_TURN_*, VAD_SILENCE_FORCE_SECS.",
+    "description": "VAD provider: smart_turn_v3 (default), livekit_turn_detector, or duplug. Used by t2sbg and t2sbg-omni. Env: VAD_PROVIDER, SMART_TURN_*, LIVEKIT_TURN_*, VAD_SILENCE_FORCE_SECS, LIVEKIT_TURN_STT, DASHSCOPE_API_KEY.",
     "provider": "smart_turn_v3",
     "silence_force_secs": 1.0,
     "silence_force_secs_comment": "Sustained silence during an active turn before forcing turn end when semantic EOU rejects. 0 = semantic-only.",
@@ -68,7 +68,10 @@
       "language": "zh",
       "threshold": 0.004,
       "embedded_asr": false,
-      "stt_backend": "funasr",
+      "stt_backend": "dashscope",
+      "dashscope_asr_model": "paraformer-realtime-v2",
+      "dashscope_language_hints": ["zh"],
+      "dashscope_ws_url": "",
       "funasr_model": "iic/SenseVoiceSmall",
       "funasr_language": "zh",
       "funasr_device": "cpu",
