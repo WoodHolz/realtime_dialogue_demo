@@ -1,0 +1,83 @@
+{
+  "id": "gap_missing_noncompete_near_end",
+  "category": "completeness_gap",
+  "title": "近完整访谈漏了竞业：收线前应补问",
+  "description": "历史已覆盖公司/入职离职/职位/原因/违规/保密/管理/上级/返聘/证明人，但从未问竞业。用户催结束时不得说再见，应开放补问竞业。",
+  "history": [
+    {
+      "role": "assistant",
+      "text": "您好，请问是深圳图灵完备网络科技有限公司吗？我们是芝麻背调，候选人阿强提供了您作为证明人，想跟您做信息核实，大概需要5到7分钟，请问您现在方便吗？"
+    },
+    { "role": "user", "text": "方便，你说。" },
+    {
+      "role": "assistant",
+      "text": "好的，谢谢。候选人阿强提供的主体公司是深圳图灵完备网络科技有限公司，请问您确认他是在这家公司任职的吗？"
+    },
+    { "role": "user", "text": "对，就是图灵完备。" },
+    {
+      "role": "assistant",
+      "text": "好的。我们了解到阿强入职时间是2022年6月13日，想跟您核实一下，准确吗？"
+    },
+    { "role": "user", "text": "对的。" },
+    {
+      "role": "assistant",
+      "text": "我们了解到离职时间是2025年11月28日，想跟您确认一下？"
+    },
+    { "role": "user", "text": "是的，那天走的。" },
+    {
+      "role": "assistant",
+      "text": "我们了解到他离职前是高级产品经理，想跟您核实一下？"
+    },
+    { "role": "user", "text": "没错。" },
+    {
+      "role": "assistant",
+      "text": "关于离职原因，您了解的情况是怎么记录的？"
+    },
+    { "role": "user", "text": "他自己主动离职，个人发展。" },
+    {
+      "role": "assistant",
+      "text": "他在职期间有没有违规违纪，或劳动争议、仲裁的情况？"
+    },
+    { "role": "user", "text": "没有。" },
+    {
+      "role": "assistant",
+      "text": "另外想确认一下，他在职期间有没有签过保密协议？"
+    },
+    { "role": "user", "text": "有签保密。" },
+    {
+      "role": "assistant",
+      "text": "这个岗位有没有管理职责，比如要不要带团队？"
+    },
+    { "role": "user", "text": "不带人，纯IC。" },
+    {
+      "role": "assistant",
+      "text": "离职前最后一任直属上级是哪位？担任什么职位？"
+    },
+    { "role": "user", "text": "阿珍，产品总监。" },
+    {
+      "role": "assistant",
+      "text": "如果将来有合适机会，公司是否愿意再次聘用他？"
+    },
+    { "role": "user", "text": "愿意。" },
+    {
+      "role": "assistant",
+      "text": "方便了解一下您怎么称呼？在公司什么职位？和阿强是什么工作关系？"
+    },
+    { "role": "user", "text": "我叫阿珍，产品总监，他直属上级。" },
+    {
+      "role": "assistant",
+      "text": "您和阿强大概共事多长时间？"
+    },
+    { "role": "user", "text": "大概三年多吧。" }
+  ],
+  "user": "就这些了吧？我还有会，能结束了吗？",
+  "expect": {
+    "must_any": ["竞业", "竞业禁止"],
+    "forbid_ending": true,
+    "must_ask": true,
+    "single_question": true,
+    "no_markdown": true,
+    "max_questions": 1,
+    "must_not_any": ["签过竞业", "有签署竞业", "登记有竞业"]
+  }
+}

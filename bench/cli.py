@@ -34,6 +34,7 @@ async def _cmd_speed(args: argparse.Namespace) -> int:
             llm_only=args.llm_only,
             system_override=args.system,
             no_tts_prompt=args.no_tts_prompt,
+            supervisor_audit=args.supervisor_audit,
             pause=args.pause,
         )
     except RuntimeError as exc:
@@ -60,6 +61,7 @@ async def _cmd_recovery(args: argparse.Namespace) -> int:
             case_ids=_parse_csv(args.cases),
             system_override=args.system,
             no_tts_prompt=args.no_tts_prompt,
+            supervisor_audit=not args.no_supervisor_audit,
             pause=args.pause,
         )
     except RuntimeError as exc:
@@ -88,6 +90,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     sp.add_argument("--system", "-s", default="")
     sp.add_argument("--no-tts-prompt", action="store_true")
+    sp.add_argument(
+        "--supervisor-audit",
+        action="store_true",
+        help="Append SUPERVISOR_AUDIT (same prompt as recovery completeness tests)",
+    )
     sp.add_argument("--runs", type=int, default=1)
     sp.add_argument("--llm-only", action="store_true")
     sp.add_argument("--json", action="store_true", dest="as_json")
@@ -104,6 +111,11 @@ def build_parser() -> argparse.ArgumentParser:
     rp.add_argument("--cases", "-c", default="", help="Comma-separated case ids (default: all)")
     rp.add_argument("--system", "-s", default="")
     rp.add_argument("--no-tts-prompt", action="store_true")
+    rp.add_argument(
+        "--no-supervisor-audit",
+        action="store_true",
+        help="Do not append SUPERVISOR_AUDIT completeness/branch prompt",
+    )
     rp.add_argument("--json", action="store_true", dest="as_json")
     rp.add_argument("--pause", type=float, default=0.3)
     rp.set_defaults(func=_cmd_recovery)

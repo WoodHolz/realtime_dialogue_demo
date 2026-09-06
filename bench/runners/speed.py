@@ -184,6 +184,7 @@ async def run_speed(
     llm_only: bool = False,
     system_override: str = "",
     no_tts_prompt: bool = False,
+    supervisor_audit: bool = False,
     pause: float = 0.5,
     settings: PipelineSettings | None = None,
 ) -> dict[str, object]:
@@ -193,6 +194,7 @@ async def run_speed(
     system, prompt_src = resolve_system_prompt(
         system_override=system_override,
         no_tts_prompt=no_tts_prompt,
+        supervisor_audit=supervisor_audit,
     )
 
     assert_keys_for_models(specs, cfg, need_tts=not llm_only)
@@ -218,6 +220,7 @@ async def run_speed(
         "system_source": prompt_src,
         "system_chars": len(system),
         "llm_only": llm_only,
+        "supervisor_audit": bool(supervisor_audit),
         "settings": cfg.describe(),
         "models": [s.as_dict() for s in summaries],
     }
@@ -241,6 +244,7 @@ def print_speed_summary(payload: dict[str, object]) -> None:
     print()
     print(f"Query: {payload.get('query')!r}")
     print(f"Prompt: {payload.get('system_source')} ({payload.get('system_chars')} chars)")
+    print(f"Supervisor audit: {payload.get('supervisor_audit')}")
     print(f"TTS: {'off (LLM only)' if skip_tts else 'on (pipeline path)'}")
     print()
 

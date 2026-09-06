@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from backend.prompt_manager import PromptManager
+from config.supervisor_audit_prompt import with_supervisor_audit
 from config.tts_script_prompt import with_tts_script_requirements
 
 DEFAULT_QUERY = "方便，你说。"
@@ -19,10 +20,20 @@ def resolve_system_prompt(
     *,
     system_override: str = "",
     no_tts_prompt: bool = False,
+    supervisor_audit: bool = False,
 ) -> tuple[str, str]:
     """Return (system_text, source_label)."""
     if (system_override or "").strip():
-        return system_override.strip(), "custom"
-    if no_tts_prompt:
-        return load_pipeline_system_prompt(include_tts_script=False), "pipeline verification (no TTS block)"
-    return load_pipeline_system_prompt(include_tts_script=True), "pipeline verification + TTS_SCRIPT_REQUIREMENTS"
+        text = system_override.strip()
+        src = "custom"
+    elif no_tts_prompt:
+        text = load_pipeline_system_prompt(include_tts_script=False)
+        src = "pipeline verification (no TTS block)"
+    else:
+        text = load_pipeline_system_prompt(include_tts_script=True)
+        src = "pipeline verification + TTS_SCRIPT_REQUIREMENTS"
+
+    if supervisor_audit:
+        text = with_supervisor_audit(text)
+        src = f"{src} + SUPERVISOR_AUDIT"
+    return text, src

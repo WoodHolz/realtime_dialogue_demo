@@ -25,6 +25,8 @@ class SpeedRequest(BaseModel):
     llm_only: bool = True
     pause: float = 0.5
     no_tts_prompt: bool = False
+    # Same as recovery: concat SUPERVISOR_AUDIT for apples-to-apples latency.
+    supervisor_audit: bool = False
 
 
 class RecoveryRequest(BaseModel):
@@ -32,6 +34,8 @@ class RecoveryRequest(BaseModel):
     case_ids: list[str] = Field(default_factory=list)
     pause: float = 0.3
     no_tts_prompt: bool = False
+    # Temporary: concat supervisor audit block (completeness / branch / 追问).
+    supervisor_audit: bool = True
 
 
 @router.get("/bench")
@@ -82,6 +86,7 @@ async def bench_speed(body: SpeedRequest) -> dict[str, Any]:
             llm_only=body.llm_only,
             pause=max(0.0, body.pause),
             no_tts_prompt=body.no_tts_prompt,
+            supervisor_audit=body.supervisor_audit,
         )
     except RuntimeError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -97,6 +102,7 @@ async def bench_recovery(body: RecoveryRequest) -> dict[str, Any]:
             case_ids=body.case_ids,
             pause=max(0.0, body.pause),
             no_tts_prompt=body.no_tts_prompt,
+            supervisor_audit=body.supervisor_audit,
         )
     except RuntimeError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

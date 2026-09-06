@@ -144,6 +144,7 @@
     <textarea id="speed-query"></textarea>
     <div class="checks">
       <label><input id="speed-llm-only" type="checkbox" checked /> LLM only（跳过 TTS）</label>
+      <label><input id="speed-supervisor-audit" type="checkbox" /> 拼接纠偏审查 prompt（与 recovery 同条件）</label>
     </div>
     <button type="button" class="run" id="speed-run">Run speed</button>
     <div class="status" id="speed-status"></div>
@@ -159,6 +160,9 @@
       </div>
     </div>
     <div class="checks" id="rec-presets"></div>
+    <div class="checks">
+      <label><input id="rec-supervisor-audit" type="checkbox" checked /> 拼接纠偏审查 prompt（SUPERVISOR_AUDIT，暂时）</label>
+    </div>
     <label>Cases（不选 = 全部）</label>
     <div class="case-list" id="rec-cases"></div>
     <button type="button" class="run" id="rec-run">Run recovery</button>
@@ -258,6 +262,7 @@
             query: $("speed-query").value,
             runs: Number($("speed-runs").value) || 1,
             llm_only: $("speed-llm-only").checked,
+            supervisor_audit: $("speed-supervisor-audit").checked,
           }),
         });
         const data = await res.json().catch(() => ({}));
@@ -310,6 +315,7 @@
           body: JSON.stringify({
             models: parseModels($("rec-models").value),
             case_ids: selected,
+            supervisor_audit: $("rec-supervisor-audit").checked,
           }),
         });
         const data = await res.json().catch(() => ({}));
@@ -320,7 +326,9 @@
           const el = document.createElement("div");
           el.className = "card";
           const pct = m.pass_rate != null ? `${Math.round(m.pass_rate * 100)}%` : "-";
-          el.innerHTML = `<span>${m.model}</span><strong>${m.pass}/${m.total} (${pct})</strong>`;
+          const cps = m.avg_chars_per_sec_mean != null ? Number(m.avg_chars_per_sec_mean).toFixed(1) : "-";
+          el.innerHTML = `<span>${m.model}</span><strong>${m.pass}/${m.total} (${pct})</strong>
+            <div class="meta">${cps} chars/s · TTFT ${m.ttft_ms_mean != null ? Math.round(m.ttft_ms_mean) : "-"} ms</div>`;
           cards.appendChild(el);
         });
         Object.entries(data.by_category || {}).forEach(([cat, slot]) => {
@@ -330,15 +338,18 @@
           el.innerHTML = `<span>${cat}</span><strong>${slot.pass}/${slot.total} (${pct})</strong>`;
           cards.appendChild(el);
         });
-        let html = `<table><thead><tr><th>Result</th><th>Case</th><th>Model</th><th>Reply / failures</th></tr></thead><tbody>`;
+        let html = `<table><thead><tr><th>Result</th><th>Case</th><th>Model</th><th>Speed</th><th>Reply / failures</th></tr></thead><tbody>`;
         (data.results || []).forEach((r) => {
           const mark = r.pass ? `<span class="pass">PASS</span>` : `<span class="fail">FAIL</span>`;
           const fails = (r.failures || []).join(", ");
           const err = r.error ? `<div class="fail">${r.error}</div>` : "";
+          const cps = r.avg_chars_per_sec != null ? Number(r.avg_chars_per_sec).toFixed(1) : "-";
+          const ttft = r.ttft_ms != null ? Math.round(r.ttft_ms) : "-";
           html += `<tr>
             <td>${mark}</td>
             <td>${r.case_id}<div class="meta">${r.category || ""}</div></td>
             <td>${r.model}</td>
+            <td><div>${cps} c/s</div><div class="meta">TTFT ${ttft} ms</div></td>
             <td><div class="reply">${(r.reply || "").replace(/</g, "&lt;")}</div>
               ${fails ? `<div class="meta">failures: ${fails}</div>` : ""}${err}</td>
           </tr>`;

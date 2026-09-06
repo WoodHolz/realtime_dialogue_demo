@@ -1,0 +1,91 @@
+{
+  "id": "gap_complete_ok_to_end",
+  "category": "completeness_gap",
+  "title": "必采已齐：允许结束语",
+  "description": "对照用例：竞业（无）与保密等都已问到，用户确认没事。应允许结束，勿再翻案追问签署。",
+  "history": [
+    {
+      "role": "assistant",
+      "text": "您好，请问是深圳图灵完备网络科技有限公司吗？我们是芝麻背调，候选人阿强提供了您作为证明人，想跟您做信息核实，大概需要5到7分钟，请问您现在方便吗？"
+    },
+    { "role": "user", "text": "方便。" },
+    {
+      "role": "assistant",
+      "text": "候选人阿强提供的主体公司是深圳图灵完备网络科技有限公司，请问您确认他是在这家公司任职的吗？"
+    },
+    { "role": "user", "text": "确认。" },
+    {
+      "role": "assistant",
+      "text": "我们了解到阿强入职时间是2022年6月13日，想跟您核实一下，准确吗？"
+    },
+    { "role": "user", "text": "准确。" },
+    {
+      "role": "assistant",
+      "text": "我们了解到离职时间是2025年11月28日，想跟您确认一下？"
+    },
+    { "role": "user", "text": "对。" },
+    {
+      "role": "assistant",
+      "text": "我们了解到他离职前是高级产品经理，想跟您核实一下？"
+    },
+    { "role": "user", "text": "对。" },
+    {
+      "role": "assistant",
+      "text": "关于离职原因，您了解的情况是怎么记录的？"
+    },
+    { "role": "user", "text": "主动离职，个人发展。" },
+    {
+      "role": "assistant",
+      "text": "他在职期间有没有违规违纪，或劳动争议、仲裁的情况？"
+    },
+    { "role": "user", "text": "没有。" },
+    {
+      "role": "assistant",
+      "text": "阿强在职或离职时，有没有签署过竞业禁止协议？"
+    },
+    { "role": "user", "text": "没有签过竞业。" },
+    {
+      "role": "assistant",
+      "text": "另外想确认一下，他在职期间有没有签过保密协议？"
+    },
+    { "role": "user", "text": "有签保密。" },
+    {
+      "role": "assistant",
+      "text": "这个岗位有没有管理职责，比如要不要带团队？"
+    },
+    { "role": "user", "text": "不带人。" },
+    {
+      "role": "assistant",
+      "text": "离职前最后一任直属上级是哪位？担任什么职位？"
+    },
+    { "role": "user", "text": "阿珍，产品总监。" },
+    {
+      "role": "assistant",
+      "text": "我们了解到税前年薪大约25万左右，这个区间大致准确吗？"
+    },
+    { "role": "user", "text": "差不多。" },
+    {
+      "role": "assistant",
+      "text": "如果将来有合适机会，公司是否愿意再次聘用他？"
+    },
+    { "role": "user", "text": "愿意。" },
+    {
+      "role": "assistant",
+      "text": "方便了解一下您怎么称呼？在公司什么职位？和阿强是什么工作关系？"
+    },
+    { "role": "user", "text": "阿珍，产品总监，直属上级。" },
+    {
+      "role": "assistant",
+      "text": "您和阿强大概共事多长时间？"
+    },
+    { "role": "user", "text": "三年多。" }
+  ],
+  "user": "没有别的了，可以结束了。",
+  "expect": {
+    "must_any": ["再见", "打扰您了", "感谢", "配合"],
+    "must_not_any": ["竞业", "保密协议", "再确认一下签署", "系统登记"],
+    "no_markdown": true,
+    "max_questions": 0,
+    "prefer_stop": true
+  }
+}

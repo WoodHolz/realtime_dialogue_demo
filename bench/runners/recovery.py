@@ -6,6 +6,7 @@ import asyncio
 import json
 import logging
 import re
+import time
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -34,6 +35,10 @@ class CaseResult:
     reply: str = ""
     failures: list[str] = field(default_factory=list)
     error: str = ""
+    ttft_ms: float | None = None
+    avg_chars_per_sec: float | None = None
+    total_chars: int = 0
+    stream_ms: float | None = None
 
     def as_dict(self) -> dict[str, object]:
         return {
@@ -45,6 +50,10 @@ class CaseResult:
             "reply": self.reply,
             "failures": list(self.failures),
             "error": self.error,
+            "ttft_ms": self.ttft_ms,
+            "avg_chars_per_sec": self.avg_chars_per_sec,
+            "total_chars": self.total_chars,
+            "stream_ms": self.stream_ms,
         }
 
 
@@ -125,6 +134,25 @@ def score_reply(reply: str, expect: dict[str, Any]) -> tuple[bool, list[str]]:
     if must_any and not any(n in text for n in must_any):
         failures.append(f"must_any_missing:{'|'.join(must_any)}")
 
+    # Each inner list is an OR-group; every group must match at least one needle.
+    for i, group in enumerate(expect.get("must_all_groups") or []):
+        needles = [n for n in group if n]
+        if needles and not any(n in text for n in needles):
+            failures.append(f"must_all_groups[{i}]_missing:{'|'.join(needles)}")
+
+    if expect.get("forbid_ending"):
+        ending_markers = expect.get("ending_markers") or [
+            "再见",
+            "打扰您了",
+            "祝您生活愉快",
+            "主要跟您了解的就是这些",
+            "非常感谢您的配合",
+        ]
+        for needle in ending_markers:
+            if needle and needle in text:
+                failures.append(f"forbid_ending:{needle}")
+                break
+
     if expect.get("no_markdown"):
         for marker in _MD_MARKERS:
             if marker in text:
@@ -158,6 +186,9 @@ def score_reply(reply: str, expect: dict[str, Any]) -> tuple[bool, list[str]]:
         # Soft fail: vague answers should usually get a clarifying question
         failures.append("prefer_clarify:no_question")
 
+    if expect.get("must_ask") and q_count < 1:
+        failures.append("must_ask:no_question")
+
     return (len(failures) == 0), failures
 
 
@@ -169,21 +200,31 @@ async def _generate_reply(
     history: list[HistoryTurn],
     user_text: str,
     timeout_sec: float = 90.0,
-) -> str:
+) -> dict[str, object]:
+    """Stream one recovery reply; also measure TTFT / chars-per-sec (first token → done)."""
     llm = build_llm_for_model(settings, model)
     chunks: list[str] = []
     done = asyncio.Event()
     gen_id = f"rec-{uuid.uuid4().hex[:8]}"
+    t_query = 0.0
+    t_first_token: float | None = None
+    total_chars = 0
 
     async def on_delta(_gid: str, chunk: str) -> None:
-        if chunk:
-            chunks.append(chunk)
+        nonlocal t_first_token, total_chars
+        if not chunk:
+            return
+        if t_first_token is None:
+            t_first_token = time.perf_counter()
+        total_chars += len(chunk)
+        chunks.append(chunk)
 
     async def on_done(_gid: str) -> None:
         done.set()
 
     llm.bind(on_delta=on_delta, on_done=on_done)
     try:
+        t_query = time.perf_counter()
         await llm.start_speculative(
             system=system_with_progress(system, history),
             history=history,
@@ -209,7 +250,24 @@ async def _generate_reply(
                 f"workspace host (public DASHSCOPE_API_KEY is often denied)."
             ) from err
         raise RuntimeError(text) from err
-    return "".join(chunks).strip()
+
+    t_end = time.perf_counter()
+    reply = "".join(chunks).strip()
+    ttft_ms: float | None = None
+    avg_cps: float | None = None
+    stream_ms: float | None = (t_end - t_query) * 1000.0
+    if t_first_token is not None:
+        ttft_ms = (t_first_token - t_query) * 1000.0
+        elapsed = t_end - t_first_token
+        if elapsed > 0 and total_chars > 0:
+            avg_cps = total_chars / elapsed
+    return {
+        "reply": reply,
+        "ttft_ms": ttft_ms,
+        "avg_chars_per_sec": avg_cps,
+        "total_chars": total_chars,
+        "stream_ms": stream_ms,
+    }
 
 
 def _history_from_case(case: dict[str, Any]) -> list[HistoryTurn]:
@@ -233,6 +291,7 @@ async def run_recovery(
     case_ids: list[str] | None = None,
     system_override: str = "",
     no_tts_prompt: bool = False,
+    supervisor_audit: bool = True,
     pause: float = 0.3,
     settings: PipelineSettings | None = None,
 ) -> dict[str, object]:
@@ -242,6 +301,7 @@ async def run_recovery(
     system, prompt_src = resolve_system_prompt(
         system_override=system_override,
         no_tts_prompt=no_tts_prompt,
+        supervisor_audit=supervisor_audit,
     )
     cases = load_recovery_cases(case_ids=case_ids)
 
@@ -260,13 +320,14 @@ async def run_recovery(
             expect = case.get("expect") if isinstance(case.get("expect"), dict) else {}
             history = _history_from_case(case)
             try:
-                reply = await _generate_reply(
+                gen = await _generate_reply(
                     cfg,
                     model=model,
                     system=system,
                     history=history,
                     user_text=user_text,
                 )
+                reply = str(gen.get("reply") or "")
                 ok, failures = score_reply(reply, expect)
                 results.append(
                     CaseResult(
@@ -277,6 +338,16 @@ async def run_recovery(
                         pass_=ok,
                         reply=reply,
                         failures=failures,
+                        ttft_ms=gen.get("ttft_ms") if isinstance(gen.get("ttft_ms"), (int, float)) else None,
+                        avg_chars_per_sec=(
+                            gen.get("avg_chars_per_sec")
+                            if isinstance(gen.get("avg_chars_per_sec"), (int, float))
+                            else None
+                        ),
+                        total_chars=int(gen.get("total_chars") or 0),
+                        stream_ms=(
+                            gen.get("stream_ms") if isinstance(gen.get("stream_ms"), (int, float)) else None
+                        ),
                     )
                 )
             except Exception as exc:
@@ -299,12 +370,28 @@ async def run_recovery(
     by_model: dict[str, dict[str, object]] = {}
     by_category: dict[str, dict[str, int]] = {}
     for r in results:
-        slot = by_model.setdefault(r.model, {"model": r.model, "pass": 0, "total": 0, "results": []})
+        slot = by_model.setdefault(
+            r.model,
+            {
+                "model": r.model,
+                "pass": 0,
+                "total": 0,
+                "results": [],
+                "_cps": [],
+                "_ttft": [],
+            },
+        )
         slot["total"] = int(slot["total"]) + 1
         if r.pass_:
             slot["pass"] = int(slot["pass"]) + 1
         assert isinstance(slot["results"], list)
         slot["results"].append(r.as_dict())
+        if r.avg_chars_per_sec is not None:
+            assert isinstance(slot["_cps"], list)
+            slot["_cps"].append(float(r.avg_chars_per_sec))
+        if r.ttft_ms is not None:
+            assert isinstance(slot["_ttft"], list)
+            slot["_ttft"].append(float(r.ttft_ms))
 
         cat = by_category.setdefault(r.category or "unknown", {"pass": 0, "total": 0})
         cat["total"] += 1
@@ -314,6 +401,14 @@ async def run_recovery(
     for slot in by_model.values():
         total = int(slot["total"]) or 1
         slot["pass_rate"] = float(slot["pass"]) / float(total)
+        cps_vals = slot.pop("_cps", [])
+        ttft_vals = slot.pop("_ttft", [])
+        slot["avg_chars_per_sec_mean"] = (
+            sum(cps_vals) / len(cps_vals) if isinstance(cps_vals, list) and cps_vals else None
+        )
+        slot["ttft_ms_mean"] = (
+            sum(ttft_vals) / len(ttft_vals) if isinstance(ttft_vals, list) and ttft_vals else None
+        )
 
     for cat, slot in by_category.items():
         total = int(slot["total"]) or 1
@@ -322,6 +417,7 @@ async def run_recovery(
     return {
         "system_source": prompt_src,
         "system_chars": len(system),
+        "supervisor_audit": bool(supervisor_audit),
         "settings": cfg.describe(),
         "case_count": len(cases),
         "models": list(by_model.values()),
@@ -333,6 +429,7 @@ async def run_recovery(
 def print_recovery_summary(payload: dict[str, object]) -> None:
     print()
     print(f"Prompt: {payload.get('system_source')} ({payload.get('system_chars')} chars)")
+    print(f"Supervisor audit: {payload.get('supervisor_audit')}")
     print(f"Cases: {payload.get('case_count')}")
     print()
     for model_block in payload.get("models") or []:
@@ -340,9 +437,14 @@ def print_recovery_summary(payload: dict[str, object]) -> None:
             continue
         rate = model_block.get("pass_rate")
         rate_s = f"{float(rate) * 100:.0f}%" if isinstance(rate, (int, float)) else "-"
+        cps = model_block.get("avg_chars_per_sec_mean")
+        cps_s = f"{float(cps):.1f}" if isinstance(cps, (int, float)) else "-"
+        ttft = model_block.get("ttft_ms_mean")
+        ttft_s = f"{float(ttft):.0f}" if isinstance(ttft, (int, float)) else "-"
         print(
             f"Model {model_block.get('model')}: "
-            f"{model_block.get('pass')}/{model_block.get('total')} pass ({rate_s})"
+            f"{model_block.get('pass')}/{model_block.get('total')} pass ({rate_s})  "
+            f"TTFT≈{ttft_s}ms  Chars/s≈{cps_s}"
         )
         for item in model_block.get("results") or []:
             if not isinstance(item, dict):
@@ -355,7 +457,14 @@ def print_recovery_summary(payload: dict[str, object]) -> None:
                 extra += f" error={err}"
             reply = str(item.get("reply") or "")
             preview = reply[:80] + ("…" if len(reply) > 80 else "")
-            print(f"  {mark} {item.get('case_id')}: {preview}{extra}")
+            cps_i = item.get("avg_chars_per_sec")
+            ttft_i = item.get("ttft_ms")
+            speed_bit = ""
+            if isinstance(cps_i, (int, float)) or isinstance(ttft_i, (int, float)):
+                tt = f"{float(ttft_i):.0f}ms" if isinstance(ttft_i, (int, float)) else "-"
+                cs = f"{float(cps_i):.1f}" if isinstance(cps_i, (int, float)) else "-"
+                speed_bit = f"  ({tt}, {cs} c/s)"
+            print(f"  {mark} {item.get('case_id')}: {preview}{extra}{speed_bit}")
     print()
     print("By category:")
     for cat, slot in (payload.get("by_category") or {}).items():
