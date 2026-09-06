@@ -1,17 +1,24 @@
 # -*- coding: utf-8 -*-
-"""DashScope Paraformer realtime ASR (online) for LiveKit turn-detector STT."""
+"""DashScope Paraformer realtime ASR (online).
+
+Important: do NOT call Recognition.start() until the first real PCM arrives.
+t2s opens the ASR session at voice_input_start but only forwards mic audio after
+VAD speech_start — starting early causes NO_VALID_AUDIO_ERROR.
+"""
 from __future__ import annotations
 
 import asyncio
 import json
 import logging
 import os
+import threading
 from pathlib import Path
 from typing import Awaitable, Callable
 
 LOG = logging.getLogger(__name__)
 
-CHUNK_MS = 200
+# Docs recommend ~100ms frames (1KB–16KB). 16kHz s16le mono → 3200 bytes.
+CHUNK_MS = 100
 CHUNK_BYTES = (16000 * CHUNK_MS // 1000) * 2
 DEFAULT_MODEL = "paraformer-realtime-v2"
 DEFAULT_WS = "wss://dashscope.aliyuncs.com/api-ws/v1/inference"
@@ -92,7 +99,7 @@ def dashscope_language_hints() -> list[str]:
 
 
 class DashScopeAsrStreamingSession:
-    """Async wrapper around dashscope.audio.asr.Recognition streaming API."""
+    """Async wrapper around dashscope.audio.asr.Recognition (lazy start)."""
 
     def __init__(
         self,
@@ -113,29 +120,46 @@ class DashScopeAsrStreamingSession:
         self._done = asyncio.Event()
         self._loop: asyncio.AbstractEventLoop | None = None
         self._aborted = False
+        self._started = False
+        self._bytes_sent = 0
+        self._open_event = threading.Event()
+        self._start_lock = asyncio.Lock()
+        self._send_lock = asyncio.Lock()
 
     async def start(self) -> None:
+        """Prepare session; Recognition.start() waits until first PCM (lazy)."""
         self._aborted = False
+        self._started = False
+        self._bytes_sent = 0
         self._final_text = ""
         self._done.clear()
+        self._open_event.clear()
         self._loop = asyncio.get_running_loop()
-        await asyncio.to_thread(self._start_sync)
-
-    def _start_sync(self) -> None:
-        try:
-            import dashscope
-            from dashscope.audio.asr import Recognition, RecognitionCallback, RecognitionResult
-        except ImportError as exc:
-            raise RuntimeError(
-                "DashScope ASR unavailable: pip install dashscope>=1.20.0"
-            ) from exc
-
         api_key = dashscope_asr_api_key()
         if not api_key:
             raise RuntimeError(
                 "DashScope ASR needs DASHSCOPE_API_KEY (or followup.bailian.api_key in config.json)"
             )
+        # Validate SDK import early so voice_input_start fails fast.
+        try:
+            import dashscope  # noqa: F401
+            from dashscope.audio.asr import Recognition  # noqa: F401
+        except ImportError as exc:
+            raise RuntimeError(
+                "DashScope ASR unavailable: pip install dashscope>=1.20.0"
+            ) from exc
+        LOG.info(
+            "DashScope ASR prepared (lazy start) model=%s ws=%s hints=%s",
+            self.model,
+            dashscope_asr_ws_url(),
+            self.language_hints,
+        )
 
+    def _start_sync(self) -> None:
+        import dashscope
+        from dashscope.audio.asr import Recognition, RecognitionCallback, RecognitionResult
+
+        api_key = dashscope_asr_api_key()
         dashscope.api_key = api_key
         ws_url = dashscope_asr_ws_url()
         if ws_url:
@@ -145,6 +169,9 @@ class DashScopeAsrStreamingSession:
         RecognitionResultCls = RecognitionResult
 
         class _Callback(RecognitionCallback):
+            def on_open(self) -> None:
+                session._open_event.set()
+
             def on_event(self, result: RecognitionResult) -> None:
                 try:
                     sentence = result.get_sentence()
@@ -163,8 +190,13 @@ class DashScopeAsrStreamingSession:
 
             def on_error(self, message) -> None:
                 err = getattr(message, "message", None) or str(message)
+                code = getattr(message, "code", None)
                 LOG.warning("DashScope ASR error: %s", err)
-                session._schedule_error(err)
+                # Empty-stream finalize is expected if user never spoke after prepare.
+                if "NO_VALID_AUDIO" in str(err).upper() and session._bytes_sent == 0:
+                    session._schedule_done()
+                    return
+                session._schedule_error(err, code=code)
 
         self._recognition = Recognition(
             model=self.model,
@@ -172,15 +204,33 @@ class DashScopeAsrStreamingSession:
             sample_rate=16000,
             language_hints=self.language_hints,
             semantic_punctuation_enabled=False,
+            heartbeat=True,
             callback=_Callback(),
         )
         self._recognition.start()
+        # Wait briefly for WS open so early frames are not dropped.
+        if not self._open_event.wait(timeout=5.0):
+            LOG.warning("DashScope ASR on_open timeout; continuing to send audio")
         LOG.info(
             "DashScope ASR started model=%s ws=%s hints=%s",
             self.model,
             ws_url,
             self.language_hints,
         )
+
+    async def _ensure_started(self) -> bool:
+        if self._aborted:
+            return False
+        if self._started and self._recognition is not None:
+            return True
+        async with self._start_lock:
+            if self._aborted:
+                return False
+            if self._started and self._recognition is not None:
+                return True
+            await asyncio.to_thread(self._start_sync)
+            self._started = True
+            return self._recognition is not None
 
     def _schedule_partial(self, text: str, is_interim: bool) -> None:
         self._final_text = text
@@ -195,8 +245,10 @@ class DashScopeAsrStreamingSession:
     def _schedule_done(self) -> None:
         if self._loop:
             self._loop.call_soon_threadsafe(self._done.set)
+        else:
+            self._done.set()
 
-    def _schedule_error(self, message: str) -> None:
+    def _schedule_error(self, message: str, *, code: object = None) -> None:
         if self._loop and self.on_notify:
 
             async def _run() -> None:
@@ -206,34 +258,60 @@ class DashScopeAsrStreamingSession:
         if self._loop and self.on_server_error:
 
             async def _run_err() -> None:
-                await self.on_server_error(None)
+                err_code = None
+                if isinstance(code, int):
+                    err_code = code
+                await self.on_server_error(err_code)
 
             asyncio.run_coroutine_threadsafe(_run_err(), self._loop)
         self._schedule_done()
 
     async def send_audio(self, pcm_chunk: bytes, is_last: bool = False) -> None:
-        if not self._recognition:
+        if self._aborted:
             return
-        if pcm_chunk:
-            await asyncio.to_thread(self._recognition.send_audio_frame, pcm_chunk)
-        if is_last and not self._aborted:
-            await asyncio.to_thread(self._recognition.stop)
+
+        async with self._send_lock:
+            if pcm_chunk:
+                if not await self._ensure_started():
+                    return
+                # SDK queues by reference — copy so caller buffers can be reused.
+                payload = bytes(pcm_chunk)
+                await asyncio.to_thread(self._recognition.send_audio_frame, payload)
+                self._bytes_sent += len(payload)
+
+            if not is_last or self._aborted:
+                return
+
+            if not self._started or self._bytes_sent == 0:
+                # Never pushed audio: skip stop() to avoid NO_VALID_AUDIO_ERROR.
+                self._recognition = None
+                self._schedule_done()
+                return
+
+            try:
+                await asyncio.to_thread(self._recognition.stop)
+            except Exception as exc:  # noqa: BLE001
+                LOG.warning("DashScope ASR stop failed: %s", exc)
+                self._schedule_done()
 
     async def send_keepalive(self) -> None:
+        # DashScope heartbeat=True keeps the socket; do not inject silence frames.
         return
 
     async def abort(self) -> None:
         self._aborted = True
         recognition = self._recognition
         self._recognition = None
-        if recognition is not None:
+        if recognition is not None and self._bytes_sent > 0:
             try:
                 await asyncio.to_thread(recognition.stop)
             except Exception:
                 pass
-        self._done.set()
+        self._schedule_done()
 
     async def wait_final(self, timeout: float = 15.0) -> str:
+        if not self._started or self._bytes_sent == 0:
+            return self._final_text
         try:
             await asyncio.wait_for(self._done.wait(), timeout=timeout)
         except asyncio.TimeoutError:

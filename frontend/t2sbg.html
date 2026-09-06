@@ -162,7 +162,7 @@
   <div class="section" id="vadProviderSection">
     <strong>判停 / VAD</strong>
     <p style="font-size:12px; color:#666; margin:6px 0 8px;">
-      Silero 检测说话与静音；判停可在 Smart Turn v3（音频 prosody）与 LiveKit turn-detector（ASR 文本语义）之间切换对比。
+      Silero 检测说话与静音；判停可对比 Smart Turn v3、LiveKit audio TurnDetector v1（推荐）、旧版 text EOU。
     </p>
     <div style="display:flex; flex-direction:column; gap:6px; font-size:0.9rem;">
       <label style="cursor:pointer;">
@@ -170,8 +170,12 @@
         Smart Turn v3（Pipecat，音频 prosody）
       </label>
       <label style="cursor:pointer;">
+        <input type="radio" name="vadProvider" value="livekit_turn_v1" />
+        LiveKit audio TurnDetector（v1-mini 本机 / v1 云端，直接听 PCM）
+      </label>
+      <label style="cursor:pointer;">
         <input type="radio" name="vadProvider" value="livekit_turn_detector" />
-        LiveKit turn-detector（SenseVoice 本地 STT + Silero + 语义判停）
+        LiveKit text EOU（旧版：ASR 文本语义，deprecated）
       </label>
     </div>
   </div>
@@ -879,7 +883,7 @@
         if (msg && msg.reason_label) return String(msg.reason_label);
         if (msg && msg.reason === 'user_speech') return '用户打断';
         var s = msg && msg.source;
-        if (s === 'duplug' || s === 'smart_turn_v3' || s === 'livekit_turn_detector') return '用户打断（VAD）';
+        if (s === 'duplug' || s === 'smart_turn_v3' || s === 'livekit_turn_detector' || s === 'livekit_turn_v1') return '用户打断（VAD）';
         return '用户打断';
       }
 

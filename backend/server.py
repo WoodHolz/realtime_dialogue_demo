@@ -181,7 +181,7 @@ def _resolve_duplex_server_vad(cfg: dict[str, Any], default: bool) -> bool:
     volcano_vad = str(cfg.get("volcano_vad") or cfg.get("vad_mode") or "").strip().lower()
     if volcano_vad in {"server", "semantic_vad", "duplex", "server_vad", "duplex_server_vad"}:
         return True
-    if volcano_vad in {"local", "smart_turn_v3", "livekit_turn_detector", "client"}:
+    if volcano_vad in {"local", "smart_turn_v3", "livekit_turn_detector", "livekit_turn_v1", "client"}:
         return False
     return default
 
@@ -2237,11 +2237,18 @@ async def websocket_endpoint(websocket: WebSocket):
             send_json({"type": "voice_input_started"})
             return True
 
-        use_livekit_stt = active_vad == "livekit_turn_detector"
-        if use_livekit_stt:
-            resolved_stt = resolve_livekit_turn_stt_backend(override=stt_backend_override)
+        # Dialogue ASR is independent of VAD: prefer online DashScope (config stt_backend).
+        # livekit_turn_v1 only uses audio for EOU; ASR text still comes from this session.
+        resolved_stt = resolve_livekit_turn_stt_backend(override=stt_backend_override)
+        use_factory_stt = resolved_stt in {
+            "dashscope",
+            "funasr",
+            "volc",
+            "livekit_inference",
+        }
+        if use_factory_stt:
             session = create_livekit_turn_stt_session(
-                stt_backend=stt_backend_override,
+                stt_backend=stt_backend_override or resolved_stt,
                 on_partial=_on_asr_partial,
                 on_notify=_on_asr_notify,
                 on_server_error=_on_asr_server_error,
@@ -2259,6 +2266,7 @@ async def websocket_endpoint(websocket: WebSocket):
                 on_notify=_on_asr_notify,
             )
             stt_label = "Volc ASR"
+            resolved_stt = "volc"
         try:
             await session.start()
         except Exception as e:
@@ -2271,39 +2279,31 @@ async def websocket_endpoint(websocket: WebSocket):
                 except Exception:
                     pass
                 t2s_vad = None
-            if use_livekit_stt:
-                resolved_stt = resolve_livekit_turn_stt_backend(override=stt_backend_override)
-                if resolved_stt == "dashscope":
-                    err_msg = (
-                        f"DashScope Paraformer ASR 连接失败: {e}. "
-                        "排查：1) 设置 DASHSCOPE_API_KEY 2) pip install dashscope "
-                        "3) 可选 LIVEKIT_TURN_STT=dashscope / vad.livekit_turn.stt_backend"
-                    )
-                elif resolved_stt == "funasr":
-                    err_msg = (
-                        f"FunASR SenseVoice 启动失败: {e}. "
-                        "请安装: pip install funasr modelscope torch torchaudio "
-                        "（CPU: pip install torch torchaudio --index-url https://download.pytorch.org/whl/cpu）"
-                        "；首次运行会自动下载 iic/SenseVoiceSmall。"
-                    )
-                elif resolved_stt == "volc":
-                    err_msg = (
-                        f"豆包流式 ASR 连接失败: {e}. 排查：1) 火山控制台-豆包语音-语音识别大模型 已开通 "
-                        "2) ASR_APP_ID / ASR_ACCESS_KEY 或 config.json asr_app_id / asr_access_key"
-                    )
-                elif resolved_stt == "livekit_inference":
-                    err_msg = (
-                        f"LiveKit Inference STT 连接失败: {e}. "
-                        "请配置 LIVEKIT_API_KEY + LIVEKIT_API_SECRET。"
-                    )
-                else:
-                    err_msg = f"LiveKit turn STT ({resolved_stt}) 连接失败: {e}"
-            else:
+            if resolved_stt == "dashscope":
                 err_msg = (
-                    f"ASR 连接失败 (403): {e}. 排查：1) 火山控制台-豆包语音-语音识别大模型 已开通 "
-                    "2) 若 ASR 与语音对话用不同应用，在 config.json 添加 asr_app_id、asr_access_key "
-                    "3) 尝试 ASR_AUTH_STYLE=voice 或 ASR_RESOURCE_ID=volc.bigasr.sauc.concurrent"
+                    f"DashScope Paraformer ASR 连接失败: {e}. "
+                    "排查：1) 设置 DASHSCOPE_API_KEY 2) pip install dashscope "
+                    "3) 可选 LIVEKIT_TURN_STT=dashscope / vad.livekit_turn.stt_backend"
                 )
+            elif resolved_stt == "funasr":
+                err_msg = (
+                    f"FunASR SenseVoice 启动失败: {e}. "
+                    "请安装: pip install funasr modelscope torch torchaudio "
+                    "（CPU: pip install torch torchaudio --index-url https://download.pytorch.org/whl/cpu）"
+                    "；首次运行会自动下载 iic/SenseVoiceSmall。"
+                )
+            elif resolved_stt == "volc":
+                err_msg = (
+                    f"豆包流式 ASR 连接失败: {e}. 排查：1) 火山控制台-豆包语音-语音识别大模型 已开通 "
+                    "2) ASR_APP_ID / ASR_ACCESS_KEY 或 config.json asr_app_id / asr_access_key"
+                )
+            elif resolved_stt == "livekit_inference":
+                err_msg = (
+                    f"LiveKit Inference STT 连接失败: {e}. "
+                    "请配置 LIVEKIT_API_KEY + LIVEKIT_API_SECRET。"
+                )
+            else:
+                err_msg = f"ASR ({resolved_stt}) 连接失败: {e}"
             send_json({"type": "error", "message": err_msg})
             send_json({"type": "voice_input_failed", "reason": "asr_init", "message": str(e)})
             return False
@@ -2313,7 +2313,7 @@ async def websocket_endpoint(websocket: WebSocket):
         t2s_asr_last_keepalive_monotonic = 0.0
         t2s_asr_streaming = session
         t2s_asr_keepalive_task = asyncio.create_task(_t2s_asr_keepalive_loop(session))
-        send_json({"type": "voice_input_started"})
+        send_json({"type": "voice_input_started", "asr": stt_label, "asr_backend": resolved_stt})
         return True
 
     try:
@@ -2374,6 +2374,7 @@ async def websocket_endpoint(websocket: WebSocket):
             pass
 
         if mode == "pipeline":
+            from backend.pipeline.adapters.asr_dashscope import DashScopeAsrAdapter
             from backend.pipeline.adapters.asr_volc import VolcAsrAdapter
             from backend.pipeline.config import (
                 build_streaming_llm,
@@ -2403,6 +2404,10 @@ async def websocket_endpoint(websocket: WebSocket):
                 return
 
             def _pipeline_asr_factory():
+                # Prefer online DashScope Paraformer (same as t2s / livekit STT config).
+                asr_backend = resolve_livekit_turn_stt_backend()
+                if asr_backend == "dashscope":
+                    return DashScopeAsrAdapter()
                 rid = os.environ.get("ASR_RESOURCE_ID", DEFAULT_ASR_RESOURCE_ID)
                 return VolcAsrAdapter(ASR_APP_ID, ASR_ACCESS_KEY, resource_id=rid)
 

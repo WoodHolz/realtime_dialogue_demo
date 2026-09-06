@@ -54,19 +54,26 @@
     }
   },
   "vad": {
-    "description": "VAD provider: smart_turn_v3 (default), livekit_turn_detector, or duplug. Used by t2sbg and t2sbg-omni. Env: VAD_PROVIDER, SMART_TURN_*, LIVEKIT_TURN_*, VAD_SILENCE_FORCE_SECS, LIVEKIT_TURN_STT, DASHSCOPE_API_KEY.",
+    "description": "VAD provider: smart_turn_v3, livekit_turn_v1 (audio TurnDetector), livekit_turn_detector (deprecated text EOU), or duplug. Env: VAD_PROVIDER, LIVEKIT_AUDIO_TURN_VERSION=v1-mini|v1, LIVEKIT_API_KEY/SECRET for v1 cloud.",
     "provider": "smart_turn_v3",
-    "silence_force_secs": 1.0,
-    "silence_force_secs_comment": "Sustained silence during an active turn before forcing turn end when semantic EOU rejects. 0 = semantic-only.",
+    "silence_force_secs": 2.5,
+    "silence_force_secs_comment": "Align with LiveKit audio TurnDetector EndpointingOptions.max_delay (2.5s).",
     "smart_turn": {
       "model_path": null,
       "cpu_count": 1,
-      "silero_stop_secs": 0.3,
-      "silero_confidence": 0.6
+      "silero_stop_secs": 0.55,
+      "silero_confidence": 0.6,
+      "silero_stop_secs_comment": "LiveKit docs Silero VAD default min_silence_duration = 0.55s (must be >= 0.25s for audio TurnDetector)."
     },
     "livekit_turn": {
       "language": "zh",
       "threshold": 0.004,
+      "audio_version": "v1",
+      "audio_unlikely_threshold": null,
+      "audio_unlikely_threshold_comment": "Leave null — use LiveKit calibrated language defaults (do not override).",
+      "min_endpointing_delay_ms": 300,
+      "max_endpointing_delay_ms": 2500,
+      "endpointing_comment": "Match LiveKit audio TurnDetector EndpointingOptions defaults: min_delay=0.3s, max_delay=2.5s.",
       "embedded_asr": false,
       "stt_backend": "dashscope",
       "dashscope_asr_model": "paraformer-realtime-v2",
@@ -110,7 +117,7 @@
     "t2s_asr_keepalive_tick_sec": 0.35,
     "t2s_pre_roll_ms_comment": "Pre-roll audio kept before first nonidle to avoid clipping initial phonemes.",
     "t2s_pre_roll_ms": 1200,
-    "t2s_speak_grace_ms_comment": "After VAD speak, wait this grace window before finalize; canceled if nonidle returns.",
+    "t2s_speak_grace_ms_comment": "Extra grace after VAD speak. Keep 0 when using LiveKit audio TurnDetector — official min_delay already covers post-silence wait.",
     "t2s_speak_grace_ms": 0,
     "t2s_min_speech_ms_comment": "Minimum effective speech duration before allowing turn completion.",
     "t2s_min_speech_ms": 300,
@@ -120,7 +127,7 @@
     "t2s_tts_barge_suppress_ms": 300
   },
   "t2sbg_voice_version": "0.0.14",
-  "pipeline_voice_version": "0.0.8",
+  "pipeline_voice_version": "0.0.9",
   "omni_voice_version": "0.0.19",
   "outbound": {
     "description": "Partner API POST /outbound/v1/calls → SIP INVITE/RTP + Duplex Agent. Scenario urge_auth uses config/urge_auth_prompt.py. Set SIP_* / PARTNER_API_KEY / OUTBOUND_DRY_RUN in .env.",

@@ -44,7 +44,9 @@ def vad_provider() -> str:
     return "smart_turn_v3"
 
 
-LOCAL_SEMANTIC_VAD_PROVIDERS = frozenset({"smart_turn_v3", "livekit_turn_detector"})
+LOCAL_SEMANTIC_VAD_PROVIDERS = frozenset(
+    {"smart_turn_v3", "livekit_turn_detector", "livekit_turn_v1"}
+)
 
 
 def normalize_vad_provider(value: str | None) -> str | None:
@@ -56,6 +58,15 @@ def normalize_vad_provider(value: str | None) -> str | None:
         return "smart_turn_v3"
     if p in {"livekit", "livekit_turn", "livekit-turn-detector", "livekit_turn_detector"}:
         return "livekit_turn_detector"
+    if p in {
+        "livekit_v1",
+        "livekit_audio",
+        "livekit_turn_v1",
+        "livekit-turn-v1",
+        "livekit_audio_turn",
+        "audio_turn",
+    }:
+        return "livekit_turn_v1"
     if p in {"duplug"}:
         return "duplug"
     if p in LOCAL_SEMANTIC_VAD_PROVIDERS:
@@ -238,3 +249,84 @@ def livekit_turn_embedded_asr_enabled() -> bool:
     if isinstance(cfg, dict) and cfg.get("embedded_asr") is not None:
         return bool(cfg["embedded_asr"])
     return True
+
+
+def livekit_audio_turn_version() -> str:
+    """Audio TurnDetector version: v1-mini (local) or v1 (LiveKit Inference)."""
+    env = (
+        os.environ.get("LIVEKIT_AUDIO_TURN_VERSION", "")
+        or os.environ.get("LIVEKIT_TURN_AUDIO_VERSION", "")
+        or ""
+    ).strip().lower()
+    if env in {"v1", "v1-mini"}:
+        return env
+    cfg = _load_vad_json().get("livekit_turn") or {}
+    if isinstance(cfg, dict):
+        v = str(cfg.get("audio_version") or cfg.get("version") or "").strip().lower()
+        if v in {"v1", "v1-mini"}:
+            return v
+    return "v1-mini"
+
+
+def resolve_livekit_audio_unlikely_threshold(
+    *, override: float | str | None = None
+) -> float | None:
+    """Optional override for audio TurnDetector; do NOT reuse text EOU threshold."""
+    if override is not None and str(override).strip() != "":
+        try:
+            return float(override)
+        except (TypeError, ValueError):
+            pass
+    env = (
+        os.environ.get("LIVEKIT_AUDIO_TURN_THRESHOLD", "")
+        or os.environ.get("LIVEKIT_AUDIO_UNLIKELY_THRESHOLD", "")
+        or ""
+    ).strip()
+    if env:
+        try:
+            return float(env)
+        except ValueError:
+            pass
+    cfg = _load_vad_json().get("livekit_turn") or {}
+    if isinstance(cfg, dict):
+        for key in ("audio_unlikely_threshold", "audio_threshold"):
+            if cfg.get(key) is not None:
+                try:
+                    return float(cfg[key])
+                except (TypeError, ValueError):
+                    pass
+    return None
+
+
+def livekit_audio_min_endpointing_delay_secs() -> float:
+    env = (os.environ.get("LIVEKIT_AUDIO_MIN_DELAY_MS", "") or "").strip()
+    if env:
+        try:
+            return max(0.0, float(env) / 1000.0)
+        except ValueError:
+            pass
+    cfg = _load_vad_json().get("livekit_turn") or {}
+    if isinstance(cfg, dict) and cfg.get("min_endpointing_delay_ms") is not None:
+        try:
+            return max(0.0, float(cfg["min_endpointing_delay_ms"]) / 1000.0)
+        except (TypeError, ValueError):
+            pass
+    # Docs default with audio turn detector: 0.3s
+    return 0.3
+
+
+def livekit_audio_max_endpointing_delay_secs() -> float:
+    env = (os.environ.get("LIVEKIT_AUDIO_MAX_DELAY_MS", "") or "").strip()
+    if env:
+        try:
+            return max(0.25, float(env) / 1000.0)
+        except ValueError:
+            pass
+    cfg = _load_vad_json().get("livekit_turn") or {}
+    if isinstance(cfg, dict) and cfg.get("max_endpointing_delay_ms") is not None:
+        try:
+            return max(0.25, float(cfg["max_endpointing_delay_ms"]) / 1000.0)
+        except (TypeError, ValueError):
+            pass
+    # Prefer explicit max_endpointing_delay_ms; else LiveKit audio default 2.5s.
+    return 2.5

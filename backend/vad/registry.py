@@ -44,6 +44,14 @@ def create_vad_backend(
         except Exception as exc:  # noqa: BLE001
             LOG.warning("LiveKit turn-detector init failed: %s", exc)
             return None
+    if active == "livekit_turn_v1":
+        try:
+            from backend.vad.livekit_audio_turn import LivekitAudioTurnBackend
+
+            return LivekitAudioTurnBackend(turn_threshold=livekit_turn_threshold)
+        except Exception as exc:  # noqa: BLE001
+            LOG.warning("LiveKit audio TurnDetector init failed: %s", exc)
+            return None
     if active == "duplug":
         duplug_on, _ = _load_duplug_vad_config()
         if not duplug_on:

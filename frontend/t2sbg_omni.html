@@ -207,9 +207,13 @@
         <input type="radio" name="localVadProvider" value="smart_turn_v3" checked />
         Smart Turn v3（Pipecat，音频 prosody）
       </label>
+      <label style="cursor:pointer; display:block; margin-bottom:4px;">
+        <input type="radio" name="localVadProvider" value="livekit_turn_v1" />
+        LiveKit audio TurnDetector（v1-mini / v1，直接听 PCM）
+      </label>
       <label style="cursor:pointer; display:block;">
         <input type="radio" name="localVadProvider" value="livekit_turn_detector" />
-        LiveKit turn-detector（SenseVoice 本地 STT + Silero + 语义判停）
+        LiveKit text EOU（旧版 ASR 文本，deprecated）
       </label>
     </div>
     <div id="dashscopeVadOptions" style="margin-top:10px; padding:10px; border:1px solid #eee; border-radius:6px; background:#fafafa;">
@@ -248,8 +252,12 @@
         Smart Turn v3（Pipecat，音频 prosody）
       </label>
       <label style="cursor:pointer;">
+        <input type="radio" name="localVadProviderOnly" value="livekit_turn_v1" />
+        LiveKit audio TurnDetector（v1-mini / v1）
+      </label>
+      <label style="cursor:pointer;">
         <input type="radio" name="localVadProviderOnly" value="livekit_turn_detector" />
-        LiveKit turn-detector（SenseVoice 本地 STT + Silero + 语义判停）
+        LiveKit text EOU（旧版，deprecated）
       </label>
     </div>
   </div>

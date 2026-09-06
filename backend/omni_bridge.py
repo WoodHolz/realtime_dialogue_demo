@@ -113,7 +113,7 @@ def _parse_smooth_output(value: Any) -> bool | None:
 
 def _resolve_use_local_smart_turn(cfg: dict[str, Any], model: str) -> bool:
     mode = (cfg.get("omni_vad_mode") or "").strip().lower()
-    if mode in {"local", "smart_turn_v3", "smart_turn", "livekit_turn_detector", "livekit"}:
+    if mode in {"local", "smart_turn_v3", "smart_turn", "livekit_turn_detector", "livekit_turn_v1", "livekit"}:
         return True
     if mode in {"dashscope", "server", "server_vad", "semantic_vad", "alibaba", "ali"}:
         return False
@@ -133,7 +133,7 @@ def _omni_use_local_smart_turn(cfg: dict[str, Any] | None = None) -> bool:
     override = (os.environ.get("OMNI_VAD", "") or "").strip().lower()
     if override in {"server", "server_vad", "dashscope"}:
         return False
-    if override in {"smart_turn_v3", "smart_turn", "local", "livekit_turn_detector", "livekit"}:
+    if override in {"smart_turn_v3", "smart_turn", "local", "livekit_turn_detector", "livekit_turn_v1", "livekit"}:
         return True
     return is_local_semantic_vad_provider(resolve_vad_provider(cfg=cfg or {}))
 
