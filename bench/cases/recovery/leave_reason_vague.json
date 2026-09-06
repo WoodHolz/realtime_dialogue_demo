@@ -1,0 +1,19 @@
+{
+  "id": "leave_reason_vague",
+  "category": "vague_answer",
+  "title": "离职原因含糊需追问主动被动",
+  "history": [
+    {
+      "role": "assistant",
+      "text": "关于离职原因，您了解的情况是怎么记录的？"
+    }
+  ],
+  "user": "就是走了呗，具体我也不是很清楚。",
+  "expect": {
+    "must_not_any": ["违规违纪", "竞业", "保密协议", "年薪", "返聘"],
+    "single_question": true,
+    "no_markdown": true,
+    "max_questions": 1,
+    "prefer_clarify": true
+  }
+}

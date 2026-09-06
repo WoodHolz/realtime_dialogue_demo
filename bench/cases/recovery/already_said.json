@@ -1,0 +1,27 @@
+{
+  "id": "already_said",
+  "category": "no_repeat",
+  "title": "对方说我说过了",
+  "history": [
+    {
+      "role": "assistant",
+      "text": "候选人阿强提供的主体公司是深圳图灵完备网络科技有限公司，请问您确认他是在这家公司任职的吗？"
+    },
+    {
+      "role": "user",
+      "text": "对的，就是这家。"
+    },
+    {
+      "role": "assistant",
+      "text": "好的，那主体公司是深圳图灵完备网络科技有限公司，您确认是这家对吗？"
+    }
+  ],
+  "user": "对的，我说过了。",
+  "expect": {
+    "must_not_any": ["主体公司是深圳图灵完备", "确认他是在这家公司", "您确认是这家"],
+    "single_question": true,
+    "no_markdown": true,
+    "max_questions": 1,
+    "must_advance": true
+  }
+}

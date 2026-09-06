@@ -1,0 +1,18 @@
+{
+  "id": "company_short_name",
+  "category": "clarify_entity",
+  "title": "只给简称需确认全称",
+  "history": [
+    {
+      "role": "assistant",
+      "text": "候选人阿强提供的主体公司是深圳图灵完备网络科技有限公司，请问您确认他是在这家公司任职的吗？"
+    }
+  ],
+  "user": "嗯，图灵完备IO。",
+  "expect": {
+    "must_not_any": ["入职时间是2022", "离职原因", "竞业"],
+    "single_question": true,
+    "no_markdown": true,
+    "max_questions": 1
+  }
+}

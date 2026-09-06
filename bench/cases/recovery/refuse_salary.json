@@ -1,0 +1,18 @@
+{
+  "id": "refuse_salary",
+  "category": "refuse_salary",
+  "title": "拒绝谈薪酬",
+  "history": [
+    {
+      "role": "assistant",
+      "text": "我们了解到税前年薪大约25万左右，这个区间大致准确吗？"
+    }
+  ],
+  "user": "薪资不方便说，这个我不能透露。",
+  "expect": {
+    "must_not_any": ["必须确认", "大概多少", "您再想想薪资", "一定要核实薪酬"],
+    "single_question": true,
+    "no_markdown": true,
+    "max_questions": 1
+  }
+}

@@ -117,6 +117,12 @@ app.include_router(prod_router, prefix="/prod")
 app.include_router(prod_router, prefix="/tmp-prod")
 app.include_router(ia_algo_router)
 app.include_router(analytics_router)
+try:
+    from bench.api import router as bench_router
+
+    app.include_router(bench_router)
+except Exception:
+    logging.getLogger(__name__).warning("bench router not loaded", exc_info=True)
 
 VAD_ASR_TARGET_SAMPLE_RATE = 16000
 

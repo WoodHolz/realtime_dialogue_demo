@@ -91,6 +91,7 @@ class DashScopeResponsesLlm:
         self._task: asyncio.Task | None = None
         self._stream = None
         self._cancelled: set[str] = set()
+        self.last_error: BaseException | None = None
 
     def bind(
         self,
@@ -124,6 +125,7 @@ class DashScopeResponsesLlm:
         self._history = list(history)
         self._active_gen = gen_id
         self._cancelled.discard(gen_id)
+        self.last_error = None
         self._task = asyncio.create_task(self._stream_gen(gen_id, user_text))
 
     async def revise(self, *, user_text: str, gen_id: str) -> None:
@@ -216,9 +218,17 @@ class DashScopeResponsesLlm:
                     LOG.warning("DashScopeResponsesLlm on_done failed gen_id=%s", gen_id, exc_info=True)
         except asyncio.CancelledError:
             return
-        except Exception:
+        except Exception as exc:
+            self.last_error = exc
             LOG.exception("DashScopeResponsesLlm stream failed gen_id=%s", gen_id)
-            raise
+            # Fire-and-forget task: unblock waiters; do not re-raise (avoids
+            # "Task exception was never retrieved" and 120s bench hangs).
+            if self.on_done and gen_id not in self._cancelled:
+                try:
+                    await self.on_done(gen_id)
+                except Exception:
+                    LOG.warning("DashScopeResponsesLlm on_done failed gen_id=%s", gen_id, exc_info=True)
+            return
         finally:
             self._stream = None
             try:

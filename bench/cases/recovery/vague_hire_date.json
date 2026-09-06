@@ -1,0 +1,20 @@
+{
+  "id": "vague_hire_date",
+  "category": "vague_answer",
+  "title": "入职时间含糊",
+  "history": [
+    {
+      "role": "assistant",
+      "text": "我们了解到阿强入职时间是2022年6月13日，想跟您核实一下，准确吗？"
+    }
+  ],
+  "user": "大概差不多那个时候吧，我也记不清了。",
+  "expect": {
+    "must_any": [],
+    "must_not_any": ["离职原因", "竞业", "保密协议", "年薪"],
+    "single_question": true,
+    "no_markdown": true,
+    "max_questions": 1,
+    "prefer_clarify": true
+  }
+}

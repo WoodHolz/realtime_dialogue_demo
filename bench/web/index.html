@@ -1,0 +1,362 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Pipeline Bench — 速度 / 纠偏</title>
+  <style>
+    :root {
+      --bg: #0f1218;
+      --panel: #171b24;
+      --text: #e8ecf4;
+      --muted: #8b93a7;
+      --line: #2a3142;
+      --accent: #fbbf24;
+      --ok: #34d399;
+      --bad: #f87171;
+      --btn: #2563eb;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: ui-sans-serif, system-ui, "Segoe UI", Roboto, "PingFang SC", sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      padding: 1.25rem 1.5rem 3rem;
+      max-width: 1100px;
+      margin-inline: auto;
+    }
+    h1 { font-size: 1.35rem; margin: 0 0 0.35rem; }
+    .sub { color: var(--muted); font-size: 0.9rem; margin-bottom: 1.25rem; }
+    .tabs { display: flex; gap: 0.5rem; margin-bottom: 1rem; }
+    .tab {
+      background: transparent;
+      border: 1px solid var(--line);
+      color: var(--muted);
+      padding: 0.45rem 0.9rem;
+      border-radius: 8px;
+      cursor: pointer;
+    }
+    .tab.active {
+      color: var(--bg);
+      background: var(--accent);
+      border-color: var(--accent);
+      font-weight: 600;
+    }
+    .panel {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      padding: 1rem 1.1rem 1.25rem;
+    }
+    .hidden { display: none; }
+    label { display: block; font-size: 0.82rem; color: var(--muted); margin: 0.65rem 0 0.25rem; }
+    input[type="text"], input[type="number"], textarea {
+      width: 100%;
+      background: #0f1218;
+      border: 1px solid var(--line);
+      color: var(--text);
+      border-radius: 8px;
+      padding: 0.5rem 0.65rem;
+      font: inherit;
+    }
+    textarea { min-height: 64px; resize: vertical; }
+    .row { display: flex; flex-wrap: wrap; gap: 0.75rem 1.25rem; align-items: end; }
+    .row > div { flex: 1 1 160px; }
+    .checks { display: flex; flex-wrap: wrap; gap: 0.75rem 1.25rem; margin-top: 0.75rem; }
+    .checks label { display: flex; align-items: center; gap: 0.4rem; margin: 0; color: var(--text); font-size: 0.9rem; }
+    button.run {
+      margin-top: 1rem;
+      background: var(--btn);
+      color: #fff;
+      border: none;
+      border-radius: 8px;
+      padding: 0.55rem 1.1rem;
+      font: inherit;
+      cursor: pointer;
+    }
+    button.run:disabled { opacity: 0.55; cursor: not-allowed; }
+    .status { margin-top: 0.75rem; color: var(--muted); font-size: 0.9rem; min-height: 1.2em; }
+    .status.error { color: var(--bad); }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 1rem;
+      font-size: 0.9rem;
+    }
+    th, td {
+      border-bottom: 1px solid var(--line);
+      padding: 0.45rem 0.4rem;
+      text-align: left;
+      vertical-align: top;
+    }
+    th { color: var(--muted); font-weight: 600; }
+    .pass { color: var(--ok); font-weight: 700; }
+    .fail { color: var(--bad); font-weight: 700; }
+    .reply { color: var(--muted); font-size: 0.82rem; white-space: pre-wrap; max-width: 42rem; }
+    .meta { color: var(--muted); font-size: 0.82rem; margin-top: 0.5rem; }
+    .case-list {
+      max-height: 160px;
+      overflow: auto;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 0.5rem 0.65rem;
+      margin-top: 0.35rem;
+      background: #0f1218;
+    }
+    .case-list label { margin: 0.2rem 0; color: var(--text); font-size: 0.85rem; }
+    .summary-cards { display: flex; flex-wrap: wrap; gap: 0.75rem; margin-top: 0.85rem; }
+    .card {
+      background: #0f1218;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 0.55rem 0.75rem;
+      min-width: 140px;
+    }
+    .card strong { display: block; font-size: 1.1rem; margin-top: 0.15rem; }
+  </style>
+</head>
+<body>
+  <h1>Pipeline Bench</h1>
+  <p class="sub">速度（TTFT / TTFS / chars/s）与纠偏智力（recovery cases）。使用与 /t2sbg-pipeline 相同的 system prompt。<br/>
+    模型写法：<code>dashscope:qwen3.5-flash</code>、<code>dashscope:qwen3.8-flash</code>、<code>ark:doubao-seed-2-1-turbo-260628</code>。
+    Thinking：加 <code>+thinking</code>（速度测默认关）。</p>
+
+  <div class="tabs">
+    <button type="button" class="tab active" data-tab="speed">Speed</button>
+    <button type="button" class="tab" data-tab="recovery">Recovery</button>
+  </div>
+
+  <section id="panel-speed" class="panel">
+    <div class="row">
+      <div>
+        <label for="speed-models">Models（逗号分隔）</label>
+        <input id="speed-models" type="text" placeholder="dashscope:qwen3.5-flash,ark:doubao-seed-2-1-turbo-260628" />
+      </div>
+      <div>
+        <label for="speed-runs">Runs</label>
+        <input id="speed-runs" type="number" min="1" max="20" value="1" />
+      </div>
+    </div>
+    <div class="checks" id="speed-presets"></div>
+    <p class="meta" id="provider-status"></p>
+    <label for="speed-query">Query</label>
+    <textarea id="speed-query"></textarea>
+    <div class="checks">
+      <label><input id="speed-llm-only" type="checkbox" checked /> LLM only（跳过 TTS）</label>
+    </div>
+    <button type="button" class="run" id="speed-run">Run speed</button>
+    <div class="status" id="speed-status"></div>
+    <div id="speed-summary" class="summary-cards"></div>
+    <div id="speed-results"></div>
+  </section>
+
+  <section id="panel-recovery" class="panel hidden">
+    <div class="row">
+      <div>
+        <label for="rec-models">Models（逗号分隔）</label>
+        <input id="rec-models" type="text" placeholder="dashscope:qwen3.5-flash,ark:doubao-seed-2-1-turbo-260628" />
+      </div>
+    </div>
+    <div class="checks" id="rec-presets"></div>
+    <label>Cases（不选 = 全部）</label>
+    <div class="case-list" id="rec-cases"></div>
+    <button type="button" class="run" id="rec-run">Run recovery</button>
+    <div class="status" id="rec-status"></div>
+    <div id="rec-summary" class="summary-cards"></div>
+    <div id="rec-results"></div>
+  </section>
+
+  <script>
+    const $ = (id) => document.getElementById(id);
+
+    function parseModels(raw) {
+      return String(raw || "").split(",").map((s) => s.trim()).filter(Boolean);
+    }
+
+    function fmt(n, digits) {
+      if (n == null || Number.isNaN(n)) return "-";
+      return Number(n).toFixed(digits);
+    }
+
+    async function loadMeta() {
+      const res = await fetch("/api/bench/meta");
+      if (!res.ok) throw new Error(await res.text());
+      const data = await res.json();
+      const compare = data.default_models_compare || data.default_model || "";
+      $("speed-models").value = compare;
+      $("rec-models").value = compare;
+      $("speed-query").value = data.default_query || "方便，你说。";
+
+      const prov = data.providers || {};
+      const ds = prov.dashscope || {};
+      const ark = prov.ark || {};
+      const maas = prov.maas || {};
+      $("provider-status").textContent =
+        `DashScope key: ${ds.has_api_key ? "yes" : "no"} · MaaS key: ${maas.has_api_key ? "yes" : "no"} · Ark key: ${ark.has_api_key ? "yes" : "no"}` +
+        (ark.service_tier ? ` · Ark service_tier=${ark.service_tier}` : "") +
+        (data.model_id_help ? ` · ${data.model_id_help}` : "");
+
+      function fillPresets(containerId, inputId) {
+        const box = $(containerId);
+        box.innerHTML = "";
+        (data.suggested_models || []).forEach((m) => {
+          const btn = document.createElement("button");
+          btn.type = "button";
+          btn.className = "tab";
+          btn.style.fontSize = "0.8rem";
+          btn.textContent = m.label || m.id;
+          btn.addEventListener("click", () => {
+            const cur = parseModels($(inputId).value);
+            if (!cur.includes(m.id)) cur.push(m.id);
+            $(inputId).value = cur.join(",");
+          });
+          box.appendChild(btn);
+        });
+      }
+      fillPresets("speed-presets", "speed-models");
+      fillPresets("rec-presets", "rec-models");
+
+      const box = $("rec-cases");
+      box.innerHTML = "";
+      (data.cases || []).forEach((c) => {
+        const lab = document.createElement("label");
+        const cb = document.createElement("input");
+        cb.type = "checkbox";
+        cb.value = c.id;
+        cb.dataset.caseId = c.id;
+        lab.appendChild(cb);
+        lab.appendChild(document.createTextNode(` ${c.id} — ${c.title || c.category || ""}`));
+        box.appendChild(lab);
+      });
+    }
+
+    document.querySelectorAll(".tab").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        document.querySelectorAll(".tab").forEach((b) => b.classList.remove("active"));
+        btn.classList.add("active");
+        const tab = btn.dataset.tab;
+        $("panel-speed").classList.toggle("hidden", tab !== "speed");
+        $("panel-recovery").classList.toggle("hidden", tab !== "recovery");
+      });
+    });
+
+    $("speed-run").addEventListener("click", async () => {
+      const btn = $("speed-run");
+      const status = $("speed-status");
+      btn.disabled = true;
+      status.className = "status";
+      status.textContent = "Running speed…";
+      $("speed-summary").innerHTML = "";
+      $("speed-results").innerHTML = "";
+      try {
+        const res = await fetch("/api/bench/speed", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            models: parseModels($("speed-models").value),
+            query: $("speed-query").value,
+            runs: Number($("speed-runs").value) || 1,
+            llm_only: $("speed-llm-only").checked,
+          }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.detail || res.statusText);
+        status.textContent = `Done · prompt ${data.system_source} (${data.system_chars} chars)`;
+        const cards = $("speed-summary");
+        (data.models || []).forEach((m) => {
+          const el = document.createElement("div");
+          el.className = "card";
+          el.innerHTML = `<span>${m.model}</span>
+            <strong>TTFT ${fmt(m.ttft_ms_mean, 0)} ms</strong>
+            <div class="meta">TTFS ${fmt(m.ttfs_ms_mean, 0)} · ${fmt(m.avg_chars_per_sec_mean, 1)} chars/s · ok ${m.ok_runs}</div>`;
+          cards.appendChild(el);
+        });
+        let html = `<table><thead><tr><th>Model</th><th>TTFT</th><th>TTFS</th><th>Chars/s</th><th>Runs</th></tr></thead><tbody>`;
+        (data.models || []).forEach((m) => {
+          const ttft = m.ttft_ms_stdev != null ? `${fmt(m.ttft_ms_mean, 0)}±${fmt(m.ttft_ms_stdev, 0)}` : fmt(m.ttft_ms_mean, 0);
+          const ttfs = m.ttfs_ms_stdev != null ? `${fmt(m.ttfs_ms_mean, 0)}±${fmt(m.ttfs_ms_stdev, 0)}` : fmt(m.ttfs_ms_mean, 0);
+          const spd = m.avg_chars_per_sec_stdev != null ? `${fmt(m.avg_chars_per_sec_mean, 1)}±${fmt(m.avg_chars_per_sec_stdev, 1)}` : fmt(m.avg_chars_per_sec_mean, 1);
+          html += `<tr><td>${m.model}</td><td>${ttft}</td><td>${ttfs}</td><td>${spd}</td><td>${m.ok_runs}</td></tr>`;
+          (m.runs || []).forEach((r, i) => {
+            if (r.error) {
+              html += `<tr><td colspan="5" class="fail">run ${i + 1}: ${r.error}</td></tr>`;
+            }
+          });
+        });
+        html += `</tbody></table>`;
+        $("speed-results").innerHTML = html;
+      } catch (err) {
+        status.className = "status error";
+        status.textContent = String(err.message || err);
+      } finally {
+        btn.disabled = false;
+      }
+    });
+
+    $("rec-run").addEventListener("click", async () => {
+      const btn = $("rec-run");
+      const status = $("rec-status");
+      btn.disabled = true;
+      status.className = "status";
+      status.textContent = "Running recovery…";
+      $("rec-summary").innerHTML = "";
+      $("rec-results").innerHTML = "";
+      const selected = Array.from($("rec-cases").querySelectorAll("input[type=checkbox]:checked")).map((el) => el.value);
+      try {
+        const res = await fetch("/api/bench/recovery", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            models: parseModels($("rec-models").value),
+            case_ids: selected,
+          }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.detail || res.statusText);
+        status.textContent = `Done · ${data.case_count} cases · prompt ${data.system_source}`;
+        const cards = $("rec-summary");
+        (data.models || []).forEach((m) => {
+          const el = document.createElement("div");
+          el.className = "card";
+          const pct = m.pass_rate != null ? `${Math.round(m.pass_rate * 100)}%` : "-";
+          el.innerHTML = `<span>${m.model}</span><strong>${m.pass}/${m.total} (${pct})</strong>`;
+          cards.appendChild(el);
+        });
+        Object.entries(data.by_category || {}).forEach(([cat, slot]) => {
+          const el = document.createElement("div");
+          el.className = "card";
+          const pct = slot.pass_rate != null ? `${Math.round(slot.pass_rate * 100)}%` : "-";
+          el.innerHTML = `<span>${cat}</span><strong>${slot.pass}/${slot.total} (${pct})</strong>`;
+          cards.appendChild(el);
+        });
+        let html = `<table><thead><tr><th>Result</th><th>Case</th><th>Model</th><th>Reply / failures</th></tr></thead><tbody>`;
+        (data.results || []).forEach((r) => {
+          const mark = r.pass ? `<span class="pass">PASS</span>` : `<span class="fail">FAIL</span>`;
+          const fails = (r.failures || []).join(", ");
+          const err = r.error ? `<div class="fail">${r.error}</div>` : "";
+          html += `<tr>
+            <td>${mark}</td>
+            <td>${r.case_id}<div class="meta">${r.category || ""}</div></td>
+            <td>${r.model}</td>
+            <td><div class="reply">${(r.reply || "").replace(/</g, "&lt;")}</div>
+              ${fails ? `<div class="meta">failures: ${fails}</div>` : ""}${err}</td>
+          </tr>`;
+        });
+        html += `</tbody></table>`;
+        $("rec-results").innerHTML = html;
+      } catch (err) {
+        status.className = "status error";
+        status.textContent = String(err.message || err);
+      } finally {
+        btn.disabled = false;
+      }
+    });
+
+    loadMeta().catch((err) => {
+      $("speed-status").className = "status error";
+      $("speed-status").textContent = String(err.message || err);
+    });
+  </script>
+</body>
+</html>

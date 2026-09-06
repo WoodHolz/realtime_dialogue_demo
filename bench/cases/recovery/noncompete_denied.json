@@ -1,0 +1,19 @@
+{
+  "id": "noncompete_denied",
+  "category": "protocol_denial",
+  "title": "竞业：证明人说没有签",
+  "history": [
+    {
+      "role": "assistant",
+      "text": "好的，谢谢您。阿强在职或离职时，有没有签署过竞业禁止协议？"
+    }
+  ],
+  "user": "没有签过。",
+  "expect": {
+    "must_not_any": ["签过竞业", "有签署", "登记有", "系统登记"],
+    "must_not_ask_fields": ["效力", "期限", "限制多久"],
+    "single_question": true,
+    "no_markdown": true,
+    "max_questions": 1
+  }
+}

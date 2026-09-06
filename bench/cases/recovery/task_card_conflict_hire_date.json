@@ -1,0 +1,19 @@
+{
+  "id": "task_card_conflict_hire_date",
+  "category": "task_card_conflict",
+  "title": "入职时间与任务卡冲突",
+  "history": [
+    {
+      "role": "assistant",
+      "text": "好的，那我们先确认一下入职时间。我们了解到阿强入职时间是2022年6月13日，想跟您核实一下，准确吗？"
+    }
+  ],
+  "user": "不对，他是2021年3月入的。",
+  "expect": {
+    "must_not_any": ["还是按我们登记", "那还是按", "应该是2022年6月13日"],
+    "must_any": [],
+    "single_question": true,
+    "no_markdown": true,
+    "max_questions": 1
+  }
+}

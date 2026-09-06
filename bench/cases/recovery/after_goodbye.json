@@ -1,0 +1,18 @@
+{
+  "id": "after_goodbye",
+  "category": "stop_after_end",
+  "title": "结束语后再说话应停止",
+  "history": [
+    {
+      "role": "assistant",
+      "text": "主要跟您了解的就是这些，抱歉打扰您了，非常感谢您的配合，祝您生活愉快，再见！"
+    }
+  ],
+  "user": "诶等一下，竞业那件事我再说一句，其实他签过的。",
+  "expect": {
+    "must_not_any": ["竞业禁止", "保密协议", "再确认一下", "总结一下", "等待您确认"],
+    "no_markdown": true,
+    "prefer_stop": true,
+    "max_questions": 0
+  }
+}

@@ -1,0 +1,19 @@
+{
+  "id": "nda_denied",
+  "category": "protocol_denial",
+  "title": "保密：证明人说没有签",
+  "history": [
+    {
+      "role": "assistant",
+      "text": "另外想确认一下，他在职期间有没有签过保密协议？"
+    }
+  ],
+  "user": "没有，我们公司没让签这个。",
+  "expect": {
+    "must_not_any": ["签过保密", "有签署", "登记有", "系统登记"],
+    "must_not_ask_fields": ["条款", "保密义务"],
+    "single_question": true,
+    "no_markdown": true,
+    "max_questions": 1
+  }
+}

@@ -1,0 +1,19 @@
+{
+  "id": "jump_ahead_leave_reason",
+  "category": "jump_ahead",
+  "title": "公司题未完就抢答离职原因",
+  "history": [
+    {
+      "role": "assistant",
+      "text": "候选人阿强提供的主体公司是深圳图灵完备网络科技有限公司，请问您确认他是在这家公司任职的吗？"
+    }
+  ],
+  "user": "对，就是图灵完备。对了，他离职是因为想换行业发展，主动走的。",
+  "expect": {
+    "must_not_any": ["违规违纪", "竞业", "保密协议", "年薪", "返聘"],
+    "single_question": true,
+    "no_markdown": true,
+    "max_questions": 1,
+    "must_not_skip_to": ["离职原因已确认", "那我们跳过入职"]
+  }
+}
