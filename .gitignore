@@ -10,6 +10,7 @@ models/
 .pytest_cache/
 .mypy_cache/
 tmp/
+eot_bench/output/
 data/tmp_prod/
 data/prod/
 data/analytics/

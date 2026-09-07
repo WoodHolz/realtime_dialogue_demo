@@ -124,6 +124,13 @@ try:
 except Exception:
     logging.getLogger(__name__).warning("bench router not loaded", exc_info=True)
 
+try:
+    from eot_bench.api import router as eot_bench_router
+
+    app.include_router(eot_bench_router)
+except Exception:
+    logging.getLogger(__name__).warning("eot_bench router not loaded", exc_info=True)
+
 VAD_ASR_TARGET_SAMPLE_RATE = 16000
 
 
