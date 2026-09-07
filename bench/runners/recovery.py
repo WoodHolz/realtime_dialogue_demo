@@ -226,7 +226,7 @@ async def _generate_reply(
     try:
         t_query = time.perf_counter()
         await llm.start_speculative(
-            system=system_with_progress(system, history),
+            system=system,
             history=history,
             user_text=user_text,
             gen_id=gen_id,
@@ -285,23 +285,40 @@ def _history_from_case(case: dict[str, Any]) -> list[HistoryTurn]:
     return turns
 
 
+def _system_for_case(base_system: str, case: dict[str, Any], history: list[HistoryTurn]) -> str:
+    """Apply progress hint, then optional Gate B supervisor_patch (prefix+suffix, highest priority)."""
+    text = system_with_progress(base_system, history)
+    patch = str(case.get("supervisor_patch") or "").strip()
+    if not patch:
+        return text
+    # Prefix so it beats long manuscript; suffix so it is the last instruction seen.
+    if text:
+        return f"{patch}\n\n{text}\n\n{patch}"
+    return patch
+
+
 async def run_recovery(
     *,
     models: list[str] | None = None,
     case_ids: list[str] | None = None,
     system_override: str = "",
     no_tts_prompt: bool = False,
-    supervisor_audit: bool = True,
+    supervisor_audit: bool | None = None,
+    prompt_mode: str = "supervisor",
     pause: float = 0.3,
     settings: PipelineSettings | None = None,
 ) -> dict[str, object]:
     cfg = settings or load_pipeline_settings()
     raw_models = [m.strip() for m in (models or []) if m and m.strip()] or [cfg.llm_model]
     specs = [parse_model_spec(m) for m in raw_models]
+    mode = (prompt_mode or "supervisor").strip().lower() or "supervisor"
+    # Legacy flag: False forces fast path; True is ignored when prompt_mode is set.
+    if supervisor_audit is False:
+        mode = "fast"
     system, prompt_src = resolve_system_prompt(
         system_override=system_override,
         no_tts_prompt=no_tts_prompt,
-        supervisor_audit=supervisor_audit,
+        prompt_mode=mode,
     )
     cases = load_recovery_cases(case_ids=case_ids)
 
@@ -319,11 +336,12 @@ async def run_recovery(
             user_text = str(case.get("user") or "").strip()
             expect = case.get("expect") if isinstance(case.get("expect"), dict) else {}
             history = _history_from_case(case)
+            case_system = _system_for_case(system, case, history)
             try:
                 gen = await _generate_reply(
                     cfg,
                     model=model,
-                    system=system,
+                    system=case_system,
                     history=history,
                     user_text=user_text,
                 )
@@ -417,7 +435,8 @@ async def run_recovery(
     return {
         "system_source": prompt_src,
         "system_chars": len(system),
-        "supervisor_audit": bool(supervisor_audit),
+        "prompt_mode": mode,
+        "supervisor_audit": mode in {"supervisor", "fast_audit"},
         "settings": cfg.describe(),
         "case_count": len(cases),
         "models": list(by_model.values()),
@@ -429,7 +448,7 @@ async def run_recovery(
 def print_recovery_summary(payload: dict[str, object]) -> None:
     print()
     print(f"Prompt: {payload.get('system_source')} ({payload.get('system_chars')} chars)")
-    print(f"Supervisor audit: {payload.get('supervisor_audit')}")
+    print(f"Prompt mode: {payload.get('prompt_mode')}  (supervisor_audit={payload.get('supervisor_audit')})")
     print(f"Cases: {payload.get('case_count')}")
     print()
     for model_block in payload.get("models") or []:

@@ -1,15 +1,20 @@
 # -*- coding: utf-8 -*-
-"""Shared LLM factory for bench runners (DashScope / MaaS Responses + Ark Chat Completions)."""
+"""Shared LLM factory for bench runners (DashScope / MaaS / Kimi / MiMo / Ark)."""
 from __future__ import annotations
 
 import os
 
 from backend.pipeline.config import PipelineSettings
 from bench.providers import (
+    DASHSCOPE_CHAT_COMPLETIONS_MODELS,
     load_ark_api_key,
     load_ark_base_url,
+    load_kimi_api_key,
+    load_kimi_base_url,
     load_maas_api_key,
     load_maas_base_url,
+    load_mimo_api_key,
+    load_mimo_base_url,
     parse_model_spec,
 )
 
@@ -43,6 +48,31 @@ def build_llm_for_model(settings: PipelineSettings, model: str):
             service_tier=resolve_ark_service_tier(),
         )
 
+    if spec.provider == "kimi":
+        # Moonshot Kimi chat.completions; disable thinking unless +thinking / BENCH_ENABLE_THINKING.
+        from backend.pipeline.adapters.llm_ark import ArkChatCompletionsLlm
+
+        thinking_on = bool(spec.enable_thinking) or _truthy_env("BENCH_ENABLE_THINKING", False)
+        extra_body = None if thinking_on else {"thinking": {"type": "disabled"}}
+        return ArkChatCompletionsLlm(
+            api_key=load_kimi_api_key(),
+            base_url=load_kimi_base_url(),
+            model=spec.model,
+            service_tier="off",
+            extra_body=extra_body,
+        )
+
+    if spec.provider == "mimo":
+        from backend.pipeline.adapters.llm_mimo import MimoResponsesLlm
+
+        thinking_on = bool(spec.enable_thinking) or _truthy_env("BENCH_ENABLE_THINKING", False)
+        return MimoResponsesLlm(
+            api_key=load_mimo_api_key(),
+            base_url=load_mimo_base_url(),
+            model=spec.model,
+            enable_thinking=thinking_on,
+        )
+
     from backend.pipeline.adapters.llm_dashscope import DashScopeResponsesLlm
 
     # Per-model +thinking wins; else BENCH_ENABLE_THINKING; else pipeline setting (dashscope only).
@@ -59,16 +89,26 @@ def build_llm_for_model(settings: PipelineSettings, model: str):
         # Default: same public DashScope host/key as qwen3.5-flash.
         # Only if BENCH_MAAS_BASE_URL is set do we hit a workspace endpoint.
         maas_base = load_maas_base_url()
-        return DashScopeResponsesLlm(
-            api_key=load_maas_api_key(settings),
-            base_url=maas_base or settings.resolved_llm_base,
+        api_key = load_maas_api_key(settings)
+        base_url = maas_base or settings.resolved_llm_base
+    else:
+        api_key = settings.api_key
+        base_url = settings.resolved_llm_base
+
+    # Some DashScope models only work on chat.completions (Responses returns response.failed).
+    if spec.model in DASHSCOPE_CHAT_COMPLETIONS_MODELS:
+        from backend.pipeline.adapters.llm_ark import ArkChatCompletionsLlm
+
+        return ArkChatCompletionsLlm(
+            api_key=api_key,
+            base_url=base_url,
             model=spec.model,
-            enable_thinking=thinking,
+            service_tier="off",
         )
 
     return DashScopeResponsesLlm(
-        api_key=settings.api_key,
-        base_url=settings.resolved_llm_base,
+        api_key=api_key,
+        base_url=base_url,
         model=spec.model,
         enable_thinking=thinking,
     )

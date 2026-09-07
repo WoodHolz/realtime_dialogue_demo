@@ -199,6 +199,27 @@ class DashScopeResponsesLlm:
             async for event in stream:
                 if gen_id in self._cancelled:
                     return
+                etype = ""
+                if isinstance(event, dict):
+                    etype = str(event.get("type") or "")
+                else:
+                    etype = str(getattr(event, "type", "") or "")
+                if etype == "response.failed":
+                    err_msg = "DashScope responses failed"
+                    try:
+                        resp = getattr(event, "response", None) or (
+                            event.get("response") if isinstance(event, dict) else None
+                        )
+                        err = getattr(resp, "error", None) if resp is not None else None
+                        if err is None and isinstance(resp, dict):
+                            err = resp.get("error")
+                        if err is not None:
+                            err_msg = str(getattr(err, "message", None) or err)
+                    except Exception:
+                        pass
+                    self.last_error = RuntimeError(err_msg)
+                    LOG.error("DashScopeResponsesLlm response.failed gen_id=%s: %s", gen_id, err_msg)
+                    break
                 # Official path: only response.output_text.delta → spoken text.
                 chunk = output_text_delta(event)
                 if chunk and self.on_delta:

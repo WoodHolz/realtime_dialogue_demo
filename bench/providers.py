@@ -4,9 +4,14 @@
 Model id formats:
   ark:doubao-seed-2-1-turbo-260628
   dashscope:qwen3.5-flash
+  dashscope:qwen3.8-2.4t-a95b
+  kimi:kimi-k2.6
+  mimo:mimo-v2.5-pro
   maas:qwen3.8-flash              → workspace MaaS Responses host
   maas:qwen3.8-flash+thinking    → same + enable_thinking
   qwen3.5-flash                  → dashscope (default)
+  kimi-k2.6                      → kimi (auto by prefix)
+  mimo-v2.5-pro                  → mimo (auto by prefix)
   doubao-seed-2-1-turbo-260628   → ark (auto by prefix)
 """
 from __future__ import annotations
@@ -15,21 +20,33 @@ import os
 from dataclasses import dataclass
 
 from backend.pipeline.adapters.llm_ark import DEFAULT_ARK_BASE, resolve_ark_service_tier
+from backend.pipeline.adapters.llm_mimo import DEFAULT_MIMO_BASE, DEFAULT_MIMO_MODEL
 from backend.pipeline.config import PipelineSettings, PUBLIC_LLM_BASE
 
 DEFAULT_ARK_MODEL = "doubao-seed-2-1-turbo-260628"
+DEFAULT_KIMI_BASE = "https://api.moonshot.cn/v1"
+# Current Moonshot catalog (kimi-k2-turbo-preview may 404); override with KIMI_MODEL.
+DEFAULT_KIMI_MODEL = "kimi-k2.6"
 
 # Extra DashScope public models (same host/key as qwen3.5-flash; not workspace MaaS).
 DEFAULT_DASHSCOPE_EXTRA_MODELS = (
     "qwen3.8-flash",
     "qwen3.7-flash",
     "qwen3.8-max",
+    "qwen3.8-2.4t-a95b",
+)
+
+# These DashScope models reject /responses (or return empty); use chat.completions instead.
+DASHSCOPE_CHAT_COMPLETIONS_MODELS = frozenset(
+    {
+        "qwen3.8-2.4t-a95b",
+    }
 )
 
 
 @dataclass(frozen=True)
 class ModelSpec:
-    provider: str  # stub | dashscope | ark | maas
+    provider: str  # stub | dashscope | ark | maas | kimi | mimo
     model: str
     label: str  # original string shown in reports
     enable_thinking: bool = False
@@ -50,6 +67,38 @@ def load_ark_api_key() -> str:
 
 def load_ark_base_url() -> str:
     return (os.getenv("ARK_BASE_URL") or os.getenv("VOLC_ARK_BASE_URL") or DEFAULT_ARK_BASE).strip().rstrip("/")
+
+
+def load_kimi_api_key() -> str:
+    raw = (os.getenv("KIMI_API_KEY") or os.getenv("MOONSHOT_API_KEY") or "").strip().strip('"').strip("'")
+    if raw.lower().startswith("bearer "):
+        raw = raw[7:].strip()
+    return raw
+
+
+def load_kimi_base_url() -> str:
+    return (
+        os.getenv("KIMI_API_BASE") or os.getenv("MOONSHOT_API_BASE") or DEFAULT_KIMI_BASE
+    ).strip().rstrip("/")
+
+
+def load_kimi_default_model() -> str:
+    return (os.getenv("KIMI_MODEL") or os.getenv("MOONSHOT_MODEL") or DEFAULT_KIMI_MODEL).strip() or DEFAULT_KIMI_MODEL
+
+
+def load_mimo_api_key() -> str:
+    raw = (os.getenv("MIMO_API_KEY") or os.getenv("XIAOMI_MIMO_API_KEY") or "").strip().strip('"').strip("'")
+    if raw.lower().startswith("bearer "):
+        raw = raw[7:].strip()
+    return raw
+
+
+def load_mimo_base_url() -> str:
+    return (os.getenv("MIMO_BASE_URL") or os.getenv("MIMO_API_BASE") or DEFAULT_MIMO_BASE).strip().rstrip("/")
+
+
+def load_mimo_default_model() -> str:
+    return (os.getenv("MIMO_MODEL") or DEFAULT_MIMO_MODEL).strip() or DEFAULT_MIMO_MODEL
 
 
 def load_maas_base_url() -> str:
@@ -98,6 +147,12 @@ def parse_model_spec(raw: str, *, default_provider: str = "dashscope") -> ModelS
         if left_l in {"ark", "volc", "volcengine", "doubao_ark"} and right:
             model, thinking = _strip_thinking_flag(right)
             return ModelSpec(provider="ark", model=model, label=label, enable_thinking=thinking)
+        if left_l in {"kimi", "moonshot", "ms"} and right:
+            model, thinking = _strip_thinking_flag(right)
+            return ModelSpec(provider="kimi", model=model, label=label, enable_thinking=thinking)
+        if left_l in {"mimo", "xiaomi", "xiaomimimo"} and right:
+            model, thinking = _strip_thinking_flag(right)
+            return ModelSpec(provider="mimo", model=model, label=label, enable_thinking=thinking)
         if left_l in {"maas", "workspace", "pai_maas", "aliyun_maas"} and right:
             # Alias: same as dashscope public unless BENCH_MAAS_BASE_URL is set.
             model, thinking = _strip_thinking_flag(right)
@@ -111,6 +166,12 @@ def parse_model_spec(raw: str, *, default_provider: str = "dashscope") -> ModelS
     lower = text.lower()
     if lower.startswith("doubao-") or lower.startswith("ep-") or lower.startswith("seed-"):
         provider = "ark"
+        model = text
+    elif lower.startswith("kimi-") or lower.startswith("moonshot-"):
+        provider = "kimi"
+        model = text
+    elif lower.startswith("mimo-"):
+        provider = "mimo"
         model = text
     model, thinking = _strip_thinking_flag(model)
     return ModelSpec(provider=provider, model=model, label=label, enable_thinking=thinking)
@@ -137,6 +198,24 @@ def suggested_bench_models(settings: PipelineSettings) -> list[dict[str, str]]:
                 "label": f"DashScope {name}",
             }
         )
+    kimi_model = load_kimi_default_model()
+    out.append(
+        {
+            "id": f"kimi:{kimi_model}",
+            "provider": "kimi",
+            "model": kimi_model,
+            "label": f"Kimi {kimi_model}",
+        }
+    )
+    mimo_model = load_mimo_default_model()
+    out.append(
+        {
+            "id": f"mimo:{mimo_model}",
+            "provider": "mimo",
+            "model": mimo_model,
+            "label": f"MiMo {mimo_model}",
+        }
+    )
     out.append(
         {
             "id": f"ark:{DEFAULT_ARK_MODEL}",
@@ -164,6 +243,16 @@ def provider_status(settings: PipelineSettings) -> dict[str, object]:
             "default_model": settings.llm_model,
             "extra_models": list(DEFAULT_DASHSCOPE_EXTRA_MODELS),
         },
+        "kimi": {
+            "has_api_key": bool(load_kimi_api_key()),
+            "base_url": load_kimi_base_url(),
+            "default_model": load_kimi_default_model(),
+        },
+        "mimo": {
+            "has_api_key": bool(load_mimo_api_key()),
+            "base_url": load_mimo_base_url(),
+            "default_model": load_mimo_default_model(),
+        },
         "ark": {
             "has_api_key": bool(load_ark_api_key()),
             "base_url": load_ark_base_url(),
@@ -188,6 +277,10 @@ def assert_keys_for_models(specs: list[ModelSpec], settings: PipelineSettings, *
         raise RuntimeError("DASHSCOPE_API_KEY / PIPELINE_API_KEY required for dashscope models")
     if "maas" in providers and not load_maas_api_key(settings):
         raise RuntimeError("DASHSCOPE_API_KEY required for maas aliases (same as dashscope public)")
+    if "kimi" in providers and not load_kimi_api_key():
+        raise RuntimeError("KIMI_API_KEY required for kimi models (Moonshot)")
+    if "mimo" in providers and not load_mimo_api_key():
+        raise RuntimeError("MIMO_API_KEY required for mimo models (Xiaomi MiMo)")
     if "ark" in providers and not load_ark_api_key():
         raise RuntimeError("ARK_API_KEY required for ark models (Volcengine Ark)")
     if need_tts and settings.tts_adapter not in {"stub", "tts_stub"} and not settings.api_key:

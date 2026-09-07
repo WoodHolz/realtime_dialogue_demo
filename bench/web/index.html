@@ -51,7 +51,7 @@
     }
     .hidden { display: none; }
     label { display: block; font-size: 0.82rem; color: var(--muted); margin: 0.65rem 0 0.25rem; }
-    input[type="text"], input[type="number"], textarea {
+    input[type="text"], input[type="number"], textarea, select {
       width: 100%;
       background: #0f1218;
       border: 1px solid var(--line);
@@ -63,8 +63,32 @@
     textarea { min-height: 64px; resize: vertical; }
     .row { display: flex; flex-wrap: wrap; gap: 0.75rem 1.25rem; align-items: end; }
     .row > div { flex: 1 1 160px; }
-    .checks { display: flex; flex-wrap: wrap; gap: 0.75rem 1.25rem; margin-top: 0.75rem; }
+    .checks { display: flex; flex-wrap: wrap; gap: 0.5rem 0.65rem; margin-top: 0.75rem; }
     .checks label { display: flex; align-items: center; gap: 0.4rem; margin: 0; color: var(--text); font-size: 0.9rem; }
+    button.preset {
+      background: transparent;
+      border: 1px solid var(--line);
+      color: var(--muted);
+      padding: 0.4rem 0.7rem;
+      border-radius: 8px;
+      cursor: pointer;
+      font: inherit;
+      font-size: 0.8rem;
+    }
+    button.preset.on {
+      color: var(--bg);
+      background: var(--accent);
+      border-color: var(--accent);
+      font-weight: 600;
+    }
+    button.preset:hover { border-color: var(--accent); color: var(--text); }
+    button.preset.on:hover { color: var(--bg); }
+    .preset-hint {
+      margin-top: 0.35rem;
+      color: var(--ok);
+      font-size: 0.82rem;
+      min-height: 1.1em;
+    }
     button.run {
       margin-top: 1rem;
       background: var(--btn);
@@ -119,8 +143,10 @@
 <body>
   <h1>Pipeline Bench</h1>
   <p class="sub">速度（TTFT / TTFS / chars/s）与纠偏智力（recovery cases）。使用与 /t2sbg-pipeline 相同的 system prompt。<br/>
-    模型写法：<code>dashscope:qwen3.5-flash</code>、<code>dashscope:qwen3.8-flash</code>、<code>ark:doubao-seed-2-1-turbo-260628</code>。
-    Thinking：加 <code>+thinking</code>（速度测默认关）。</p>
+    模型写法：<code>dashscope:qwen3.5-flash</code>、<code>dashscope:qwen3.8-2.4t-a95b</code>、
+    <code>kimi:kimi-k2.6</code>、<code>mimo:mimo-v2.5-pro</code>、<code>ark:doubao-seed-2-1-turbo-260628</code>。
+    Thinking：加 <code>+thinking</code>（默认关；Kimi 发 <code>thinking.type=disabled</code>）。
+    MiMo 用 <code>MIMO_API_KEY</code>。</p>
 
   <div class="tabs">
     <button type="button" class="tab active" data-tab="speed">Speed</button>
@@ -139,6 +165,7 @@
       </div>
     </div>
     <div class="checks" id="speed-presets"></div>
+    <p class="preset-hint" id="speed-preset-hint"></p>
     <p class="meta" id="provider-status"></p>
     <label for="speed-query">Query</label>
     <textarea id="speed-query"></textarea>
@@ -160,8 +187,15 @@
       </div>
     </div>
     <div class="checks" id="rec-presets"></div>
+    <p class="preset-hint" id="rec-preset-hint"></p>
     <div class="checks">
-      <label><input id="rec-supervisor-audit" type="checkbox" checked /> 拼接纠偏审查 prompt（SUPERVISOR_AUDIT，暂时）</label>
+      <label>Prompt mode
+        <select id="rec-prompt-mode">
+          <option value="supervisor" selected>supervisor（独立纠偏 prompt，推荐）</option>
+          <option value="fast">fast（仅快模型流程+TTS 稿）</option>
+          <option value="fast_audit">fast_audit（旧：快模型稿+软拼审查）</option>
+        </select>
+      </label>
     </div>
     <label>Cases（不选 = 全部）</label>
     <div class="case-list" id="rec-cases"></div>
@@ -196,30 +230,70 @@
       const ds = prov.dashscope || {};
       const ark = prov.ark || {};
       const maas = prov.maas || {};
+      const kimi = prov.kimi || {};
+      const mimo = prov.mimo || {};
       $("provider-status").textContent =
-        `DashScope key: ${ds.has_api_key ? "yes" : "no"} · MaaS key: ${maas.has_api_key ? "yes" : "no"} · Ark key: ${ark.has_api_key ? "yes" : "no"}` +
+        `DashScope key: ${ds.has_api_key ? "yes" : "no"} · Kimi key: ${kimi.has_api_key ? "yes" : "no"} · MiMo key: ${mimo.has_api_key ? "yes" : "no"} · MaaS key: ${maas.has_api_key ? "yes" : "no"} · Ark key: ${ark.has_api_key ? "yes" : "no"}` +
         (ark.service_tier ? ` · Ark service_tier=${ark.service_tier}` : "") +
         (data.model_id_help ? ` · ${data.model_id_help}` : "");
 
-      function fillPresets(containerId, inputId) {
+      function fillPresets(containerId, inputId, hintId) {
         const box = $(containerId);
+        const hint = hintId ? $(hintId) : null;
         box.innerHTML = "";
+        const buttons = [];
+
+        function selectedSet() {
+          return new Set(parseModels($(inputId).value));
+        }
+
+        function syncButtons() {
+          const sel = selectedSet();
+          buttons.forEach(({ btn, id }) => {
+            btn.classList.toggle("on", sel.has(id));
+            btn.title = sel.has(id) ? `已启用 · 再点移除 ${id}` : `点击启用 ${id}`;
+            btn.setAttribute("aria-pressed", sel.has(id) ? "true" : "false");
+          });
+        }
+
+        function flashHint(msg) {
+          if (!hint) return;
+          hint.textContent = msg;
+          clearTimeout(flashHint._t);
+          flashHint._t = setTimeout(() => {
+            if (hint.textContent === msg) hint.textContent = "";
+          }, 2200);
+        }
+
         (data.suggested_models || []).forEach((m) => {
           const btn = document.createElement("button");
           btn.type = "button";
-          btn.className = "tab";
-          btn.style.fontSize = "0.8rem";
+          btn.className = "preset";
           btn.textContent = m.label || m.id;
+          btn.dataset.modelId = m.id;
           btn.addEventListener("click", () => {
             const cur = parseModels($(inputId).value);
-            if (!cur.includes(m.id)) cur.push(m.id);
-            $(inputId).value = cur.join(",");
+            const idx = cur.indexOf(m.id);
+            if (idx >= 0) {
+              cur.splice(idx, 1);
+              $(inputId).value = cur.join(",");
+              flashHint(`已移除 ${m.label || m.id}`);
+            } else {
+              cur.push(m.id);
+              $(inputId).value = cur.join(",");
+              flashHint(`已启用 ${m.label || m.id}`);
+            }
+            syncButtons();
           });
+          buttons.push({ btn, id: m.id });
           box.appendChild(btn);
         });
+
+        $(inputId).addEventListener("input", syncButtons);
+        syncButtons();
       }
-      fillPresets("speed-presets", "speed-models");
-      fillPresets("rec-presets", "rec-models");
+      fillPresets("speed-presets", "speed-models", "speed-preset-hint");
+      fillPresets("rec-presets", "rec-models", "rec-preset-hint");
 
       const box = $("rec-cases");
       box.innerHTML = "";
@@ -315,12 +389,15 @@
           body: JSON.stringify({
             models: parseModels($("rec-models").value),
             case_ids: selected,
-            supervisor_audit: $("rec-supervisor-audit").checked,
+            prompt_mode: $("rec-prompt-mode").value || "supervisor",
           }),
         });
         const data = await res.json().catch(() => ({}));
         if (!res.ok) throw new Error(data.detail || res.statusText);
-        status.textContent = `Done · ${data.case_count} cases · prompt ${data.system_source}`;
+        const mode = data.prompt_mode || "?";
+        status.textContent =
+          `Done · ${data.case_count} cases · prompt_mode=${mode} · ` +
+          `prompt ${data.system_source} (${data.system_chars || "?"} chars)`;
         const cards = $("rec-summary");
         (data.models || []).forEach((m) => {
           const el = document.createElement("div");

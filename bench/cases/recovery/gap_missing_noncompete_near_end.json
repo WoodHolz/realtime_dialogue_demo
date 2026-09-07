@@ -78,6 +78,6 @@
     "single_question": true,
     "no_markdown": true,
     "max_questions": 1,
-    "must_not_any": ["签过竞业", "有签署竞业", "登记有竞业"]
+    "must_not_any": ["有签署竞业", "登记有竞业", "任务卡写有"]
   }
 }

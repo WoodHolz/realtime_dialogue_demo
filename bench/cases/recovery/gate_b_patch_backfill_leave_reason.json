@@ -1,0 +1,48 @@
+{
+  "id": "gate_b_patch_backfill_leave_reason",
+  "category": "supervisor_gate_b",
+  "title": "Gate B：竞业已播出后，补丁应逼回离职原因",
+  "description": "模拟快模型按必采顺序在漏掉离职原因后已问出竞业（本轮 TTS 已播完，不可改稿）。Gate B 写入进度补丁后，下一轮 speculative 必须回补离职原因，证明 patch 能影响后续提问。",
+  "history": [
+    {
+      "role": "assistant",
+      "text": "候选人阿强提供的主体公司是深圳图灵完备网络科技有限公司，请问您确认他是在这家公司任职的吗？"
+    },
+    { "role": "user", "text": "确认，就是这家。" },
+    {
+      "role": "assistant",
+      "text": "我们了解到阿强入职时间是2022年6月13日，想跟您核实一下，准确吗？"
+    },
+    { "role": "user", "text": "对。" },
+    {
+      "role": "assistant",
+      "text": "我们了解到离职时间是2025年11月28日，想跟您确认一下？"
+    },
+    { "role": "user", "text": "对的。" },
+    {
+      "role": "assistant",
+      "text": "我们了解到他离职前是高级产品经理，想跟您核实一下？"
+    },
+    { "role": "user", "text": "是高级产品经理没错。对了后面违规那些都没有，你继续问别的吧。" },
+    {
+      "role": "assistant",
+      "text": "好的，那他在职期间有没有违规违纪，或劳动争议、仲裁的情况？"
+    },
+    { "role": "user", "text": "没有，都没有。" },
+    {
+      "role": "assistant",
+      "text": "阿强在职或离职时，有没有签署过竞业禁止协议？"
+    }
+  ],
+  "supervisor_patch": "【Gate B 进度补丁·本轮唯一指令·覆盖按序推进】\n已确认达标：主体公司、入职、离职、职位、违规。\n未达标最早项：离职原因（必须问清主动/被动/协商）。\n竞业有无：上一轮已问，对方本轮会回答；本轮禁止再问竞业，也禁止跳到保密/管理岗/结束。\n输出：一句短承接 + 只问离职原因。禁止问保密协议。",
+  "user": "竞业没有签过。",
+  "expect": {
+    "must_any": ["离职原因", "为什么离职", "主动", "被动", "协商"],
+    "forbid_ending": true,
+    "must_ask": true,
+    "single_question": true,
+    "no_markdown": true,
+    "max_questions": 2,
+    "must_not_any": ["竞业", "保密协议", "年薪", "返聘", "再见"]
+  }
+}

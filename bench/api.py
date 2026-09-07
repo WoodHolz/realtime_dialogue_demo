@@ -34,8 +34,10 @@ class RecoveryRequest(BaseModel):
     case_ids: list[str] = Field(default_factory=list)
     pause: float = 0.3
     no_tts_prompt: bool = False
-    # Temporary: concat supervisor audit block (completeness / branch / 追问).
-    supervisor_audit: bool = True
+    # supervisor = standalone Supervisor prompt (default, accurate for旁路)
+    # fast = pipeline manuscript only
+    # fast_audit = legacy concat SUPERVISOR_AUDIT onto fast prompt
+    prompt_mode: str = "supervisor"
 
 
 @router.get("/bench")
@@ -50,9 +52,11 @@ async def bench_page() -> HTMLResponse:
 async def bench_meta() -> dict[str, Any]:
     settings = load_pipeline_settings()
     suggested = suggested_bench_models(settings)
-    # Default input: public dashscope + ark only; MaaS models are one-click presets.
+    # Default input: public dashscope + kimi + ark; MaaS models are one-click presets.
     default_compare = ",".join(
-        item["id"] for item in suggested if item.get("provider") in {"dashscope", "ark"}
+        item["id"]
+        for item in suggested
+        if item.get("provider") in {"dashscope", "kimi", "mimo", "ark"}
     )
     return {
         "default_query": DEFAULT_QUERY,
@@ -64,9 +68,11 @@ async def bench_meta() -> dict[str, Any]:
         "settings": settings.describe(),
         "cases": list_recovery_cases(),
         "model_id_help": (
-            "Prefixes: dashscope:qwen3.8-flash | ark:doubao-…. "
-            "Same public DashScope host/key as qwen3.5-flash. "
-            "Add +thinking for enable_thinking. Bare doubao-* / ep-* → Ark."
+            "Prefixes: dashscope:qwen3.8-flash | dashscope:qwen3.8-2.4t-a95b | "
+            "kimi:kimi-k2.6 | mimo:mimo-v2.5-pro | ark:doubao-…. "
+            "Kimi thinking off by default (thinking.type=disabled). "
+            "MiMo uses Responses API + MIMO_API_KEY. "
+            "Add +thinking to opt in. Bare kimi-* / mimo-* auto-route."
         ),
     }
 
@@ -102,7 +108,7 @@ async def bench_recovery(body: RecoveryRequest) -> dict[str, Any]:
             case_ids=body.case_ids,
             pause=max(0.0, body.pause),
             no_tts_prompt=body.no_tts_prompt,
-            supervisor_audit=body.supervisor_audit,
+            prompt_mode=body.prompt_mode or "supervisor",
         )
     except RuntimeError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

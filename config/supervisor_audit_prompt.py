@@ -1,15 +1,14 @@
 # -*- coding: utf-8 -*-
-"""Supervisor / 纠偏·会话分支 审查提示（临时拼接到评测或旁路强模型）。
+"""Supervisor / 纠偏·会话分支 — 独立 system prompt（旁路强模型用）。
 
-Fast LLM keeps the base interview + TTS manuscript prompts.
-This block is for the correction / branch controller: completeness audit,
-backfill missing fields, and decide whether to追问 — not for casual opening.
+Fast LLM keeps verification + TTS manuscript and does NOT concat this block.
+Bench recovery should default to SUPERVISOR_SYSTEM_PROMPT alone for accurate智力评测.
 
-Later: live Gate A/B supervisor can use the same text without concatenating
-into the fast-path system prompt.
+Live: Gate A/B feed this prompt to the supervisor model only.
 """
 from __future__ import annotations
 
+# Compact audit rules (also used historically as concat block — prefer SUPERVISOR_SYSTEM_PROMPT).
 SUPERVISOR_AUDIT_PROMPT = """【纠偏与会话分支·强制审查（本轮必须执行；优先级高于默认按序推进）】
 你同时承担「会话分支控制 / 纠偏 / 追问」。生成下一句口播前，必须先做清单审查；审查结论优先于「接着上一题往下问」。
 
@@ -31,9 +30,35 @@ SUPERVISOR_AUDIT_PROMPT = """【纠偏与会话分支·强制审查（本轮必�
 - 有缺口：短承接 + 补问该缺口。无缺口且对方要结束：才说结束语。
 """
 
+# Standalone supervisor system (bench智力 + live旁路). No TTS manuscript.
+SUPERVISOR_SYSTEM_PROMPT = """你是背调电话访谈的「纠偏与会话分支官」（Supervisor），不是主播闲聊模型。
+根据已发生的对话历史，决定本轮应对证明人说的下一句口播（纠偏 / 回补 / 追问 / 允许结束）。
+
+【必采顺序】
+开场 → 1主体公司 → 2入职 → 3离职 → 4职位 → 5离职原因（主动/被动/协商）→ 6违规 → 7竞业有无 → 8竞业效力（仅有时）→ 9保密有无 → 10管理岗 → 11直属上级 → 12薪酬（可选）→ 13返聘 → 14证明人身份 → 15共事时长 → 结束语
+
+【职责】
+- 扫全历史，找最早未达标必采项；本轮只处理它（或含糊澄清）。
+- 会话分支：backfill（回补）/ clarify（追问）/ advance（可前进）/ end（可结束）/ hold。
+- 用户催结束但清单未齐 → 禁止再见，只补问最早缺口。
+- 协议：竞业有无、保密有无须各自开放问到；对方说没有后勿翻案、勿问效力条款。
+- 不要复读已明确确认过的字段。
+
+【硬规则】
+1. 进度指针 ≠ 最后一问；禁止因「上一题是违规」就跳到竞业而丢掉更早的离职原因。
+2. 职位已确认但从未问清离职原因 → 必须先问离职原因。
+3. 从未开放问过竞业却要结束 → 必须先问竞业。
+4. 抢答/跳题：记下已答内容，下一轮仍回最早未达标项。
+
+【输出】
+- 只输出要对证明人说的话；禁止括号旁白、禁止写出审查清单或 JSON。
+- 每轮最多一个问题；短承接≤约10字。
+- 有缺口：短承接 + 补问该缺口。无缺口且对方要结束：才说结束语（可意译「主要跟您了解的就是这些…再见」）。
+"""
+
 
 def with_supervisor_audit(system_role: str) -> str:
-    """Append supervisor audit block (temporary concat for recovery / branch LLM)."""
+    """Legacy concat helper (bench A/B only). Prefer SUPERVISOR_SYSTEM_PROMPT alone."""
     base = (system_role or "").strip()
     req = SUPERVISOR_AUDIT_PROMPT.strip()
     if not req:
@@ -41,3 +66,12 @@ def with_supervisor_audit(system_role: str) -> str:
     if not base:
         return req
     return f"{base}\n\n{req}"
+
+
+def build_supervisor_system_prompt(*, extra_patch: str = "") -> str:
+    """Standalone supervisor system; optional Gate B patch appended."""
+    text = SUPERVISOR_SYSTEM_PROMPT.strip()
+    patch = (extra_patch or "").strip()
+    if patch:
+        return f"{text}\n\n{patch}"
+    return text

@@ -70,6 +70,7 @@ class ArkChatCompletionsLlm:
         base_url: str = DEFAULT_ARK_BASE,
         model: str,
         service_tier: str | None = DEFAULT_ARK_SERVICE_TIER,
+        extra_body: dict | None = None,
         timeout_sec: float = 60.0,
         on_delta: DeltaCb | None = None,
         on_sentence: SentenceCb | None = None,
@@ -79,6 +80,7 @@ class ArkChatCompletionsLlm:
         self.base_url = (base_url or DEFAULT_ARK_BASE).strip().rstrip("/")
         self.model = (model or "").strip()
         self.service_tier = resolve_ark_service_tier(service_tier)
+        self.extra_body = dict(extra_body or {})
         self.timeout_sec = timeout_sec
         self.on_delta = on_delta
         self.on_sentence = on_sentence
@@ -189,14 +191,17 @@ class ArkChatCompletionsLlm:
                 "messages": messages,
                 "stream": True,
             }
+            body_extra = dict(self.extra_body)
             if self.service_tier:
-                create_kwargs["extra_body"] = {"service_tier": self.service_tier}
+                body_extra["service_tier"] = self.service_tier
+            if body_extra:
+                create_kwargs["extra_body"] = body_extra
             try:
                 stream = await client.chat.completions.create(**create_kwargs)
             except TypeError:
                 create_kwargs.pop("extra_body", None)
-                if self.service_tier:
-                    create_kwargs["service_tier"] = self.service_tier
+                for k, v in body_extra.items():
+                    create_kwargs[k] = v
                 create_kwargs["stream"] = True
                 stream = await client.chat.completions.create(**create_kwargs)
             except Exception as exc:
@@ -212,6 +217,9 @@ class ArkChatCompletionsLlm:
                     create_kwargs["stream"] = True
                     create_kwargs.pop("extra_body", None)
                     create_kwargs.pop("service_tier", None)
+                    body_retry = dict(self.extra_body)
+                    if body_retry:
+                        create_kwargs["extra_body"] = body_retry
                     stream = await client.chat.completions.create(**create_kwargs)
                 else:
                     raise

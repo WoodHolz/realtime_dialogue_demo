@@ -1,0 +1,42 @@
+{
+  "id": "gap_leave_reason_skip_strict_or_backfill",
+  "category": "completeness_gap",
+  "title": "漏离职原因后：立即回补或严格按序问竞业均可",
+  "description": "与 gap_missing_leave_reason_midway 同历史，但承认两种策略都合理：(A) 立即回补离职原因；(B) 严格按序在违规后问竞业，指望后续/Gate B 再回补。用于观察 flash 是否「按序前进」而非一律判失败。",
+  "history": [
+    {
+      "role": "assistant",
+      "text": "候选人阿强提供的主体公司是深圳图灵完备网络科技有限公司，请问您确认他是在这家公司任职的吗？"
+    },
+    { "role": "user", "text": "确认，就是这家。" },
+    {
+      "role": "assistant",
+      "text": "我们了解到阿强入职时间是2022年6月13日，想跟您核实一下，准确吗？"
+    },
+    { "role": "user", "text": "对。" },
+    {
+      "role": "assistant",
+      "text": "我们了解到离职时间是2025年11月28日，想跟您确认一下？"
+    },
+    { "role": "user", "text": "对的。" },
+    {
+      "role": "assistant",
+      "text": "我们了解到他离职前是高级产品经理，想跟您核实一下？"
+    },
+    { "role": "user", "text": "是高级产品经理没错。对了后面违规那些都没有，你继续问别的吧。" },
+    {
+      "role": "assistant",
+      "text": "好的，那他在职期间有没有违规违纪，或劳动争议、仲裁的情况？"
+    }
+  ],
+  "user": "没有，都没有。",
+  "expect": {
+    "must_any": ["离职原因", "为什么离职", "主动", "被动", "协商", "竞业", "竞业禁止"],
+    "forbid_ending": true,
+    "must_ask": true,
+    "single_question": true,
+    "no_markdown": true,
+    "max_questions": 1,
+    "must_not_any": ["再见", "年薪", "返聘"]
+  }
+}

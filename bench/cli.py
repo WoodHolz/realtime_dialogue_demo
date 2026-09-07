@@ -61,7 +61,7 @@ async def _cmd_recovery(args: argparse.Namespace) -> int:
             case_ids=_parse_csv(args.cases),
             system_override=args.system,
             no_tts_prompt=args.no_tts_prompt,
-            supervisor_audit=not args.no_supervisor_audit,
+            prompt_mode=args.prompt_mode,
             pause=args.pause,
         )
     except RuntimeError as exc:
@@ -86,7 +86,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--models",
         "-m",
         default="",
-        help="Comma-separated model ids, e.g. dashscope:qwen3.5-flash,maas:qwen3.8-flash,ark:doubao-seed-2-1-turbo-260628",
+        help="Comma-separated model ids, e.g. dashscope:qwen3.8-2.4t-a95b,kimi:kimi-k2.6,mimo:mimo-v2.5-pro",
     )
     sp.add_argument("--system", "-s", default="")
     sp.add_argument("--no-tts-prompt", action="store_true")
@@ -106,15 +106,16 @@ def build_parser() -> argparse.ArgumentParser:
         "--models",
         "-m",
         default="",
-        help="Comma-separated model ids, e.g. dashscope:qwen3.5-flash,maas:qwen3.8-flash,ark:doubao-seed-2-1-turbo-260628",
+        help="Comma-separated model ids, e.g. dashscope:qwen3.8-2.4t-a95b,kimi:kimi-k2.6,mimo:mimo-v2.5-pro",
     )
     rp.add_argument("--cases", "-c", default="", help="Comma-separated case ids (default: all)")
     rp.add_argument("--system", "-s", default="")
     rp.add_argument("--no-tts-prompt", action="store_true")
     rp.add_argument(
-        "--no-supervisor-audit",
-        action="store_true",
-        help="Do not append SUPERVISOR_AUDIT completeness/branch prompt",
+        "--prompt-mode",
+        default="supervisor",
+        choices=["supervisor", "fast", "fast_audit"],
+        help="supervisor=standalone Supervisor prompt (default); fast=pipeline稿; fast_audit=legacy concat",
     )
     rp.add_argument("--json", action="store_true", dest="as_json")
     rp.add_argument("--pause", type=float, default=0.3)
