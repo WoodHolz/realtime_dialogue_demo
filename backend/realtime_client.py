@@ -31,6 +31,7 @@ from backend.protocol import (
     EVENT_DIALOG_COMMON_ERROR,
     EVENT_FINISH_CONNECTION,
     EVENT_FINISH_SESSION,
+    EVENT_SAY_HELLO,
     EVENT_START_CONNECTION,
     EVENT_START_SESSION,
     decode_server_frame,
@@ -124,6 +125,9 @@ class RealtimeVoiceClient:
         self._closed = False
         self._last_final_asr = ""
 
+    def auth_mode(self) -> str:
+        return "legacy"
+
     def _ws_is_closed(self) -> bool:
         """Compatibility: websockets<=?? had .closed; websockets>=16 uses .state."""
         if not self._ws:
@@ -202,6 +206,19 @@ class RealtimeVoiceClient:
             return
         frame = encode_client_json_event(
             EVENT_CHAT_TEXT_QUERY,
+            {"content": text},
+            self._session_id,
+        )
+        await self._ws.send(frame)
+
+    async def say_hello(self, content: str) -> None:
+        if not self._ws or self._ws_is_closed() or not self._session_id:
+            return
+        text = (content or "").strip().strip("「」").strip()
+        if not text:
+            return
+        frame = encode_client_json_event(
+            EVENT_SAY_HELLO,
             {"content": text},
             self._session_id,
         )

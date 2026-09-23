@@ -21,6 +21,7 @@ torch>=2.0.0
 torchaudio>=2.0.0
 openai>=1.40.0
 dashscope>=1.20.0
+typesafe-sdk==0.6.0
 # eot_bench (LiveKit Turn Detector eval; install eot-bench with --no-deps to avoid numpy pin)
 datasets>=3.2.0
 soundfile>=0.12.1

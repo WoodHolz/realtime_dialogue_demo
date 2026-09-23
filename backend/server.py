@@ -40,7 +40,9 @@ except Exception:  # noqa: BLE001
 from backend.audio_stream import pcm_chunks_from_bytes
 from backend.latency_logger import LatencyLogger
 from backend.prompt_manager import PromptManager
+from backend.jev_control_demo import JevSopController
 from backend.duplex_client import DuplexVoiceClient
+from backend.realtime_client import RealtimeVoiceClient
 from backend.followup_client import FollowupQuestionClient
 from backend.omni_bridge import OmniRealtimeBridge
 from backend.self_omni_bridge import SelfDeployedOmniBridge
@@ -782,6 +784,52 @@ async def t2sbg_voice_page():
     return HTMLResponse(raw, media_type="text/html; charset=utf-8")
 
 
+@app.get("/urge-auth/t2s")
+async def urge_auth_t2s_page():
+    """催授权客服 T2S Demo：使用独立 WebSocket 控制面入口。"""
+    path = _frontend_dir() / "t2sbg.html"
+    if not path.exists():
+        return HTMLResponse("<p>t2sbg.html not found</p>", status_code=404)
+    raw = path.read_text(encoding="utf-8")
+    raw = raw.replace("'__T2SBG_VOICE_VERSION__'", json.dumps(_read_t2sbg_voice_version_from_config()))
+    raw = raw.replace("'__T2SBG_PAGE_LABEL__'", json.dumps("urge-auth-t2s"))
+    raw = raw.replace(
+        "const url = protocol + '//' + host + '/ws';",
+        "const url = protocol + '//' + host + '/ws/urge-auth/t2s';",
+        1,
+    )
+    raw = raw.replace(
+        "Silero 检测说话与静音；判停可对比 Smart Turn v3、LiveKit audio TurnDetector v1（推荐）、旧版 text EOU。",
+        "固定使用 LiveKit audio TurnDetector，直接根据 PCM 音频判断本轮说话结束。",
+        1,
+    )
+    raw = raw.replace(
+        """      <label style="cursor:pointer;">
+        <input type="radio" name="vadProvider" value="smart_turn_v3" checked />
+        Smart Turn v3（Pipecat，音频 prosody）
+      </label>
+""",
+        "",
+        1,
+    )
+    raw = raw.replace(
+        '<input type="radio" name="vadProvider" value="livekit_turn_v1" />',
+        '<input type="radio" name="vadProvider" value="livekit_turn_v1" checked />',
+        1,
+    )
+    raw = raw.replace(
+        """      <label style="cursor:pointer;">
+        <input type="radio" name="vadProvider" value="livekit_turn_detector" />
+        LiveKit text EOU（旧版：ASR 文本语义，deprecated）
+      </label>
+""",
+        "",
+        1,
+    )
+    raw = _inline_ttfs_script_into_t2sbg_html(raw)
+    return HTMLResponse(raw, media_type="text/html; charset=utf-8")
+
+
 @app.get("/t2sbg-pipeline")
 async def t2sbg_pipeline_page():
     """ASR→LLM→TTS pipeline demo (DashScope Responses LLM + qwen-audio TTS)."""
@@ -947,6 +995,15 @@ async def websocket_omni_endpoint(websocket: WebSocket):
 
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
+    await _run_websocket_session(websocket)
+
+
+@app.websocket("/ws/urge-auth/t2s")
+async def urge_auth_t2s_websocket_endpoint(websocket: WebSocket):
+    await _run_websocket_session(websocket, control_profile="urge_auth_t2s")
+
+
+async def _run_websocket_session(websocket: WebSocket, *, control_profile: str | None = None):
     await websocket.accept()
     conn_id = str(uuid.uuid4())
     mode = "e2e"
@@ -961,8 +1018,9 @@ async def websocket_endpoint(websocket: WebSocket):
     from backend.duplex_client import DEFAULT_SPEAKER as _WS_DEFAULT_SPEAKER
 
     session_voice = _WS_DEFAULT_SPEAKER
-    client: DuplexVoiceClient | None = None
+    client: DuplexVoiceClient | RealtimeVoiceClient | None = None
     pipeline_orch = None
+    jev_sop_controller: JevSopController | None = None
     # 标记当前这一轮模型回复（文本/音频）是否还在进行中，主要用于 one-shot 501 防止抢占打断
     reply_in_progress = False
     barge_in_flag = False
@@ -1322,6 +1380,46 @@ async def websocket_endpoint(websocket: WebSocket):
         except Exception:
             return None
 
+    async def _prepare_jev_sop_query(user_text: str) -> str:
+        """Select one SOP with Jev and turn it into the Doubao text query."""
+        if jev_sop_controller is None:
+            return user_text
+        try:
+            decision = await jev_sop_controller.route(user_text, dialogue_history)
+        except Exception as exc:  # noqa: BLE001
+            LOG.exception("Jev SOP selection failed")
+            send_json(
+                {
+                    "type": "jev_control_error",
+                    "message": str(exc),
+                    "stage": jev_sop_controller.stage,
+                }
+            )
+            raise
+        send_json(
+            {
+                "type": "jev_control_decision",
+                "sop_id": decision.sop_id,
+                "stage_before": decision.stage_before,
+                "stage_after": decision.stage_after,
+                "is_global": decision.is_global,
+                "confidence": round(decision.confidence, 4),
+                "latency_ms": decision.latency_ms,
+            }
+        )
+        send_json(
+            {
+                "type": "server_log",
+                "level": "info",
+                "message": (
+                    f"Jev: {decision.sop_id} | {decision.stage_before} -> "
+                    f"{decision.stage_after} | global={decision.is_global} | "
+                    f"confidence={decision.confidence:.2f} | {decision.latency_ms:.0f} ms"
+                ),
+            }
+        )
+        return decision.query
+
     def push_server_log(level: str, message: str, **extra: object) -> None:
         """Push a line to t2sbg debug panel (in-memory, not disk)."""
         payload: dict = {"type": "server_log", "level": level, "message": message}
@@ -1644,7 +1742,11 @@ async def websocket_endpoint(websocket: WebSocket):
                     send_json({"type": "error", "message": "external ASR produced empty text in t2s mode"})
                     return
                 send_json({"type": "local_asr_text", "text": text})
-                await client.send_text_query(text)
+                try:
+                    query = await _prepare_jev_sop_query(text)
+                except Exception:
+                    return
+                await client.send_text_query(query)
                 send_json({"type": "chat_text_query_sent", "reason": "t2s_external_asr", "trigger": "asr_ended"})
 
             asyncio.create_task(_run_external_asr_and_query())
@@ -1829,9 +1931,15 @@ async def websocket_endpoint(websocket: WebSocket):
                 speaking_style=prompt_manager.get_speaking_style(),
                 dialog_id=dialog_id_latest,
                 input_mod="audio" if duplex_server_vad else ("text" if mode == "t2s" else "audio"),
-                server_vad=duplex_server_vad,
-                end_smooth_window_ms=duplex_end_smooth_ms,
-                voice=session_voice,
+                **(
+                    {}
+                    if isinstance(client, RealtimeVoiceClient)
+                    else {
+                        "server_vad": duplex_server_vad,
+                        "end_smooth_window_ms": duplex_end_smooth_ms,
+                        "voice": session_voice,
+                    }
+                ),
             )
             sessions.get(conn_id, {})["session_id"] = new_sid
             seen_llm_start_reply_ids.clear()
@@ -2017,14 +2125,19 @@ async def websocket_endpoint(websocket: WebSocket):
                                 }
                             )
 
+                try:
+                    controlled_query = await _prepare_jev_sop_query(query_base)
+                except Exception:
+                    return
+
                 pcm_turn = bytes(t2s_asr_capture_buffer)
                 merged = query_base.strip() != (text or "").strip()
-                if pcm_turn and not merged:
+                if pcm_turn and not merged and jev_sop_controller is None:
                     await client.send_audio_turn(pcm_turn)
                     send_reason = "t2s_voice_pcm"
                 else:
-                    await client.send_text_query(query_base)
-                    send_reason = "t2s_voice_asr"
+                    await client.send_text_query(controlled_query)
+                    send_reason = "t2s_jev_sop" if jev_sop_controller is not None else "t2s_voice_asr"
                 _append_history("证明人", text)
                 asr_text_sent = True
                 send_json(
@@ -2362,13 +2475,41 @@ async def websocket_endpoint(websocket: WebSocket):
             # t2sbg：追问链路暂时关闭；其他 mode 默认开启，可由客户端显式覆盖。
             # t2sbg / pipeline：追问链路默认关闭
             external_followup_enabled = bool(cfg.get("external_followup_enabled", mode not in {"t2s", "pipeline"}))
+            if control_profile == "urge_auth_t2s":
+                if mode != "t2s":
+                    await websocket.send_text(
+                        json.dumps(
+                            {"type": "error", "message": "urge-auth t2s endpoint requires mode=t2s"},
+                            ensure_ascii=False,
+                        )
+                    )
+                    await websocket.close()
+                    return
+                if not os.environ.get("TYPESAFE_API_KEY", "").strip():
+                    await websocket.send_text(
+                        json.dumps(
+                            {"type": "error", "message": "Jev control demo needs TYPESAFE_API_KEY in .env"},
+                            ensure_ascii=False,
+                        )
+                    )
+                    await websocket.close()
+                    return
+                jev_sop_controller = JevSopController(
+                    model=(cfg.get("jev_model") or os.environ.get("JEV_MODEL") or "jev-latest").strip(),
+                    initial_stage=(cfg.get("jev_initial_stage") or "OPENING").strip().upper(),
+                )
             if cfg.get("verification_case") or cfg.get("system_role"):
                 prompt_manager.set_custom_prompt(
                     system_role=cfg.get("system_role"),
                     speaking_style=cfg.get("speaking_style"),
                     verification_case=cfg.get("verification_case"),
                 )
-            duplex_server_vad = _resolve_duplex_server_vad(cfg, DEFAULT_DUPLEX_SERVER_VAD)
+            if control_profile == "urge_auth_t2s":
+                # This profile always uses browser PCM -> LiveKit audio VAD -> external ASR.
+                # Never let the shared Doubao server-VAD default silently turn it into e2e mode.
+                duplex_server_vad = False
+            else:
+                duplex_server_vad = _resolve_duplex_server_vad(cfg, DEFAULT_DUPLEX_SERVER_VAD)
             if duplex_server_vad and mode not in {"semi", "pipeline"}:
                 mode = "e2e"
             raw_voice = (cfg.get("voice") or cfg.get("voice_type") or "").strip()
@@ -2498,7 +2639,21 @@ async def websocket_endpoint(websocket: WebSocket):
                 }
             )
         else:
-            if not DOUBAO_API_KEY and not (APP_ID and ACCESS_KEY):
+            if control_profile == "urge_auth_t2s" and not (ASR_APP_ID and ASR_ACCESS_KEY):
+                await websocket.send_text(
+                    json.dumps(
+                        {
+                            "type": "error",
+                            "message": (
+                                "Missing credentials for binary Doubao realtime API. "
+                                "Set ASR_APP_ID + ASR_ACCESS_KEY (or legacy DOUBAO_APP_ID + DOUBAO_ACCESS_KEY)."
+                            ),
+                        }
+                    )
+                )
+                await websocket.close()
+                return
+            if control_profile != "urge_auth_t2s" and not DOUBAO_API_KEY and not (APP_ID and ACCESS_KEY):
                 await websocket.send_text(
                     json.dumps(
                         {
@@ -2513,21 +2668,27 @@ async def websocket_endpoint(websocket: WebSocket):
                 await websocket.close()
                 return
 
-            client = DuplexVoiceClient(
-                api_key=DOUBAO_API_KEY,
-                app_id=APP_ID,
-                access_key=ACCESS_KEY,
-                on_asr=on_asr,
-                on_asr_ended=on_asr_ended,
-                on_tts_audio=on_tts_audio,
-                on_tts_start=on_tts_start,
-                on_tts_end=on_tts_end,
-                on_chat_response=on_chat_response,
-                on_chat_ended=on_chat_ended,
-                on_barge_in=on_barge_in,
-                on_session_started=on_session_started,
-                on_error=on_error,
-            )
+            callbacks = {
+                "on_asr": on_asr,
+                "on_asr_ended": on_asr_ended,
+                "on_tts_audio": on_tts_audio,
+                "on_tts_start": on_tts_start,
+                "on_tts_end": on_tts_end,
+                "on_chat_response": on_chat_response,
+                "on_chat_ended": on_chat_ended,
+                "on_barge_in": on_barge_in,
+                "on_session_started": on_session_started,
+                "on_error": on_error,
+            }
+            if control_profile == "urge_auth_t2s":
+                client = RealtimeVoiceClient(ASR_APP_ID, ASR_ACCESS_KEY, **callbacks)
+            else:
+                client = DuplexVoiceClient(
+                    api_key=DOUBAO_API_KEY,
+                    app_id=APP_ID,
+                    access_key=ACCESS_KEY,
+                    **callbacks,
+                )
             await client.connect()
             input_mod = "audio" if duplex_server_vad else ("text" if mode == "t2s" else "audio")
             duplex_input_mod = input_mod
@@ -2538,14 +2699,21 @@ async def websocket_endpoint(websocket: WebSocket):
                 duplex_server_vad,
                 session_voice,
             )
-            session_id = await client.start_session(
-                system_role=prompt_manager.get_system_role(),
-                speaking_style=prompt_manager.get_speaking_style(),
-                input_mod=input_mod,
-                server_vad=duplex_server_vad,
-                end_smooth_window_ms=duplex_end_smooth_ms,
-                voice=session_voice,
-            )
+            if isinstance(client, RealtimeVoiceClient):
+                session_id = await client.start_session(
+                    system_role=prompt_manager.get_system_role(),
+                    speaking_style=prompt_manager.get_speaking_style(),
+                    input_mod=input_mod,
+                )
+            else:
+                session_id = await client.start_session(
+                    system_role=prompt_manager.get_system_role(),
+                    speaking_style=prompt_manager.get_speaking_style(),
+                    input_mod=input_mod,
+                    server_vad=duplex_server_vad,
+                    end_smooth_window_ms=duplex_end_smooth_ms,
+                    voice=session_voice,
+                )
             client.start_receive_loop()
             sessions[conn_id] = {
                 "client": client,
@@ -2570,6 +2738,11 @@ async def websocket_endpoint(websocket: WebSocket):
                     "followup": followup_client.describe_for_client(),
                     "auto_501_from_asr_enabled": auto_501_from_asr_enabled,
                     "external_followup_enabled": external_followup_enabled,
+                    "jev_control_demo": {
+                        "enabled": jev_sop_controller is not None,
+                        "model": jev_sop_controller.model if jev_sop_controller else None,
+                        "stage": jev_sop_controller.stage if jev_sop_controller else None,
+                    },
                     "followup_pipeline_active": bool(
                         mode == "t2s"
                         and auto_501_from_asr_enabled
@@ -2602,6 +2775,20 @@ async def websocket_endpoint(websocket: WebSocket):
                     else hush_status_payload(ready=False, error=""),
                 }
             )
+            if control_profile == "urge_auth_t2s":
+                opening_line = (
+                    "您好，这里是芝麻背调。关于您的入职背调授权想和您确认一下，"
+                    "请问是您本人吗，现在方便接听吗？"
+                )
+                await client.say_hello(opening_line)
+                _append_history("客服", opening_line)
+                send_json(
+                    {
+                        "type": "server_log",
+                        "level": "info",
+                        "message": "首通开场已发送，等待 OPENING 阶段回复",
+                    }
+                )
             if mode == "t2s" and not duplex_server_vad:
                 send_json(
                     {
@@ -2759,7 +2946,11 @@ async def websocket_endpoint(websocket: WebSocket):
                         if not client:
                             send_json({"type": "error", "message": "client not ready"})
                             continue
-                        await client.send_text_query(content)
+                        try:
+                            query = await _prepare_jev_sop_query(content) if mode == "t2s" else content
+                        except Exception:
+                            continue
+                        await client.send_text_query(query)
                         if mode == "t2s":
                             _append_history("证明人", content.strip())
                         send_json({"type": "chat_text_query_sent"})
