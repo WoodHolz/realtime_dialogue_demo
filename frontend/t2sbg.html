@@ -295,6 +295,13 @@
     </div>
   </div>
 
+  <div class="section" id="jevDecisionSection" style="display:none;">
+    <strong>Jev 控制面判断</strong>
+    <span id="jevCurrentStage" style="margin-left:8px; padding:2px 8px; border-radius:999px; background:#eef4ff; color:#2457a7; font-size:12px;">阶段: -</span>
+    <p style="font-size:12px; color:#666; margin:6px 0;">每轮只做闭集分支选择；阶段迁移由代码执行。</p>
+    <div id="jevDecisionLog" class="transcript" style="max-height:180px; overflow-y:auto; font-family:monospace; font-size:0.88rem; background:#f7f9ff; border-left:4px solid #4c78d0;"></div>
+  </div>
+
   <div class="section">
     <strong>AI 面试官回复（文本 + 语音）</strong>
     <div class="transcript" id="transcript"></div>
@@ -362,6 +369,9 @@
       const asrRawTurnClipsEl = document.getElementById('asrRawTurnClips');
       const fullRawTurnClipsEl = document.getElementById('fullRawTurnClips');
       const serverLogEl = document.getElementById('serverLog');
+      const jevDecisionSectionEl = document.getElementById('jevDecisionSection');
+      const jevDecisionLogEl = document.getElementById('jevDecisionLog');
+      const jevCurrentStageEl = document.getElementById('jevCurrentStage');
       const btnMonitorSync = document.getElementById('btnMonitorSync');
       const monitorSyncHint = document.getElementById('monitorSyncHint');
 
@@ -863,6 +873,30 @@
           o[k] = msg[k];
         }
         return o;
+      }
+
+      function appendJevDecision(msg) {
+        jevDecisionSectionEl.style.display = '';
+        const before = msg.stage_before || '-';
+        const after = msg.stage_after || before;
+        const confidence = Number(msg.confidence);
+        const latency = Number(msg.latency_ms);
+        jevCurrentStageEl.textContent = '当前阶段: ' + after;
+
+        const row = document.createElement('div');
+        row.style.padding = '8px 6px';
+        row.style.borderBottom = '1px solid #dce5f5';
+        const scope = msg.is_global ? '全局旁路' : '阶段分支';
+        const confidenceText = Number.isFinite(confidence) ? (confidence * 100).toFixed(0) + '%' : '-';
+        const latencyText = Number.isFinite(latency) ? Math.round(latency) + ' ms' : '-';
+        row.textContent =
+          new Date().toISOString().slice(11, 19) +
+          '  ' + scope + '  ' + (msg.sop_id || '-') +
+          '  |  ' + before + ' → ' + after +
+          '  |  置信度 ' + confidenceText +
+          '  |  ' + latencyText;
+        jevDecisionLogEl.appendChild(row);
+        jevDecisionLogEl.scrollTop = jevDecisionLogEl.scrollHeight;
       }
 
       function setStatus(text, kind) {
@@ -1713,6 +1747,8 @@
                   transcriptEl.appendChild(document.createElement('br'));
                   transcriptEl.scrollTop = transcriptEl.scrollHeight;
                 }
+              } else if (msg.type === 'jev_control_decision') {
+                appendJevDecision(msg);
               } else if (msg.type === 'followup_request_start') {
                 followupPending = true;
                 tsFollowupRequestStart = Date.now();
@@ -1827,6 +1863,9 @@
         transcriptEl.innerHTML = '';
         logEl.innerHTML = '';
         serverLogEl.innerHTML = '';
+        jevDecisionLogEl.innerHTML = '';
+        jevDecisionSectionEl.style.display = 'none';
+        jevCurrentStageEl.textContent = '阶段: -';
         resetAiStreamingState();
         flushTTSQueue();
         resetRecordingDebugCache();

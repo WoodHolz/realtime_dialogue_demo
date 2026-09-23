@@ -15,6 +15,8 @@ class JevUrgeAuthPageTest(unittest.TestCase):
         self.assertIn('value="livekit_turn_v1" checked', body)
         self.assertNotIn("Smart Turn v3（Pipecat", body)
         self.assertNotIn("LiveKit text EOU（旧版", body)
+        self.assertIn("Jev 控制面判断", body)
+        self.assertIn("jev_control_decision", body)
 
     def test_existing_t2sbg_page_keeps_original_websocket(self) -> None:
         response = asyncio.run(t2sbg_voice_page())

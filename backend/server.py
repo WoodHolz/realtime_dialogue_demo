@@ -1491,15 +1491,29 @@ async def _run_websocket_session(websocket: WebSocket, *, control_profile: str |
                 if mode == "pipeline" and pipeline_orch:
                     await pipeline_orch.on_speech_start(source=str(ev.provider))
                 else:
-                    barge_in_flag = True
-                    send_json(
-                        {
-                            "type": "barge_in",
-                            "source": ev.provider,
-                            "reason": "user_speech",
-                            "reason_label": "用户打断（检测到说话）",
-                        }
-                    )
+                    # Match the pipeline semantics: user speech is a real barge-in
+                    # only while the model/TTS reply is still active.  Once the
+                    # server has emitted tts_end, a new utterance is the normal
+                    # next turn; at most clear audio still queued in the browser.
+                    if reply_in_progress:
+                        barge_in_flag = True
+                        send_json(
+                            {
+                                "type": "barge_in",
+                                "source": ev.provider,
+                                "reason": "user_speech",
+                                "reason_label": "用户打断（检测到说话）",
+                            }
+                        )
+                    else:
+                        barge_in_flag = False
+                        send_json(
+                            {
+                                "type": "tts_cancel",
+                                "source": ev.provider,
+                                "reason": "leftover_clear",
+                            }
+                        )
                 t2s_asr_gate_open = True
                 t2s_vad_idle_streak = 0
                 if t2s_pre_roll_chunks:
@@ -1893,6 +1907,16 @@ async def _run_websocket_session(websocket: WebSocket, *, control_profile: str |
                 "info",
                 "barge_in suppressed (TTS lead-in window)",
                 ms=T2S_TTS_BARGE_SUPPRESS_MS,
+            )
+            return
+        if mode == "t2s" and not reply_in_progress:
+            barge_in_flag = False
+            send_json(
+                {
+                    "type": "tts_cancel",
+                    "source": "doubao_realtime",
+                    "reason": "leftover_clear",
+                }
             )
             return
         barge_in_flag = True
