@@ -277,7 +277,9 @@ def _load_t2s_debug_audio_config() -> tuple[bool, str]:
                 data = json.load(f)
             debug_cfg = data.get("debug", {}) or {}
             enabled = _parse_bool(debug_cfg.get("t2s_audio_dump_enabled", False), default=False)
-            out_dir = str(debug_cfg.get("t2s_audio_dir", out_dir) or out_dir)
+            cfg_dir = debug_cfg.get("t2s_audio_dir", out_dir) or out_dir
+            cfg_path_dir = Path(str(cfg_dir))
+            out_dir = str(cfg_path_dir if cfg_path_dir.is_absolute() else (root / cfg_path_dir))
     except Exception:
         pass
 
@@ -286,7 +288,8 @@ def _load_t2s_debug_audio_config() -> tuple[bool, str]:
         enabled = _parse_bool(env_enabled, default=enabled)
     env_dir = os.environ.get("T2S_DEBUG_AUDIO_DIR")
     if env_dir:
-        out_dir = env_dir
+        env_path = Path(env_dir)
+        out_dir = str(env_path if env_path.is_absolute() else (Path(__file__).resolve().parent.parent / env_path))
     return enabled, out_dir
 
 

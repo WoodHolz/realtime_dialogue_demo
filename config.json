@@ -112,7 +112,7 @@
   "debug": {
     "_comment": "t2s debug and VAD endpointing tuning (all timings in ms/sec as noted).",
     "t2s_audio_dump_enabled": false,
-    "t2s_audio_dir": "/home/WoodHolz/Project/realtime_voice_interviewer_demo",
+    "t2s_audio_dir": "debug_audio",
     "t2s_asr_keepalive_idle_sec": 0.9,
     "t2s_asr_keepalive_tick_sec": 0.35,
     "t2s_pre_roll_ms_comment": "Pre-roll audio kept before first nonidle to avoid clipping initial phonemes.",
