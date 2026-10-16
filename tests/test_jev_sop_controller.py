@@ -103,6 +103,28 @@ class JevSopControllerTest(unittest.TestCase):
         self.assertEqual(decision.stage_after, "DELIVERY")
         self.assertIn("询问是否收到背调授权通知", decision.query)
 
+    def test_async_progress_requires_evidence_before_advancing(self) -> None:
+        _Client.next_local = "7-6"
+        controller = JevSopController(async_progress=True)
+        decision = self._route(controller, "是我本人，现在方便")
+        self.assertEqual(decision.stage_after, "OPENING")
+        invalid = {"completed": True, "evidence": "编造的证据"}
+        self.assertFalse(asyncio.run(controller.apply_progress(1, invalid, "收到通知了吗？")))
+        self.assertEqual(controller.stage, "OPENING")
+        patch = {"completed": True, "evidence": "收到通知了吗？", "facts": {"identity_confirmed": True}}
+        self.assertTrue(asyncio.run(controller.apply_progress(1, patch, "收到通知了吗？")))
+        self.assertEqual(controller.stage, "DELIVERY")
+        self.assertNotIn("identity_confirmed", controller.status)
+
+    def test_late_progress_cannot_update_new_turn(self) -> None:
+        _Client.next_local = "7-6"
+        controller = JevSopController(async_progress=True)
+        self._route(controller, "是我本人，现在方便")
+        self._route(controller, "是我本人，现在方便")
+        patch = {"completed": True, "evidence": "现在方便"}
+        self.assertFalse(asyncio.run(controller.apply_progress(1, patch, "")))
+        self.assertEqual(controller.stage, "OPENING")
+
 
 if __name__ == "__main__":
     unittest.main()

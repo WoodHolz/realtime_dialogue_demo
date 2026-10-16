@@ -118,16 +118,47 @@ class JevSopDecision:
 
 
 class JevSopController:
-    def __init__(self, *, model: str | None = None, initial_stage: str = "OPENING") -> None:
+    def __init__(self, *, model: str | None = None, initial_stage: str = "OPENING", async_progress: bool = False) -> None:
         if initial_stage not in STAGE_BRANCHES:
             raise ValueError(f"unknown initial stage: {initial_stage}")
         self.model = model or os.environ.get("JEV_MODEL", DEFAULT_MODEL)
         self.stage = initial_stage
         self._route_lock = asyncio.Lock()
+        self.async_progress = async_progress
+        self.turn_id = 0
+        self.status: dict[str, Any] = {}
+        self.active_decision: JevSopDecision | None = None
+        self.user_text = ""
+
+    async def apply_progress(self, turn_id: int, patch: dict, assistant_text: str) -> bool:
+        async with self._route_lock:
+            if turn_id != self.turn_id or self.active_decision is None:
+                return False
+            evidence = patch.get("evidence")
+            if not isinstance(evidence, str) or not evidence.strip():
+                return False
+            if evidence not in self.user_text and evidence not in assistant_text:
+                return False
+            facts = patch.get("facts", {})
+            allowed = {"identity_confirmed", "available_to_talk", "notification_received", "authorization_claimed_complete"}
+            # Only user-grounded evidence may mutate user facts.
+            if isinstance(facts, dict) and evidence in self.user_text:
+                self.status.update({k: v for k, v in facts.items() if k in allowed and type(v) is bool})
+            self.status["pending_question"] = str(patch.get("pending_question", ""))[:500]
+            self.status["sop_completed"] = patch.get("completed") is True
+            if patch.get("completed") is True:
+                d = self.active_decision
+                if not d.is_global:
+                    self.stage = NEXT_STAGE.get((d.stage_before, d.sop_id), d.stage_before)
+            return True
 
     async def route(self, user_text: str, history: list[str] | None = None) -> JevSopDecision:
         async with self._route_lock:
-            return await asyncio.to_thread(self._route_sync, user_text, list(history or []))
+            result = await asyncio.to_thread(self._route_sync, user_text, list(history or []))
+            self.turn_id += 1
+            self.active_decision = result
+            self.user_text = user_text
+            return result
 
     def _route_sync(self, user_text: str, history: list[str]) -> JevSopDecision:
         try:
@@ -140,6 +171,8 @@ class JevSopController:
             "current_stage": stage_before,
             "recent_dialogue": history[-6:],
             "user_message": user_text,
+            "status": dict(self.status),
+            "last_sop_id": self.active_decision.sop_id if self.active_decision else None,
         }
         started = time.perf_counter()
         with TypeSafeClient(model=self.model) as client:
@@ -175,6 +208,8 @@ class JevSopController:
             stage_after = "DONE" if sop_id in TERMINAL_GLOBALS else stage_before
         else:
             stage_after = NEXT_STAGE.get((stage_before, sop_id), stage_before)
+            if self.async_progress:
+                stage_after = stage_before
         self.stage = stage_after
         guidance = render_sop_query(sop_id, stage=stage_before)
         query = (

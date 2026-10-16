@@ -1749,6 +1749,18 @@
                 }
               } else if (msg.type === 'jev_control_decision') {
                 appendJevDecision(msg);
+              } else if (msg.type === 'jev_progress') {
+                jevDecisionSectionEl.style.display = '';
+                const row = document.createElement('div');
+                row.style.padding = '8px 6px';
+                row.style.color = msg.phase === 'error' ? '#b42318' : '#2457a7';
+                row.textContent = '进度 LLM · ' + msg.phase + ' · 轮次 ' + (msg.turn_id || '-') +
+                  (msg.stage ? ' · 阶段 ' + msg.stage : '') +
+                  (msg.latency_ms != null ? ' · ' + msg.latency_ms + ' ms' : '') +
+                  ' · ' + (msg.message || msg.evidence || '');
+                jevDecisionLogEl.appendChild(row);
+                jevDecisionLogEl.scrollTop = jevDecisionLogEl.scrollHeight;
+                if (msg.phase === 'applied') jevCurrentStageEl.textContent = '当前阶段: ' + msg.stage;
               } else if (msg.type === 'followup_request_start') {
                 followupPending = true;
                 tsFollowupRequestStart = Date.now();

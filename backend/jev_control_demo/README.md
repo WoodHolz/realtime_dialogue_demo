@@ -29,4 +29,27 @@ The demo represents a first outbound call. After the session is ready, Doubao pr
 - Non-terminal global side branches preserve the main stage. Safety, refusal, abandonment, and complaint close this demo flow.
 - An accepted completion commitment closes the main flow.
 
-State is intentionally in memory per WebSocket. Persistence, a side-path stack, backend tools, and the asynchronous control LLM from the larger proposal are outside this quick demo.
+## Asynchronous progress LLM
+
+The dedicated endpoint enables asynchronous progress assessment. Jev selection keeps
+the current stage; after TTS ends, a background task assesses the user message,
+complete assistant text, SOP goal, and current status. The model proposes boolean
+facts, completion, an evidence quotation, and a pending question. Code checks the
+quotation and turn ID, then applies the existing transition table. Stale results
+are discarded, interrupted output cannot complete an SOP, and failures hold the
+current stage. Safety/refusal terminal global branches still close immediately.
+
+Configure `JEV_PROGRESS_API_BASE`, `JEV_PROGRESS_API_KEY`, and
+`JEV_PROGRESS_MODEL` for an OpenAI-compatible Chat Completions endpoint. The default
+model is `qwen3.6-flash` with thinking disabled and temperature 0, matching the
+existing intent-evaluation profile. Credentials reuse `DASHSCOPE_API_KEY` (then
+pipeline settings), and the endpoint reuses `DASHSCOPE_BASE_URL` (then pipeline
+settings). The browser's
+Jev panel shows pending/applied/discarded/error progress events. No additional
+Python dependency is required. This assessment runs after generated audio ends;
+it does not verify browser playback delivery. A new user turn never waits for the
+analysis; if analysis is late, that turn uses the last confirmed stage.
+
+State remains in memory per WebSocket. Persistence, a side-path stack, and backend
+tools are outside this demo. Finding a callback time does not yet create a callback
+task or a dedicated callback branch.

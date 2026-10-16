@@ -41,6 +41,7 @@ from backend.audio_stream import pcm_chunks_from_bytes
 from backend.latency_logger import LatencyLogger
 from backend.prompt_manager import PromptManager
 from backend.jev_control_demo import JevSopController
+from backend.jev_control_demo.progress import ProgressClient
 from backend.duplex_client import DuplexVoiceClient
 from backend.realtime_client import RealtimeVoiceClient
 from backend.followup_client import FollowupQuestionClient
@@ -1024,6 +1025,11 @@ async def _run_websocket_session(websocket: WebSocket, *, control_profile: str |
     client: DuplexVoiceClient | RealtimeVoiceClient | None = None
     pipeline_orch = None
     jev_sop_controller: JevSopController | None = None
+    progress_client = ProgressClient() if control_profile == "urge_auth_t2s" else None
+    progress_tasks: set[asyncio.Task] = set()
+    progress_assistant_chunks: list[str] = []
+    progress_interrupted = False
+    progress_scheduled_turn = -1
     # 标记当前这一轮模型回复（文本/音频）是否还在进行中，主要用于 one-shot 501 防止抢占打断
     reply_in_progress = False
     barge_in_flag = False
@@ -1385,6 +1391,7 @@ async def _run_websocket_session(websocket: WebSocket, *, control_profile: str |
 
     async def _prepare_jev_sop_query(user_text: str) -> str:
         """Select one SOP with Jev and turn it into the Doubao text query."""
+        nonlocal progress_interrupted
         if jev_sop_controller is None:
             return user_text
         try:
@@ -1399,6 +1406,8 @@ async def _run_websocket_session(websocket: WebSocket, *, control_profile: str |
                 }
             )
             raise
+        progress_assistant_chunks.clear()
+        progress_interrupted = False
         send_json(
             {
                 "type": "jev_control_decision",
@@ -1422,6 +1431,48 @@ async def _run_websocket_session(websocket: WebSocket, *, control_profile: str |
             }
         )
         return decision.query
+
+    def _schedule_progress() -> None:
+        nonlocal progress_scheduled_turn
+        controller = jev_sop_controller
+        if controller is None or controller.active_decision is None:
+            return
+        turn_id = controller.turn_id
+        if turn_id == progress_scheduled_turn:
+            return
+        progress_scheduled_turn = turn_id
+        decision = controller.active_decision
+        assistant = "".join(progress_assistant_chunks)
+        context = {
+            "turn_id": turn_id, "stage": decision.stage_before,
+            "sop_id": decision.sop_id, "sop": decision.query,
+            "user_message": controller.user_text,
+            "assistant_message": assistant, "interrupted": progress_interrupted,
+            "status": dict(controller.status),
+        }
+
+        async def run() -> None:
+            send_json({"type": "jev_progress", "phase": "pending", "turn_id": turn_id})
+            try:
+                patch = await progress_client.assess(context)
+                # Interrupted output cannot establish SOP execution completion.
+                if context["interrupted"]:
+                    patch["completed"] = False
+                applied = await controller.apply_progress(turn_id, patch, assistant)
+                send_json({
+                    "type": "jev_progress", "phase": "applied" if applied else "discarded",
+                    "turn_id": turn_id, "stage": controller.stage,
+                    "status": dict(controller.status), "evidence": patch.get("evidence", ""),
+                    "latency_ms": patch.get("latency_ms"),
+                })
+            except Exception as exc:
+                LOG.warning("Jev progress assessment failed: %s", type(exc).__name__)
+                send_json({"type": "jev_progress", "phase": "error", "turn_id": turn_id,
+                           "message": "阶段判断失败或未配置，保持当前阶段；请检查 JEV_PROGRESS 配置与服务日志"})
+
+        task = asyncio.create_task(run())
+        progress_tasks.add(task)
+        task.add_done_callback(progress_tasks.discard)
 
     def push_server_log(level: str, message: str, **extra: object) -> None:
         """Push a line to t2sbg debug panel (in-memory, not disk)."""
@@ -1464,6 +1515,7 @@ async def _run_websocket_session(websocket: WebSocket, *, control_profile: str |
         nonlocal barge_in_flag, t2s_speech_started, t2s_speech_started_ts, t2s_last_nonidle_ts
         nonlocal t2s_asr_gate_open, t2s_vad_idle_streak, t2s_asr_stream_buffer, t2s_pcm_buffer
         nonlocal t2s_asr_capture_buffer, t2s_pre_roll_chunks
+        nonlocal progress_interrupted
 
         payload: dict[str, object] = {
             "type": "vad_state",
@@ -1499,6 +1551,8 @@ async def _run_websocket_session(websocket: WebSocket, *, control_profile: str |
                     # server has emitted tts_end, a new utterance is the normal
                     # next turn; at most clear audio still queued in the browser.
                     if reply_in_progress:
+                        progress_interrupted = True
+                        _schedule_progress()
                         barge_in_flag = True
                         send_json(
                             {
@@ -1828,6 +1882,7 @@ async def _run_websocket_session(websocket: WebSocket, *, control_profile: str |
         nonlocal reply_in_progress
         reply_in_progress = False
         send_json({"type": "tts_end", **payload})
+        _schedule_progress()
 
     def on_chat_response(content: str, question_id: str, reply_id: str):
         nonlocal last_question_id, last_reply_id, reply_in_progress
@@ -1840,6 +1895,8 @@ async def _run_websocket_session(websocket: WebSocket, *, control_profile: str |
             # 以 ChatResponse 的首个 reply_id 作为“本轮模型开始回复”的兜底信号。
             reply_in_progress = True
         if content:
+            if jev_sop_controller is not None:
+                progress_assistant_chunks.append(content)
             _append_history("面试官", content)
         send_json(
             {
@@ -2524,7 +2581,10 @@ async def _run_websocket_session(websocket: WebSocket, *, control_profile: str |
                 jev_sop_controller = JevSopController(
                     model=(cfg.get("jev_model") or os.environ.get("JEV_MODEL") or "jev-latest").strip(),
                     initial_stage=(cfg.get("jev_initial_stage") or "OPENING").strip().upper(),
+                    async_progress=True,
                 )
+                if not progress_client.enabled:
+                    send_json({"type": "jev_progress", "phase": "error", "message": "请配置 JEV_PROGRESS_API_BASE/API_KEY/MODEL；阶段确认暂不可用"})
             if cfg.get("verification_case") or cfg.get("system_role"):
                 prompt_manager.set_custom_prompt(
                     system_role=cfg.get("system_role"),
@@ -3060,6 +3120,10 @@ async def _run_websocket_session(websocket: WebSocket, *, control_profile: str |
         except Exception:
             pass
     finally:
+        for task in list(progress_tasks):
+            task.cancel()
+        if progress_tasks:
+            await asyncio.gather(*list(progress_tasks), return_exceptions=True)
         if conn_id in sessions:
             del sessions[conn_id]
         try:
