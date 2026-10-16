@@ -61,6 +61,17 @@ Doubao Realtime Voice API 3.0 (wss://.../duplex/realtime/dialogue)
    python run.py
    ```
 
+   Background start / stop (Linux, same layout as sandbox_yuan):
+
+   ```bash
+   ./deploy/start-background.sh
+   ./deploy/stop-background.sh
+   ```
+
+   Uses `.venv/bin/python` and the absolute path to `run.py`, so `ps aux`
+   identifies this project. Logs: `logs/run.log`; PID: `logs/run.pid`.
+   Stop sends SIGTERM and waits up to 15 seconds for graceful shutdown.
+
 Then open:
 
 - **http://localhost:7998** — index with links
